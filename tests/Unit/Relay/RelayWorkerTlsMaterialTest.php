@@ -11,12 +11,17 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Relay;
 
+use Phlix\Hub\Common\Logger\LogChannels;
+use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Relay\RelayWorker;
+use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
+use ReflectionProperty;
 
 /**
  * TLS-lane laws for the :8802 bind material (successor seam to M21).
@@ -30,34 +35,68 @@ use Psr\Container\ContainerInterface;
  *      the resolved path, and both ways out (red on the parent: it happily
  *      built an ssl context around nonexistent paths and left the hub to die
  *      cryptically inside stream_socket_server, half-booted);
- *   3. start() consults the guard before any Worker exists.
+ *   3. start() consults the material decision before any Worker exists:
+ *      MISSING keeps the fail-fast throw (audit §3.2 — the historical text,
+ *      byte-ident), exists-but-unreadable degrades to a loud RELAY-channel
+ *      boot warning + the armed per-connection watch + onError loud line.
  *
  * @package Phlix\Hub\Tests\Unit\Relay
  */
 final class RelayWorkerTlsMaterialTest extends TestCase
 {
     use WorkermanTimerRuntimeControl;
+    use LoggerFactoryIsolation;
 
     private ContainerInterface $container;
 
     /** @var array<int, string> Scratch paths removed in tearDown(). */
     private array $scratchFiles = [];
 
+    /** @var array<int, string> Warnings recorded by the seeded relay logger. */
+    private array $recordedWarnings = [];
+
     protected function setUp(): void
     {
         parent::setUp();
         RelayWorker::reset();
         $this->container = $this->createMock(ContainerInterface::class);
+        $this->recordedWarnings = [];
     }
 
     protected function tearDown(): void
     {
         parent::tearDown();
         RelayWorker::reset();
+        LoggerFactory::reset();
         foreach ($this->scratchFiles as $path) {
+            @chmod($path, 0600);
             @unlink($path);
         }
         $this->scratchFiles = [];
+    }
+
+    /**
+     * Pre-memoize a warning-recording StructuredLogger into LoggerFactory on
+     * the RELAY channel (same seam as FederationWorkerTlsPostureTest).
+     */
+    private function seedRecordingLogger(): void
+    {
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->method('warning')->willReturnCallback(
+            /**
+             * @param string               $message
+             * @param array<string, mixed> $context
+             */
+            function (string $message, array $context = []): void {
+                $this->recordedWarnings[] = $message;
+            },
+        );
+
+        $cache = new ReflectionProperty(LoggerFactory::class, 'loggers');
+        /** @var array<string, StructuredLogger> $current */
+        $current = $cache->getValue(null);
+        $current[LogChannels::RELAY] = $logger;
+        $cache->setValue(null, $current);
     }
 
     private function scratchPem(string $role): string
@@ -187,5 +226,85 @@ final class RelayWorkerTlsMaterialTest extends TestCase
         );
 
         self::assertSame('ssl', $worker->start()->transport);
+    }
+
+    // ---- 4. audit §3.2 boot split + runtime arming ---------------------------
+
+    public function testStartWithUnreadableKeyDegradesToLoudBootWarningNotThrow(): void
+    {
+        if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
+            self::markTestSkipped(
+                'root reads 0000 files; the unreadable arm is proven probe-side in TlsMaterialWatchTest',
+            );
+        }
+        $this->seedRecordingLogger();
+
+        $cert = $this->scratchPem('cert');
+        $key = $this->scratchPem('key');
+        if (!chmod($key, 0000)) {
+            self::markTestSkipped('venue cannot chmod 0000 the scratch key');
+        }
+
+        $worker = new RelayWorker(
+            $this->container,
+            0,
+            1,
+            '127.0.0.1',
+            RelayProxyProtocol::DEFAULT_CHANNEL_PORT,
+            true,
+            $cert,
+            $key,
+            false,
+        );
+
+        // The cure: perms misses must NOT kill the hub boot (parent: the
+        // boot-only assert threw here — an off-pipeline rotation bricked the
+        // whole hub over one unreadable key), and must NOT be silent.
+        $workerman = $worker->start();
+
+        self::assertSame('ssl', $workerman->transport);
+        self::assertCount(1, $this->recordedWarnings);
+        self::assertStringContainsString('exists and is not readable', $this->recordedWarnings[0]);
+        self::assertStringContainsString('HUB_RELAY_TLS_KEY', $this->recordedWarnings[0]);
+        self::assertStringContainsString('phlix-tls', $this->recordedWarnings[0]);
+    }
+
+    public function testTlsStartArmsTheRuntimeWatchAndErrorLoudLine(): void
+    {
+        $worker = new RelayWorker(
+            $this->container,
+            0,
+            1,
+            '127.0.0.1',
+            RelayProxyProtocol::DEFAULT_CHANNEL_PORT,
+            true,
+            $this->scratchPem('cert'),
+            $this->scratchPem('key'),
+            false,
+        );
+
+        $workerman = $worker->start();
+
+        // Audit §3.2: silent close with zero log WAS the defect — the TLS
+        // bind must own both a per-accept material guard (wrapped onConnect)
+        // and a loud enable_crypto failure line (onError).
+        self::assertNotNull($workerman->onConnect);
+        self::assertNotNull($workerman->onError);
+    }
+
+    public function testPlaintextStartWiresNoTlsErrorWatch(): void
+    {
+        // The plaintext bind cries its advisory through the RELAY logger —
+        // seed the recording seam so LoggerFactory needs no real config.
+        $this->seedRecordingLogger();
+
+        $worker = new RelayWorker($this->container, 0);
+
+        $workerman = $worker->start();
+
+        // The cap/guard chain stays; the TLS watch must not pretend to run
+        // without material (no onError on the plaintext bind).
+        self::assertNotNull($workerman->onConnect);
+        self::assertNull($workerman->onError);
     }
 }

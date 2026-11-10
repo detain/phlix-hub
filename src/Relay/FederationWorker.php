@@ -33,6 +33,7 @@ use function count;
 use function preg_match;
 use function rawurldecode;
 use function spl_object_id;
+use function time;
 use function trim;
 
 /**
@@ -293,7 +294,13 @@ final class FederationWorker
 
         // Enable TLS (wss://) when configured; same server-context options as
         // the :8802 relay listener family (M21 review i-row: ECDHE+AEAD only,
-        // secp384r1, compression off, security level 2).
+        // secp384r1, compression off, security level 2). Audit §3.2 adds what
+        // this surface never had: a boot material decision (missing PEM fails
+        // fast pre-bind like its :8802 sibling; exists-but-unreadable degrades
+        // to a loud boot warning) and a per-connection TlsMaterialWatch so an
+        // off-pipeline key delivery fails LOUD on every handshake instead of
+        // closing silently.
+        $materialWatch = null;
         if ($this->useTls) {
             if ($this->tlsCert === null || $this->tlsKey === null) {
                 throw new \InvalidArgumentException(
@@ -301,6 +308,17 @@ final class FederationWorker
                     . 'HUB_FEDERATION_TLS_KEY env vars are not set',
                 );
             }
+            $envPaths = ['HUB_FEDERATION_TLS_CERT' => $this->tlsCert, 'HUB_FEDERATION_TLS_KEY' => $this->tlsKey];
+            $decision = TlsMaterialWatch::bootDecision($envPaths, 'federation worker', 'HUB_FEDERATION_TLS');
+            if ($decision['fatal'] !== null) {
+                throw TlsMaterialWatch::failFast($decision['fatal']);
+            }
+
+            foreach ($decision['warnings'] as $bootWarning) {
+                LoggerFactory::get(LogChannels::RELAY)->warning((string) $bootWarning);
+            }
+
+            $materialWatch = new TlsMaterialWatch('federation-ws :' . $this->port, $envPaths);
             $sslContext = [
                 'ssl' => [
                     'ciphers' => 'ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS',
@@ -327,7 +345,33 @@ final class FederationWorker
         $worker->onWebSocketConnect = [$this, 'onWebSocketConnect'];
         // Minor 57: declared inbound package cap pinned at TCP-accept (law in
         // InboundPackageCap) — this surface no longer inherits it from vendor.
-        $worker->onConnect = InboundPackageCap::onConnect();
+        $capHandler = InboundPackageCap::onConnect();
+        if ($materialWatch !== null) {
+            // Audit §3.2 runtime observability (see the :8802 sibling's
+            // identical wiring): accept-time material re-check + enable_crypto
+            // failure notices, rate-gated, ERROR-level, never silent.
+            $watch = $materialWatch;
+            $worker->onConnect = static function (TcpConnection $connection) use ($capHandler, $watch): void {
+                $notice = $watch->materialNotice(time());
+                if ($notice !== null) {
+                    LoggerFactory::get(LogChannels::RELAY)->error($notice);
+                }
+
+                $capHandler($connection);
+            };
+            $worker->onError = static function (
+                TcpConnection $connection,
+                int $code,
+                string $message
+            ) use ($watch): void {
+                $notice = $watch->handshakeFailureNotice(time(), $message);
+                if ($notice !== null) {
+                    LoggerFactory::get(LogChannels::RELAY)->error($notice);
+                }
+            };
+        } else {
+            $worker->onConnect = $capHandler;
+        }
         $worker->onMessage = [$this, 'onMessage'];
         $worker->onClose = [$this, 'onClose'];
 

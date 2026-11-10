@@ -6,6 +6,58 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed [cert-rotation-hub-1109] — audit §3.1/§3.2/§3.4/§3.5/§5.2: live-path HAProxy binds, loud TLS-material failure, tear-free renewal, single renewal mechanism
+
+- **§3.1** (`scripts/install.sh`): the managed `frontend fe_https` no longer
+  depends on cat-merged copies in `/etc/haproxy/certs/` when HAProxy can do
+  better. The rebuild now MEASURES the installed haproxy
+  (`phlix_haproxy_supports_tls_key_file`) and, on >= 2.9 (every host on the
+  supported matrix — Ubuntu 24.04 ships 2.9.x; 22.04/Debian 12 are off-matrix
+  per the README's PHP floor), emits per-domain split binds
+  `crt /etc/letsencrypt/live/<dom>/fullchain.pem key-file .../privkey.pem`
+  for each annotated TLS fragment whose material exists, pruning the stale
+  certs-dir copy of those domains. Un-referenceable extras keep a dir bind;
+  annotated domains lacking live material keep serving from their copy with
+  a loud §3.1 warning. Pre-2.9 falls back to today's merged-copy dir shape
+  byte-for-byte. TLS fragments of BOTH co-installed projects are honored —
+  the `# Mode`/`# Domain` header law is shared with phlix-server. The bind
+  renderer + version parser are pure shell helpers covered by a new
+  `scripts/install.sh --self-test` suite (16 assertions, no-root/no-apt).
+- **§3.2** (`src/Relay/TlsMaterialWatch.php` new; `RelayWorker`/`FederationWorker`):
+  off-pipeline cert delivery no longer fails silently. Boot material decision
+  split: MISSING PEM still throws word-for-word today's fail-fast text
+  (`FederationWorker` gains the check it never had); exists-but-UNREADABLE
+  degrades to a loud RELAY-channel boot WARNING and the listener binds —
+  per-connection `TlsMaterialWatch` re-classifies the material at each accept
+  and every vendor `enable_crypto` failure now reaches a rate-gated ERROR line
+  through a wired `onError` (shared 60 s window, suppressed-count carry,
+  recovery line on good return). `assertTlsMaterialReadable()` stays verbatim
+  as the strict direct-call contract. Disclosed behavior change:
+  `FederationWorkerTlsPostureTest`'s secure-leg previously passed absent
+  `/tmp` paths (possible only because federation had NO boot check); it now
+  carries real scratch PEMs like its :8802 sibling. New suites
+  `TlsMaterialWatchTest` (12) + `FederationWorkerTlsMaterialTest` (3) blessed
+  into `scripts/parallel/test-durations.json` with measured values.
+- **§3.4** (`scripts/install.sh`): renewal is tear-free. The cron becomes
+  `certbot renew --quiet --webroot -w /var/www/phlix-acme` with NO pre/post
+  stop/start hooks (the old line tore every HAProxy connection monthly); the
+  managed frontend answers ACME HTTP-01 challenges directly (path-anchored
+  `http-request return file`, token charset makes traversal impossible). The
+  first-install issuance still uses standalone but now only stops the proxy
+  when a certificate is actually absent, and retries once after the stop.
+- **§3.5** (`scripts/install.sh`): where the installer owns renewal it now
+  `systemctl disable --now certbot.timer` + `mask` (idempotent), retiring the
+  dual-renewal-machinery trap; the uninstall re-arms the timer only when no
+  Phlix renewal cron remains on the host.
+- **§5.2** (`README.md`, `docs/websockets.md`): `PHLIX_FEDERATION_CA_BUNDLE`
+  is documented as trust-ANCHOR selection — put CA/root certificates in the
+  file; never the master's leaf/fullchain (leaves change every ~60 days and
+  a leaf-anchored bundle breaks every dial silently at rotation). Truth passes
+  alongside: the merge-prose now describes the capability-split bind law and
+  webroot renewal, the out-of-band/wildcard provisioning note states the
+  phlix-tls 640 + reload delivery contract, the env rows and the listener TLS
+  law text match the shipped runtime behavior.
+
 ### Fixed [w17L4-hub-1109] — SH-061/066/068: unauthenticated /health redaction, federation dial admission, UUID single-source
 
 - **SH-061** (`src/Health/MaintenanceHeartbeat.php`): the UNAUTHENTICATED

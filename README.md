@@ -512,8 +512,13 @@ What it removes, only if it finds them:
    and backend stay. If phlix-hub was the last Phlix project, the pre-Phlix snapshot at
    `/etc/haproxy/haproxy.cfg.pre-phlix.bak` is restored (or `haproxy.cfg` is removed and
    haproxy is stopped + disabled if no snapshot exists).
-3. The combined PEM at `/etc/haproxy/certs/<domain>.pem`.
+3. The legacy merged PEM at `/etc/haproxy/certs/<domain>.pem` (present only on
+   pre-2.9 HAProxy fallback installs or if an older release left one; live-shape
+   installs bind `/etc/letsencrypt/live/` directly and keep no copy).
 4. `/etc/cron.d/phlix-hub-certbot` and `/etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh`.
+   The installer's renewal cron owns the schedule and masks the distro `certbot.timer`;
+   the uninstall re-arms that timer only when no Phlix renewal cron remains on the host
+   (a still-installed phlix-server cron keeps ownership).
 5. The Let's Encrypt cert via `certbot delete --cert-name <domain>` — only with `--purge` or
    interactive confirmation.
 6. The MySQL database and dedicated user — only with `--purge` or interactive confirmation.
@@ -544,14 +549,23 @@ curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/master/scripts/
 ```
 
 After both finish, `/etc/haproxy/haproxy.cfg` is a Phlix-managed config carrying both
-projects' frontends and backends, with HAProxy picking the right cert per SNI hostname from
-`/etc/haproxy/certs/`.
+projects' frontends and backends, with HAProxy picking the right cert per SNI hostname.
 
 **How the merge works.** Each install drops a fragment at
 `/etc/haproxy/phlix-managed/<project>.cfg.fragment` with `fe_http`, `fe_https`, and `backends`
 sections. A shared rebuilder then assembles the final `haproxy.cfg` from every fragment it
-finds. HAProxy's `crt /etc/haproxy/certs/` directive auto-loads every `.pem` in that directory
-and picks the right one per SNI hostname.
+finds. The `frontend fe_https` bind shape is capability-measured at rebuild time
+(audit §3.1 cure): on HAProxy >= 2.9 — every host on the supported matrix (Ubuntu 24.04+,
+where the distro ships 2.9.x) — each annotated TLS fragment binds its certbot paths
+directly (`crt /etc/letsencrypt/live/<domain>/fullchain.pem key-file .../privkey.pem`),
+so a reload always picks up the current bytes at stable symlink paths and a rotation done
+outside this host's certbot can never strand a stale copy. Only certs the rebuild cannot
+reference live (operator extras, or domains without material) keep the legacy
+`crt /etc/haproxy/certs/` directory bind. On pre-2.9 HAProxy (off-matrix) the builder
+falls back to that merged-copy directory — a `cat fullchain + privkey` PEM per domain —
+whose copies are refreshed by the deploy hook, and the hook's merged-copy leg stays
+active there. `ACME` HTTP-01 challenges are answered straight from
+`/var/www/phlix-acme` by the shared frontend, so renewals never stop the proxy.
 
 The first install snapshots any pre-Phlix `haproxy.cfg` to
 `/etc/haproxy/haproxy.cfg.pre-phlix.bak`.
@@ -1086,7 +1100,13 @@ Hub and add a matching wildcard TLS certificate.
 
 > **TLS for server subdomains:** automated ACME (Let's Encrypt) provisioning is **not** built in.
 > Provision certificates out-of-band (e.g. a wildcard cert via certbot DNS-01) and point the Hub
-> at them.
+> at them. Rotation OUTSIDE the managed certbot pipeline must respect two contracts: (1) the
+> key files stay readable by the unprivileged worker — the managed install's convention is
+> group `phlix-tls`, mode `640` on `privkey*.pem` (rerun the installer's fix-up, or invoke the
+> deploy hook at `/etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh` after every delivery);
+> (2) HAProxy must reload so it re-reads the live paths — `systemctl reload haproxy`. A hub
+> whose TLS env points at out-of-band material logs a loud boot warning plus per-connection
+> ERROR lines if the delivery ever breaks contract (1), never a silent handshake death.
 
 ## Docker
 
@@ -1243,7 +1263,7 @@ the `PHLIX_HUB_RATELIMIT_*` envs below, so when it is set the env defaults are N
 | `HUB_FEDERATION_ENABLED` | `true` | `false` stops new federation dials, drops inbound DATA frames pre-verification, and rejects controller mutators with **409** `provider.not_configured`. The `:8805` listener stays bound until restart (pre-fork socket). Live twin: `federation.enabled` |
 | `HUB_MAINTENANCE_MODE` | `false` | `true` answers **503** `provider_unavailable` for API traffic. Exempt by design: `/health`, `/api/v1/auth/*`, hub-settings + admin-settings GET/PUT (the off-switch), `/api/v1/admin/restart`; the SPA shell and hashed assets still serve. Live twin: `hub.maintenance_mode` |
 | `HUB_RELAY_TLS` | `false` | Terminates TLS on the `:8802` server-tunnel listener (`wss://`) — what you must enable to pair servers over untrusted networks. Needs `HUB_RELAY_TLS_CERT` / `HUB_RELAY_TLS_KEY` (both default `null`) |
-| `HUB_RELAY_TLS_CERT` / `HUB_RELAY_TLS_KEY` | `null` | PEM paths for the `:8802` TLS context above |
+| `HUB_RELAY_TLS_CERT` / `HUB_RELAY_TLS_KEY` | `null` | PEM paths for the `:8802` TLS context above. A missing path aborts boot (fail-fast); an unreadable one warns loudly and is guarded per connection (`TlsMaterialWatch`) — managed installs keep the key group-readable via the `phlix-tls` / mode `640` perms legs |
 | `HUB_RELAY_REQUIRE_TLS` | `false` | Fail-closed `:8802` bind mandate — the listen-side mirror of the server's `PHLIX_RELAY_REQUIRE_TLS` (R17-01): `true` makes the relay worker REFUSE to boot when TLS is off, instead of binding a cleartext listener that carries enrollment JWTs. `false` = warn-only — a plaintext bind logs one loud `SECURITY` advisory on the relay channel at boot |
 | `HUB_FEDERATION_TLS` | `false` | Terminates TLS natively on the `:8805` hub-to-hub federation listener (`wss://`) — for masters reached WITHOUT a TLS-terminating upstream proxy. Needs `HUB_FEDERATION_TLS_CERT` / `HUB_FEDERATION_TLS_KEY` (both default `null`). A plaintext bind logs one loud `SECURITY` advisory on the relay channel at boot (M22) |
 | `HUB_FEDERATION_TLS_CERT` / `HUB_FEDERATION_TLS_KEY` | `null` | PEM paths for the `:8805` TLS context above |
@@ -1310,7 +1330,7 @@ WebSocket handshakes (:8802/:8803/:8804/:8805) reject with WS close code **1013*
 | `PHLIX_HUB_RATELIMIT_FEDERATION_CONNECT_MAX` / `_FEDERATION_CONNECT_WINDOW` | `10` / `60` | :8805 inbound federation connects (master role), keyed `federation_connect:<trusted ip>` — `count=1` worker, truly global |
 | `PHLIX_HUB_RATELIMIT_FEDERATION_FRAME_MAX` / `_FEDERATION_FRAME_WINDOW` | `120` / `60` | :8805 federation frames, both roles, keyed `federation_frame:<remote peer hub id>` — `count=1` worker, truly global |
 | `TRUSTED_PROXIES` | `127.0.0.0/8,::1/128` | Trusted proxy IPs/CIDRs used to resolve the real client address for the IP-keyed limiters (`src/Common/Http/TrustedProxyResolver.php`) — a forgeable leftmost `X-Forwarded-For` is never trusted |
-| `PHLIX_FEDERATION_CA_BUNDLE` | unset | TLS trust-anchor selection for federation **dials** (this hub as leaf connecting to an `https://`/`wss://` master): absolute path to a PEM bundle that replaces the system store as verification anchor. Set it when the master serves a private-CA certificate; an unreadable path fails LOUD at dial (never a silent system-store fallback). `src/Federation/FederationPeerManager.php` (`buildMasterDialPlan`) — see also `docs/websockets.md` |
+| `PHLIX_FEDERATION_CA_BUNDLE` | unset | TLS trust-anchor selection for federation **dials** (this hub as leaf connecting to an `https://`/`wss://` master): absolute path to a PEM bundle that replaces the system store as verification anchor. Set it when the master serves a private-CA certificate; an unreadable path fails LOUD at dial (never a silent system-store fallback). Put CA/root certificates in this file; never your master's leaf/fullchain — leaves change every ~60 days, and a leaf-anchored bundle then breaks every dial silently at rotation. `src/Federation/FederationPeerManager.php` (`buildMasterDialPlan`) — see also `docs/websockets.md` |
 | `PHLIX_FEDERATION_ALLOWED_HOSTS` | unset | Optional egress containment for federation **dials**: comma-separated EXACT hostnames/IPs (case-insensitive; IPv6 brackets optional) the leaf may connect to. Unset or blank = no host restriction (default — private-IP LAN masters are legitimate federation topology). Once set, any other host is refused LOUD at dial-plan build (`PHLIX...FederationPeerManager::admitEgress`); this is an operator containment hatch, not a security boundary — the dial's security is the H-4/H-5 proof-of-key ceremony |
 | `HUB_UPDATES_CHECK_ENABLED` | `true` | Update-check master switch. **On by default**: the hub fetches a version marker from `raw.githubusercontent.com` (below) once per poll interval. Disable with `false` on egress-restricted or air-gapped installs — a blocked fetch is recorded as a failed check and retried on the next interval; it never blocks boot or serves. An admin can also flip it at runtime via `PUT /api/v1/admin/updates/settings` (a `hub_settings` override, which wins over this default) |
 | `HUB_UPDATES_MARKER_URL` | `https://raw.githubusercontent.com/detain/phlix-hub/master/VERSION` | The remote version marker fetched per poll; kept in lockstep with `Phlix\Hub\Version::VERSION` (pinned by `tests/VersionTest.php`) |

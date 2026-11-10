@@ -36,6 +36,7 @@ use function is_readable;
 use function is_string;
 use function json_decode;
 use function spl_object_id;
+use function time;
 
 /**
  * WebSocket worker that handles server-to-hub relay tunnel connections.
@@ -93,9 +94,11 @@ final class RelayWorker
      * @param string              $channelHost Host of the workerman/channel broker (cross-process proxy).
      * @param int                 $channelPort Port of the workerman/channel broker.
      * @param bool                $useTls      Enable TLS (wss://) on the relay WebSocket.
-     * @param string|null         $tlsCert     Path to TLS certificate file (PEM); must be a
-     *                                         readable file — enforced pre-bind by
-     *                                         {@see self::assertTlsMaterialReadable()}.
+     * @param string|null         $tlsCert     Path to TLS certificate file (PEM); a missing
+     *                                         file fails the boot pre-bind via
+     *                                         {@see TlsMaterialWatch::bootDecision()}, an
+     *                                         unreadable one degrades to a loud boot warning
+     *                                         plus the per-connection watch (audit §3.2).
      * @param string|null         $tlsKey      Path to TLS private key file (PEM), same law.
      * @param bool                $requireTls  M21 fail-closed posture: refuse to bind
      *                                         plaintext ws:// when true and TLS is off
@@ -216,8 +219,8 @@ final class RelayWorker
      * hub certificate is the dialing server's duty (`PHLIX_RELAY_TLS_VERIFY`,
      * phlix-server RelayConsumer::buildSslContext — strict by default).
      *
-     * @param string $certPath local_cert PEM bundle; already validated by
-     *                         {@see self::assertTlsMaterialReadable()}.
+     * @param string $certPath local_cert PEM bundle; already passed the boot
+     *                         material decision (audit §3.2).
      * @param string $keyPath  local_pk PEM path.
      *
      * @return array{ssl: array<string, mixed>} Workerman socket context.
@@ -239,9 +242,17 @@ final class RelayWorker
     }
 
     /**
-     * Fail fast, pre-bind, on TLS material that is not a readable file.
+     * Strict pre-bind guard: throws on ANY non-readable TLS material.
      *
-     * Without this check a configured-but-missing PEM surfaces only when
+     * Kept as the exact fail-fast contract (message wording pinned by
+     * RelayWorkerTlsMaterialTest) for direct callers. RelayWorker::start()
+     * itself now routes the boot through {@see TlsMaterialWatch::bootDecision()},
+     * which preserves this throw for MISSING files but downgrades the
+     * exists-but-unreadable case to a loud boot warning + per-connection
+     * runtime guard (audit §3.2: an off-pipeline rotation must never kill
+     * the hub's boot, and must never go silent either).
+     *
+     * Without any check a configured-but-missing PEM surfaces only when
      * Workerman's `stream_socket_server()` rejects the ssl context mid-boot —
      * possibly after other listeners already bound (a half-started hub) and
      * with an error text that never names the operator knob at fault. The
@@ -311,17 +322,30 @@ final class RelayWorker
         // rather than null — passing null throws a TypeError on the non-TLS path.
         $sslContext = [];
 
-        // Enable TLS (wss://) when configured. The material is validated before
-        // the Worker is even constructed: a configured-but-unreadable PEM must
-        // fail the boot loudly and deterministically, never as a cryptic
-        // OpenSSL digest from a half-booted hub (TLS-lane fail-fast law).
+        // Enable TLS (wss://) when configured. Audit §3.2 (wildcard-rotation
+        // cure) split the boot-time decision: a MISSING PEM still fails fast
+        // pre-bind (today's law, byte-ident message), while an exists-but-
+        // UNREADABLE PEM degrades to a loud boot warning plus the per-
+        // connection TlsMaterialWatch below — the off-pipeline delivery case
+        // must never kill the hub's boot, and it must never be silent either.
+        $materialWatch = null;
         if ($this->useTls) {
             if ($this->tlsCert === null || $this->tlsKey === null) {
                 throw new \InvalidArgumentException(
                     'TLS enabled for relay worker but HUB_RELAY_TLS_CERT and/or HUB_RELAY_TLS_KEY env vars are not set',
                 );
             }
-            self::assertTlsMaterialReadable($this->tlsCert, $this->tlsKey);
+            $envPaths = ['HUB_RELAY_TLS_CERT' => $this->tlsCert, 'HUB_RELAY_TLS_KEY' => $this->tlsKey];
+            $decision = TlsMaterialWatch::bootDecision($envPaths, 'relay worker', 'HUB_RELAY_TLS');
+            if ($decision['fatal'] !== null) {
+                throw TlsMaterialWatch::failFast($decision['fatal']);
+            }
+
+            foreach ($decision['warnings'] as $bootWarning) {
+                LoggerFactory::get(LogChannels::RELAY)->warning((string) $bootWarning);
+            }
+
+            $materialWatch = new TlsMaterialWatch('relay-ws :' . $this->port, $envPaths);
             $sslContext = self::relayTlsContext($this->tlsCert, $this->tlsKey);
         }
 
@@ -340,11 +364,39 @@ final class RelayWorker
         // HOST-3 H3-3: the cap handler is wrapped in the repo-owned handshake
         // deadline — a socket that never completes its WS upgrade is closed
         // after relay.ws_handshake_timeout_seconds instead of held ~forever.
-        $worker->onConnect = InboundHandshakeGuard::compose(
+        $handshakeGuard = InboundHandshakeGuard::compose(
             InboundPackageCap::onConnect(),
             $this->handshakeTimeoutSeconds,
             'relay-ws :' . $this->port,
         );
+        if ($materialWatch !== null) {
+            // Audit §3.2 runtime observability: every accept re-classifies
+            // the TLS material (loud, rate-gated ERROR on the good->bad and
+            // bad->good transitions) and every enable_crypto failure reaches
+            // onError — the vendor otherwise just closes the socket, silent
+            // under daemonized/systemd runs (the original defect).
+            $watch = $materialWatch;
+            $worker->onConnect = static function (TcpConnection $connection) use ($handshakeGuard, $watch): void {
+                $notice = $watch->materialNotice(time());
+                if ($notice !== null) {
+                    LoggerFactory::get(LogChannels::RELAY)->error($notice);
+                }
+
+                $handshakeGuard($connection);
+            };
+            $worker->onError = static function (
+                TcpConnection $connection,
+                int $code,
+                string $message
+            ) use ($watch): void {
+                $notice = $watch->handshakeFailureNotice(time(), $message);
+                if ($notice !== null) {
+                    LoggerFactory::get(LogChannels::RELAY)->error($notice);
+                }
+            };
+        } else {
+            $worker->onConnect = $handshakeGuard;
+        }
         // Fired with each deframed WS message payload (HELLO text, then frames).
         $worker->onMessage = [$this, 'onMessage'];
         $worker->onClose = [$this, 'onClose'];

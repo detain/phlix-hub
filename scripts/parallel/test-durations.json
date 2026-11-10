@@ -1,5 +1,5 @@
 {
-    "generatedFrom": "81be1692+ w16L7 serial Unit-only junit (RelayProxyBridge swoole-absence host reds + UnusedImportGuard pre-fix red both pre-existing-in-run; w16L7 adds 3 Unit files)",
+    "generatedFrom": "81be1692+ w16L7 serial Unit-only junit (RelayProxyBridge swoole-absence host reds + UnusedImportGuard pre-fix red both pre-existing-in-run; w16L7 adds 3 Unit files); cert-rotation lane 2026-11-09 adds 2 Unit files (TlsMaterialWatch, FederationWorkerTlsMaterial) + re-measures the grown Relay TLS suites",
     "unit": {
         "tests/Common/Database/MigrationRunnerTest.php": 0.017,
         "tests/Health/HealthControllerTest.php": 0.011,
@@ -241,7 +241,8 @@
         "tests/Unit/Relay/ClientRelayWorkerTest.php": 0.025,
         "tests/Unit/Relay/FederationWorkerExceptionBarrierTest.php": 0.007,
         "tests/Unit/Relay/FederationWorkerRateLimitTest.php": 0.01,
-        "tests/Unit/Relay/FederationWorkerTlsPostureTest.php": 0.008,
+        "tests/Unit/Relay/FederationWorkerTlsMaterialTest.php": 0.031,
+        "tests/Unit/Relay/FederationWorkerTlsPostureTest.php": 0.04,
         "tests/Unit/Relay/FrameBufferOverflowExceptionTest.php": 0.001,
         "tests/Unit/Relay/FrameDecoderTest.php": 0.025,
         "tests/Unit/Relay/FrameEncoderTest.php": 0.002,
@@ -259,9 +260,10 @@
         "tests/Unit/Relay/RelayWorkerQueryStringCredentialTest.php": 0.047,
         "tests/Unit/Relay/RelayWorkerTest.php": 0.017,
         "tests/Unit/Relay/RelayWorkerTlsHandshakeE2ETest.php": 1.942,
-        "tests/Unit/Relay/RelayWorkerTlsMaterialTest.php": 0.003,
+        "tests/Unit/Relay/RelayWorkerTlsMaterialTest.php": 0.039,
         "tests/Unit/Relay/RelayWorkerTlsPostureTest.php": 0.004,
         "tests/Unit/Relay/ThrottleBurstWindowContractTest.php": 0.001,
+        "tests/Unit/Relay/TlsMaterialWatchTest.php": 0.02,
         "tests/Unit/Relay/TokenBucketTest.php": 0.002,
         "tests/Unit/Relay/TunnelManagerDrainGraceTest.php": 0.001,
         "tests/Unit/Relay/TunnelManagerJwtWiringTest.php": 0.007,

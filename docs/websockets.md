@@ -144,10 +144,20 @@ stand up a credential-bearing cleartext listener when the operator has mandated
 TLS. This is the listen-side mirror of the server's `PHLIX_RELAY_REQUIRE_TLS`
 dial-side knob (phlix-server `config/relay.php`); the warn-only default is
 deliberate estate posture — flip both sides in one wave, never one alone.
-Configured material is additionally **fail-fast pre-bind**: booting with
-`relay_tls` on and either PEM path not a readable file aborts the hub loudly
-naming the failing env var (`RelayWorker::assertTlsMaterialReadable`), never a
-half-booted listener that dies cryptically inside `stream_socket_server()`.
+Configured material gets a pre-bind boot decision (audit §3.2,
+wildcard-rotation cure): a **missing** PEM still fails fast — boot aborts
+loudly naming the failing env var and both exits out; an exists-but-
+**unreadable** PEM now degrades to a loud boot WARNING instead, because
+OpenSSL re-reads the PEMs per connection and one bad rotation must not stop
+the whole hub from booting its other surfaces. From there a
+`TlsMaterialWatch` re-checks the material at each accept and turns every
+failed handshake into a rate-gated ERROR line (with a recovery line when
+the state clears) — silent socket death was the reviewed defect. The managed
+installer's `phlix-tls` group / mode 640 perms legs (and its certbot deploy
+hook) are what keep the unprivileged worker able to read the key; delivery
+outside that pipeline is the case the watch shouts about. The old
+all-abort helper (`RelayWorker::assertTlsMaterialReadable`) remains verbatim
+as the strict missing-or-unreadable contract for direct callers.
 The bind-time context itself — AEAD-only cipher list, `secp384r1`, compression
 off, OpenSSL security level 2 — is the single builder
 `RelayWorker::relayTlsContext()`, and the real-TLS loopback E2E
@@ -675,6 +685,9 @@ strict stream context (`verify_peer`, `verify_peer_name`, `SNI_enabled`,
 `verify_peer = false` escape hatch ships. For a master with a private-CA
 certificate, set `PHLIX_FEDERATION_CA_BUNDLE` to an absolute PEM bundle path
 (unset = system trust store; set-but-unreadable = the dial is refused loudly).
+Put CA/root certificates in that file — never your master's leaf/fullchain:
+leaves change every ~60 days, and a leaf-anchored bundle breaks every dial
+silently the moment the master rotates.
 Admission of the configured URL itself is total (SH-066): the URI is built
 from the PARSED host and port only — the pre-fix fallback that embedded a
 host-less `master_url` string wholesale is gone, so anything that yields no
@@ -709,7 +722,11 @@ mandated-secure hub never binds a cleartext federation socket (the skip is
 loud — the refusal text names the consequence and the exits). The warn-only
 default is deliberate estate posture: a mandate flip moves both ends of the
 link in one wave, never one alone, and the proxy-terminated topology must not
-be punished by default.
+be punished by default. Since audit §3.2 the federation boot also carries the
+:8802 material decision (it previously had none): a MISSING PEM now fails fast
+pre-bind, an UNREADABLE one warns loudly and hands off to the same
+per-accept/recovery watch, and enable_crypto failures on either hub listener
+reach an ERROR log line instead of closing silently.
 
 **Getting there.** The managed installer routes `GET /relay/federation/…` on the shared
 HAProxy frontend (80/443) to this listener, so a master installed with `scripts/install.sh`
