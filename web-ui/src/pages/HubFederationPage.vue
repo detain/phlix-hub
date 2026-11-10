@@ -38,7 +38,10 @@ const { t } = useHubMessages();
             out immediately, but today they exist only as admin-gated API endpoints —
             <code>PUT /api/v1/me/federation/hub-config</code> and
             <code>PUT /api/v1/me/federation/peers/:id/relay</code>; this page exposes no control
-            that invokes them.
+            that invokes them. Terminology note: a <em>peer</em> is another <strong>hub</strong>,
+            never a Phlix server — the wrapped shared page's "servers" wording ("Connect with
+            other Phlix servers", "Peer server URL") is upstream legacy copy pending a fix in
+            <code>@phlix/ui</code>; the hub-side vocabulary and the README glossary stand.
         </HubPageHint>
         <FederationPage />
     </div>

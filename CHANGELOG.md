@@ -12,6 +12,25 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Fixed [hub-w20L3] — federation hint gains the peers-are-hubs terminology note; served /app rebuilt (review hub__pm #6) — 2026-11-10
+
+- The vendored `@phlix/ui` federation page still renders "Connect with other Phlix
+  servers" and "Peer server URL" while the README glossary defines a peer as the other
+  **hub** of a federation link. That copy lives upstream — `web-ui/package.json` is only
+  its pin carrier and stays untouched by a copy fix (the cure ships with the next ui
+  re-pin wave). Hub-side, the `HubFederationPage.vue` hint gains one terminology sentence
+  declaring the hub-side vocabulary canonical.
+- Rebuilt the served portal with the CI venue (node 24.20.0, npm 11.19.0,
+  `NPM_CONFIG_USERCONFIG=/dev/null`, `npm ci && npm run build`): consecutive builds were
+  byte-identical across all 198 tracked artifacts (`.vite/manifest.json` included), and a
+  post-commit rebuild reproduces the committed tree with an empty diff — the S253 gate
+  shape. A control build from the pre-change tree reproduced the previously committed
+  bundle exactly, so the follow-up diff is the
+  legitimate rename cascade of one entry-carried copy change: 102 chunk renames plus
+  `.vite/manifest.json` and `index.html`, zero stale orphans. Carrier rotation
+  `index-Du6IJpw1.js` (md5 `e752999b…`, 487,225 B) → `index-Co0RZtX4.js` (md5
+  `58ac0bba…`, 487,588 B).
+
 ### Fixed [hub-w20L3] — CHANGELOG structural hygiene + errata (review hub__writer #1/#6/#7/#9) — 2026-11-10
 
 - Rejoined the pin token split by a line wrap inside the v0.99.16 re-vendor entry
