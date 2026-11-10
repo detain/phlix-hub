@@ -353,7 +353,7 @@ final class CookiePolicy
             }
 
             $refererHost = $refererParts['host'] ?? '';
-            $refererPort = isset($refererParts['port']) ? (int) $refererParts['port'] : null;
+            $refererPort = isset($refererParts['port']) ? $refererParts['port'] : null;
             if (!self::originLawHostsMatch($refererHost, $refererPort, $server)) {
                 return false;
             }
@@ -366,7 +366,7 @@ final class CookiePolicy
             }
 
             $originHost = $originParts['host'] ?? '';
-            $originPort = isset($originParts['port']) ? (int) $originParts['port'] : null;
+            $originPort = isset($originParts['port']) ? $originParts['port'] : null;
             if (!self::originLawHostsMatch($originHost, $originPort, $server)) {
                 return false;
             }
@@ -392,7 +392,7 @@ final class CookiePolicy
 
         return [
             'host' => $parts['host'] ?? $hostHeader,
-            'port' => isset($parts['port']) ? (int) $parts['port'] : null,
+            'port' => isset($parts['port']) ? $parts['port'] : null,
         ];
     }
 
