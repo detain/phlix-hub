@@ -922,7 +922,11 @@ class AuthManager
             $minted = $this->jwtHandler->validateToken($refreshToken);
             $mintedJti = $minted?->jti;
             if (is_string($mintedJti) && $mintedJti !== '') {
-                $this->tokenSessions->recordGrant($mintedJti, $sessionId);
+                // D1a cure twin leg one: the row carries the SAME read-back's
+                // baked exp — the grant's horizon is the token's own lifetime,
+                // not a config guess (a later TTL edit must not retroactively
+                // move the sweep horizon of rows minted under the old one).
+                $this->tokenSessions->recordGrant($mintedJti, $sessionId, $minted?->exp);
             }
             if ($familyHint !== null) {
                 $this->tokenSessions->touchSession($sessionId);

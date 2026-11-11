@@ -1549,9 +1549,12 @@ paths:
       tags: ["Authentication"]
       summary: "List active device families"
       description: |-
-        CP-029 (D-1a hub twin of server 413765b6): every ACTIVE session family
-        of the caller, newest-used first, each flagged `current` when it minted
-        this very request's token. Rows carry id, created/last-used timestamps
+        CP-029 (D-1a hub twin of server 413765b6), bounded by the D1a cure
+        twin (2026-11-11): the caller's ACTIVE session families, newest-used
+        first, at most 200 per page — a truncated tail stays fully revocable
+        by id, the ceiling bounds the page and never the capability. Each row
+        is flagged `current` when it minted this very request's token. Rows
+        carry id, created/last-used timestamps
         and the device columns (NULL until a mint path supplies metadata).
         With no family store wired the list is empty — the legacy wire shape.
       x-phlix-middleware: [AuthMiddleware]

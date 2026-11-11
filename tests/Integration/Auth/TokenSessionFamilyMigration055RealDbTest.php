@@ -96,6 +96,7 @@ final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCas
                 'session_id:char(36):NO',
                 'consumed_at:timestamp:YES',
                 'created_at:timestamp:NO',
+                'expires_at:timestamp:YES',
             ],
             'auth_token_sessions' => [
                 'id:char(36):NO',
@@ -122,7 +123,8 @@ final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCas
         );
         self::assertIsArray($indexes);
         self::assertSame(
-            ['auth_refresh_grants:idx_arg_consumed', 'auth_refresh_grants:idx_arg_session',
+            ['auth_refresh_grants:idx_arg_consumed', 'auth_refresh_grants:idx_arg_expires_at',
+                'auth_refresh_grants:idx_arg_session',
                 'auth_refresh_grants:PRIMARY', 'auth_token_sessions:idx_ats_user',
                 'auth_token_sessions:idx_ats_user_status', 'auth_token_sessions:PRIMARY'],
             array_map(static fn (array $r): string => $r['TABLE_NAME'] . ':' . $r['INDEX_NAME'], $indexes),
@@ -278,6 +280,91 @@ final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCas
     }
 
     // ------------------------------------------------------------------
+    // D1a cure twin — listing ceiling + grants retention (2026-11-11)
+    // ------------------------------------------------------------------
+
+    public function testTheActiveListingIsBoundedAtTheCeilingDroppingTheOldest(): void
+    {
+        // Cure limb 2: the list is a live view for a device picker, not an
+        // archive — 201 families must answer exactly the published ceiling
+        // (200), newest-used first, with the oldest as the truncated tail.
+        // Red at the parent: the unbounded query returns all 201.
+        $user = $this->seedUser('cp055bound');
+        $ids = [];
+        for ($slot = 1; $slot <= 201; $slot++) {
+            $id = $this->store->createSession($user);
+            $ids[] = $id;
+            $this->db->query(
+                'UPDATE auth_token_sessions SET last_used_at = DATE_SUB(NOW(), INTERVAL :m MINUTE) WHERE id = :id',
+                ['m' => $slot, 'id' => $id],
+            );
+        }
+
+        $rows = $this->store->listActiveSessions($user);
+        self::assertCount(200, $rows, 'the published ceiling is 200 rows');
+        self::assertSame($ids[0], $rows[0]['id'], 'newest-used first, still');
+        $listed = array_column($rows, 'id');
+        self::assertNotContains($ids[200], $listed, 'the oldest family is the truncated one');
+        self::assertContains($ids[199], $listed);
+    }
+
+    public function testMintingSweepsDeadGrantsAndKeepsEveryLiveSensor(): void
+    {
+        // Cure limb 1 (hub): write-time self-prune, exactly as the sibling
+        // 047 registry does it. The row mix below IS the safety argument —
+        // migrations/056 states why consumed_at is not the sweep key. Red at
+        // the parent: nothing prunes, every dead row sits on.
+        $user = $this->seedUser('cp055prune');
+        $family = $this->store->createSession($user);
+
+        // (1) stamped, expired one full grace beyond: dead weight, must leave.
+        $dead = 'jti-dead-0000000000000000000a1';
+        $this->insertGrantRow($dead, $family, 'DATE_SUB(NOW(), INTERVAL 3 DAY)', null, null);
+        // (2) stamped, expired only an hour ago: inside the kept-for-86400
+        //     grace — a clock-skewed mint must not lose its sensor early.
+        $recent = 'jti-recent-000000000000000000a2';
+        $hourAgo = 'DATE_SUB(NOW(), INTERVAL 1 HOUR)';
+        $this->insertGrantRow($recent, $family, $hourAgo, null, null);
+        // (3) consumed five days ago but its token still lives: THE PREMISE
+        //     CONVICT — a consumed_at-keyed sweep would wrongly delete this.
+        $sensor = 'jti-sensor-00000000000000000a3';
+        $twoDays = 'DATE_ADD(NOW(), INTERVAL 2 DAY)';
+        $fiveDaysAgo = 'DATE_SUB(NOW(), INTERVAL 5 DAY)';
+        $this->insertGrantRow($sensor, $family, $twoDays, $fiveDaysAgo, null);
+        // (4) pre-056 legacy shape: unstamped AND older than the grandfather
+        //     horizon — collected by the conservative arm.
+        $legacyOld = 'jti-legacy-00000000000000000a4';
+        $this->insertGrantRow($legacyOld, $family, null, null, 'DATE_SUB(NOW(), INTERVAL 400 DAY)');
+        // (5) unstamped but recent: grandfathered, stays.
+        $legacyFresh = 'jti-legacy-00000000000000000a5';
+        $this->insertGrantRow($legacyFresh, $family, null, null, 'DATE_SUB(NOW(), INTERVAL 1 HOUR)');
+        // (6) stamped live with an ancient created_at: only the precise arm
+        //     judges it — age without expiry never collects a stamped row.
+        $live = 'jti-live-0000000000000000000a6';
+        $dayAhead = 'DATE_ADD(NOW(), INTERVAL 1 DAY)';
+        $fourHundredDays = 'DATE_SUB(NOW(), INTERVAL 400 DAY)';
+        $this->insertGrantRow($live, $family, $dayAhead, null, $fourHundredDays);
+
+        $fresh = 'jti-fresh-00000000000000000a7';
+        $horizon = time() + 604800;
+        $this->store->recordGrant($fresh, $family, $horizon);
+
+        self::assertFalse($this->grantExists($dead), 'expired beyond grace is pruned at the next mint');
+        self::assertTrue($this->grantExists($recent), 'inside grace is kept');
+        self::assertTrue(
+            $this->grantExists($sensor),
+            'a consumed row of a live token is the theft sensor — it survives',
+        );
+        self::assertFalse($this->grantExists($legacyOld), 'unstamped rows leave on the grandfather arm');
+        self::assertTrue($this->grantExists($legacyFresh), 'recent unstamped rows are grandfathered');
+        self::assertTrue($this->grantExists($live), 'stamped live rows are never collected by created_at');
+
+        // The fresh mint itself is stamped (per-row expiry, not legacy shape).
+        self::assertTrue($this->grantExists($fresh));
+        self::assertSame($horizon, $this->unixExpiresOf($fresh));
+    }
+
+    // ------------------------------------------------------------------
     // Cascade + the primitive without a production call site
     // ------------------------------------------------------------------
 
@@ -371,6 +458,58 @@ final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCas
         self::assertCount(1, $rows);
 
         return $rows[0]['consumed_at'] === null ? null : (string) $rows[0]['consumed_at'];
+    }
+
+    /**
+     * Raw backdated grant insert — bypasses the repository on purpose: the
+     * sweep is about row history the API can no longer mint (pre-056 shapes,
+     * aged expiries). The time expressions are CODE LITERALS, the same law
+     * the repository states for the INTERVAL interpolation; identity values
+     * stay bound.
+     *
+     * @param string      $jti          CHAR(32)-shaped fixture id.
+     * @param string      $family       Owning session id (FK-live by caller).
+     * @param string|null $expiresExpr  SQL expression for expires_at, or NULL literal.
+     * @param string|null $consumedExpr SQL expression for consumed_at, or NULL literal.
+     * @param string|null $createdExpr  SQL expression for created_at, default NOW().
+     */
+    private function insertGrantRow(
+        string $jti,
+        string $family,
+        ?string $expiresExpr,
+        ?string $consumedExpr,
+        ?string $createdExpr,
+    ): void {
+        $this->db->query(
+            'INSERT INTO auth_refresh_grants (jti, session_id, consumed_at, created_at, expires_at)'
+            . ' VALUES (:jti, :sid, ' . ($consumedExpr ?? 'NULL') . ', '
+            . ($createdExpr ?? 'NOW()') . ', ' . ($expiresExpr ?? 'NULL') . ')',
+            ['jti' => $jti, 'sid' => $family],
+        );
+    }
+
+    private function grantExists(string $jti): bool
+    {
+        /** @var mixed $rows */
+        $rows = $this->db->query('SELECT COUNT(*) AS c FROM auth_refresh_grants WHERE jti = :jti', ['jti' => $jti]);
+        self::assertIsArray($rows);
+
+        return (int) $rows[0]['c'] > 0;
+    }
+
+    /** expires_at read back as a UNIX stamp (both directions on the DB clock). */
+    private function unixExpiresOf(string $jti): int
+    {
+        /** @var mixed $rows */
+        $rows = $this->db->query(
+            'SELECT UNIX_TIMESTAMP(expires_at) AS x FROM auth_refresh_grants WHERE jti = :jti',
+            ['jti' => $jti],
+        );
+        self::assertIsArray($rows);
+        self::assertCount(1, $rows);
+        $raw = $rows[0]['x'] ?? null;
+
+        return is_numeric($raw) ? (int) $raw : 0;
     }
 
     private function revokedAtOf(string $family): ?string

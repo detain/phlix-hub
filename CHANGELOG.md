@@ -12,6 +12,34 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Fixed [hub-d1a-cure] — D1a cure twin, hub-first of the pair (mirrors the server cure register's two booked minors): the refresh-grant table gains its missing retention leg, the device-family listing gains a published ceiling — 2026-11-11
+
+- Every grant row now carries its own expiry — the presented mint's baked
+  `exp` claim, read back from the same signature-validated decode that gates
+  the rotation (not a config guess, so a later TTL edit never moves the
+  horizon of rows minted under the old one) — stamped through migration 056's
+  guarded `expires_at` column + `idx_arg_expires_at`. `recordGrant` self-
+  prunes before each write, exactly like the 047 revocation registry it
+  shadows: `KeySweeper` two-phase, batch 1000, precise arm (expired beyond
+  86400 grace, range-scanned on the new index) plus a conservative grandfather
+  arm (pre-056 unstamped rows older than a year by `created_at`). Write-time,
+  not cadence-owned, for the reason the 047 docblock already states: a
+  credential store's prune must not be able to silently stop firing. A
+  consumed-but-unexpired row is never collected — that is the theft sensor
+  (premise pinned in its own test leg).
+- `listActiveSessions` is bounded at `TokenSessionRepository::MAX_LISTED_SESSIONS`
+  (200, newest-used first, mirrored in the openapi description of
+  `GET /api/v1/auth/sessions`): an unbounded list handed a pathological
+  account an unbounded page. The ceiling is capability-neutral — the DELETE
+  endpoint never consults the list, so a family past the tail stays revocable
+  by id. Zero new wire codes, zero envelope-shape change: the listing leg is
+  pure payload bounding.
+- Red-first both limbs: the 055 goldens reddened on the new column/index and
+  the 201-row ceiling before any source changed; the unit mint leg convicted
+  the un-stamped `null`; the retention leg convicted the missing prune and
+  pins the sensor-survival premise against a `consumed_at`-keyed sweep that
+  would silently blind theft detection.
+
 ### Changed [hub-route-sync-2] — S492 unblock, lockstep re-vendor of BOTH server-route derivations @ server `413765b6` (418 tuples): vendored contracts export + boot-derived snapshot regenerated in one commit; S280/S332/S492 pins rotated from measured reds — 2026-11-10
 
 - The hub's two independent derivations of the server route table — the

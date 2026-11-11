@@ -92,6 +92,48 @@ final class TokenSessionFamilyTest extends TestCase
         self::assertArrayNotHasKey('sid', $rotated['claims']);
     }
 
+    public function testTheGrantRegistrationCarriesTheSignedTokensOwnExpiry(): void
+    {
+        // D1a cure twin limb 1 (hub): the mint path hands recordGrant the OWN
+        // exp of the token it actually signed. The read-back is the single
+        // source (the same authority law as the jti) — never a config guess,
+        // because a future TTL edit must not retroactively move a live row's
+        // sweep horizon. Red at the parent: the 2-arg mint passes no expiry,
+        // the captured stamp stays null and the identity assert convicts.
+        $legacy = $this->manager(null)->refresh($this->legacyRefreshToken());
+
+        $recorded = [];
+        $store = $this->createMock(TokenSessionRepository::class);
+        $store->method('createSession')
+            ->with(self::USER_ID)
+            ->willReturn('fam-exp');
+        $store->expects(self::once())
+            ->method('recordGrant')
+            ->willReturnCallback(
+                static function (string $jti, string $sid, ?int $expiresAt = null) use (&$recorded): void {
+                    $recorded[] = [$jti, $sid, $expiresAt];
+                }
+            );
+
+        $rotated = $this->manager($store)->refresh($legacy['refresh_token']);
+
+        $jwt = new JwtHandler(self::SECRET);
+        $lineage = $jwt->validateTokenWithSession($rotated['refresh_token']);
+        self::assertIsArray($lineage);
+        $signed = $lineage['claims'];
+
+        self::assertCount(1, $recorded);
+        [$jti, $sid, $expiresAt] = $recorded[0];
+        self::assertSame('fam-exp', $sid);
+        self::assertSame($signed->jti, $jti);
+        self::assertSame(
+            $signed->exp,
+            $expiresAt,
+            'the stamped expiry must BE the token\'s own baked exp, read back from the mint',
+        );
+        self::assertGreaterThan(time(), (int) $expiresAt, 'a freshly minted grant cannot already be expired');
+    }
+
     public function testRotationContinuesInsideTheFamilyAndConsumesBeforeMinting(): void
     {
         $presented = $this->familyRefreshToken('fam-1');

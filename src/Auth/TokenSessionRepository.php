@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Auth;
 
+use Phlix\Hub\Common\Database\KeySweeper;
 use Phlix\Hub\Common\Support\Ids;
 use Workerman\MySQL\Connection;
 
@@ -62,6 +63,37 @@ use Workerman\MySQL\Connection;
  */
 class TokenSessionRepository
 {
+    /**
+     * Prune grace kept AFTER a grant's own expiry — the width of a
+     * clock-skewed window in which a row may still be load-bearing (same
+     * number its 047 sibling registry gives, and the same reason).
+     */
+    private const int PRUNE_GRACE_SECONDS = 86400;
+
+    /**
+     * Rows one sweep arm may delete — the same batch ceiling the OAuth/MCP/
+     * relay/registry pruners give {@see KeySweeper} (SH-053); no credential-
+     * store prune in this codebase issues an unbounded wide-predicate DELETE.
+     */
+    private const int PRUNE_BATCH_SIZE = 1000;
+
+    /**
+     * Retention for rows whose expiry is UNKNOWN (pre-056 mints, and the
+     * honest-NULL degeneracy when a read-back carries no exp): one year,
+     * far beyond any credible refresh-TTL configuration, so the grandfather
+     * arm can never collect a row whose token is still presentable.
+     */
+    private const int UNSTAMPED_RETENTION_SECONDS = 31536000;
+
+    /**
+     * Rows one listActiveSessions() call may return — the published ceiling
+     * of the device-family picker (openapi: "at most 200"). Newest-used
+     * first, so truncation drops the OLDEST tail; a truncated family is
+     * still fully revocable by id (the DELETE endpoint never consults the
+     * list), the ceiling bounds only the page, never the capability.
+     */
+    public const int MAX_LISTED_SESSIONS = 200;
+
     /** @var Connection Database connection (Workerman MySQL, the memoised 'txn' handle family) */
     private Connection $db;
 
@@ -209,16 +241,72 @@ class TokenSessionRepository
      * and never registered would be indistinguishable from an unknown forged
      * jti on presentation, so the row must exist the moment the bytes exist.
      *
-     * @param string $jti       The new refresh token's `jti`.
-     * @param string $sessionId Family that owns it.
+     * The D1a cure twin leg (2026-11-11): the row also carries its OWN
+     * expiry — the presented mint's baked `exp` claim, handed over by the
+     * caller from the authoritative read-back — and the write self-prunes
+     * expired grants first, exactly like {@see RefreshTokenRevocationService::
+     * revoke()} prunes its registry. A write-time prune cannot silently stop
+     * firing the way a cadence-owned sweep could, and rotation makes every
+     * mint a prune opportunity, so the table stays bounded by construction.
+     *
+     * @param string      $jti        The new refresh token's `jti`.
+     * @param string      $sessionId  Family that owns it.
+     * @param int|null    $expiresAt  UNIX expiry of THAT token (its signed
+     *                                `exp`), or null when the mint's own
+     *                                read-back carried none — such rows ride
+     *                                the conservative grandfather arm.
      *
      * @return void
      */
-    public function recordGrant(string $jti, string $sessionId): void
+    public function recordGrant(string $jti, string $sessionId, ?int $expiresAt = null): void
     {
+        $this->pruneExpired();
+
         $this->db->query(
-            'INSERT INTO auth_refresh_grants (jti, session_id) VALUES (:jti, :session_id)',
-            ['jti' => $jti, 'session_id' => $sessionId],
+            'INSERT INTO auth_refresh_grants (jti, session_id, expires_at)'
+            . ' VALUES (:jti, :session_id, FROM_UNIXTIME(:expires_at))',
+            ['jti' => $jti, 'session_id' => $sessionId, 'expires_at' => $expiresAt],
+        );
+    }
+
+    /**
+     * Delete grants whose token can no longer be presented — the retention
+     * leg the 055 shipment lacked (booked [Minor] in the twin register).
+     *
+     * Two arms, each its own indexed range and its own bounded batch:
+     *
+     *  1. precise: `expires_at` past by more than {@see self::PRUNE_GRACE_SECONDS}
+     *     (range scan on idx_arg_expires_at). Safe by gate ORDER: refresh()
+     *     validates signature/exp BEFORE any store read, so a row whose token
+     *     has expired cannot be consulted by a legitimate presentation any
+     *     more — and a stolen expired presentation dies at the crypto gate
+     *     (a replay CONVICTED must still reach arm (f) of the adjudicator,
+     *     which is exactly why consumed-but-unexpired rows survive: the
+     *     sweep keys on the token's life, never on its consumption).
+     *  2. grandfather: rows with UNKNOWN expiry (pre-056 mints) older than
+     *     {@see self::UNSTAMPED_RETENTION_SECONDS} by created_at.
+     *
+     * The two-phase keyed sweep (non-locking `SELECT jti … LIMIT n`, then
+     * `DELETE … WHERE jti IN (…)` via {@see KeySweeper}) is the SH-053 law
+     * every credential pruner in this repo obeys — the grants PK is `jti`.
+     *
+     * @return int Rows deleted.
+     */
+    public function pruneExpired(): int
+    {
+        $sweeper = new KeySweeper(
+            $this->db,
+            'auth_refresh_grants',
+            self::PRUNE_BATCH_SIZE,
+            'jti',
+        );
+
+        $pruned = $sweeper->sweep(
+            'expires_at < NOW() - INTERVAL ' . self::PRUNE_GRACE_SECONDS . ' SECOND',
+        );
+
+        return $pruned + $sweeper->sweep(
+            'expires_at IS NULL AND created_at < NOW() - INTERVAL ' . self::UNSTAMPED_RETENTION_SECONDS . ' SECOND',
         );
     }
 
@@ -335,6 +423,12 @@ class TokenSessionRepository
      * client saw the 204); resurrecting it in the list would invite "revive"
      * questions this schema has no answer for.
      *
+     * Bounded at {@see self::MAX_LISTED_SESSIONS} (D1a cure twin leg two):
+     * the query is the picker's live view, not an archive, and an unbounded
+     * list hands a pathological account an unbounded page. The ceiling is
+     * capability-neutral — every family past the newest 200 is still
+     * individually revocable by id through the DELETE endpoint.
+     *
      * @param string $userId Owner.
      *
      * @return list<array{id: string, created_at: string, last_used_at: string,
@@ -346,7 +440,8 @@ class TokenSessionRepository
         $rows = $this->db->query(
             'SELECT id, created_at, last_used_at, device_type, device_name'
             . " FROM auth_token_sessions WHERE user_id = :user_id AND status = 'active'"
-            . ' ORDER BY last_used_at DESC',
+            . ' ORDER BY last_used_at DESC'
+            . ' LIMIT ' . self::MAX_LISTED_SESSIONS,
             ['user_id' => $userId],
         );
         if (!is_array($rows)) {
