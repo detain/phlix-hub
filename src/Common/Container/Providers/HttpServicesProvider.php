@@ -14,6 +14,7 @@ namespace Phlix\Hub\Common\Container\Providers;
 use DI\ContainerBuilder;
 use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Auth\JwtHandler;
+use Phlix\Hub\Auth\TokenSessionRepository;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
 use Phlix\Hub\Hub\CookiePolicy;
@@ -103,11 +104,19 @@ final class HttpServicesProvider implements ServiceProviderInterface
                 return new ServerManageController($serverInfo, $db, $publicDomain);
             }),
 
+            // CP-029 (D-1a hub twin): the middleware gains the session-family
+            // store so an access token carrying a `sid` claim can be checked
+            // against LIVE family state on every request. PHP-DI resolves the
+            // typed closure parameter from the AuthServicesProvider binding —
+            // the SAME container-cached instance AuthManager received, which
+            // tests/Integration/Auth/AuthTokenSessionWiringGuardTest.php pins
+            // by object identity (one store, one SSOT).
             AuthMiddleware::class => factory(static function (
                 JwtHandler $jwt,
                 UserRepository $users,
+                TokenSessionRepository $tokenSessions,
             ): AuthMiddleware {
-                return new AuthMiddleware($jwt, $users);
+                return new AuthMiddleware($jwt, $users, $tokenSessions);
             }),
 
             AdminMiddleware::class => factory(static function (

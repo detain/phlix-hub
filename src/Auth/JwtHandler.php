@@ -41,6 +41,18 @@ final class JwtHandler
     private const string ALGORITHM = 'HS256';
 
     /**
+     * JWT claim carrying the session-family id (CP-029 / D-1a — the hub twin
+     * of the server's `JwtHandler::CLAIM_SESSION_ID`, same literal). The
+     * shared {@see JwtClaims} DTO is a fixed-field value object and does NOT
+     * model this key: it rides the payload map beside the DTO, survives
+     * encode/decode untouched, and is read only through
+     * {@see self::sessionIdClaim()} / the `*WithSession()` seams below.
+     * Unknown-key tolerance of `JwtClaims::fromPayload()` is what makes this
+     * legal — verified, and pinned by the family suite's legacy-shape legs.
+     */
+    public const string CLAIM_SESSION_ID = 'sid';
+
+    /**
      * Secret used for HMAC signing. Must be at least 32 bytes for HS256.
      */
     private string $secretKey;
@@ -133,11 +145,18 @@ final class JwtHandler
      * @param ?string      $serverId     Optional `serverId` claim (used for
      *                                   hub-minted client tokens that target
      *                                   a specific server).
+     * @param ?string      $sessionId    Optional `sid` session-family claim
+     *                                   (CP-029 / D-1a). Null/'' mints the
+     *                                   pre-055 shape byte-ident.
      *
      * @return string Encoded JWT.
      */
-    public function createAccessToken(string $userId, array $scope = [], ?string $serverId = null): string
-    {
+    public function createAccessToken(
+        string $userId,
+        array $scope = [],
+        ?string $serverId = null,
+        ?string $sessionId = null,
+    ): string {
         $now = time();
         $claims = new JwtClaims(
             iss: $this->issuer,
@@ -151,7 +170,7 @@ final class JwtHandler
             scope: $scope,
             serverId: $serverId,
         );
-        return $this->encode($claims->toPayload());
+        return $this->encode($this->withSessionClaim($claims->toPayload(), $sessionId));
     }
 
     /**
@@ -161,11 +180,14 @@ final class JwtHandler
      * {@see \Phlix\Hub\Auth\AuthManager::refresh()} consults it, so a logout
      * genuinely ends the token lineage instead of merely auditing it.
      *
-     * @param string $userId Subject — the user UUID.
+     * @param string  $userId     Subject — the user UUID.
+     * @param ?string $sessionId  Optional `sid` session-family claim
+     *                            (CP-029 / D-1a). Null/'' mints the pre-055
+     *                            shape byte-ident.
      *
      * @return string Encoded JWT.
      */
-    public function createRefreshToken(string $userId): string
+    public function createRefreshToken(string $userId, ?string $sessionId = null): string
     {
         $now = time();
         $claims = new JwtClaims(
@@ -180,7 +202,7 @@ final class JwtHandler
             scope: [],
             serverId: null,
         );
-        return $this->encode($claims->toPayload());
+        return $this->encode($this->withSessionClaim($claims->toPayload(), $sessionId));
     }
 
     /**
@@ -200,6 +222,24 @@ final class JwtHandler
      * @return JwtClaims|null Hydrated claims when valid; null otherwise.
      */
     public function validateToken(string $token): ?JwtClaims
+    {
+        $lineage = $this->validateTokenWithSession($token);
+
+        return $lineage === null ? null : $lineage['claims'];
+    }
+
+    /**
+     * The full validation pipeline in ONE decode, additionally surfacing the
+     * `sid` session-family claim that the fixed-field {@see JwtClaims} DTO
+     * cannot carry (CP-029 / D-1a). {@see self::validateToken()} is a thin
+     * projection of this method — the historical validation behavior (the
+     * order and shape of every rejection) is byte-ident.
+     *
+     * @return array{claims: JwtClaims, session_id: ?string}|null Hydrated
+     *         claims plus the trimmed family id (null when the claim is
+     *         absent, non-string, or blank) when the token is valid.
+     */
+    public function validateTokenWithSession(string $token): ?array
     {
         try {
             $payload = $this->decode($token);
@@ -226,7 +266,50 @@ final class JwtHandler
             return null;
         }
 
-        return $claims;
+        return ['claims' => $claims, 'session_id' => self::sessionIdClaim($payload)];
+    }
+
+    /**
+     * Read the `sid` claim out of a decoded (signature-verified) payload.
+     *
+     * The whole law in one place: absent → null; non-string → null; blank or
+     * whitespace-only → null (trimmed). A caller seeing a non-null id has a
+     * family id worth adjudicating; null means "pre-055 token — structural
+     * outsider", NEVER "revoked" (mirrors the server twin verbatim).
+     *
+     * @param array<string, mixed>|null $payload
+     */
+    public static function sessionIdClaim(?array $payload): ?string
+    {
+        if ($payload === null) {
+            return null;
+        }
+        $raw = $payload[self::CLAIM_SESSION_ID] ?? null;
+        if (!is_string($raw)) {
+            return null;
+        }
+        $sessionId = trim($raw);
+
+        return $sessionId === '' ? null : $sessionId;
+    }
+
+    /**
+     * Stamp (or omit) the `sid` claim on a payload about to be encoded.
+     *
+     * Null/'' leaves the map untouched — the pre-055 mint shape stays
+     * byte-identical, which the family suite's legacy legs pin.
+     *
+     * @param array<string, mixed> $payload
+     *
+     * @return array<string, mixed>
+     */
+    private function withSessionClaim(array $payload, ?string $sessionId): array
+    {
+        if ($sessionId !== null && $sessionId !== '') {
+            $payload[self::CLAIM_SESSION_ID] = $sessionId;
+        }
+
+        return $payload;
     }
 
     /**
@@ -255,6 +338,40 @@ final class JwtHandler
             return null;
         }
         return $claims->type === JwtClaims::TYPE_REFRESH ? $claims : null;
+    }
+
+    /**
+     * Convenience: {@see self::validateTokenWithSession()} AND the token type
+     * must be {@see JwtClaims::TYPE_ACCESS}. The CP-029 family-aware read
+     * seam for access paths (AuthMiddleware, AlexaAccountLink).
+     *
+     * @return array{claims: JwtClaims, session_id: ?string}|null
+     */
+    public function validateAccessTokenWithSession(string $token): ?array
+    {
+        $lineage = $this->validateTokenWithSession($token);
+        if ($lineage === null) {
+            return null;
+        }
+
+        return $lineage['claims']->type === JwtClaims::TYPE_ACCESS ? $lineage : null;
+    }
+
+    /**
+     * Convenience: {@see self::validateTokenWithSession()} AND the token type
+     * must be {@see JwtClaims::TYPE_REFRESH}. The CP-029 family-aware read
+     * seam for rotation ({@see AuthManager::refresh()}).
+     *
+     * @return array{claims: JwtClaims, session_id: ?string}|null
+     */
+    public function validateRefreshTokenWithSession(string $token): ?array
+    {
+        $lineage = $this->validateTokenWithSession($token);
+        if ($lineage === null) {
+            return null;
+        }
+
+        return $lineage['claims']->type === JwtClaims::TYPE_REFRESH ? $lineage : null;
     }
 
     /**

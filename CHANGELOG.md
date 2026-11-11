@@ -12,6 +12,38 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Added [CP-029] — hub twin of the server session-family program (server `413765b6`): device families, refresh-reuse detection with a database-clock grace, and per-device revocation under `GET|DELETE /api/v1/auth/sessions` — 2026-11-10
+
+- `migrations/055_auth_token_sessions.sql` lands the twin DDL byte-identically:
+  `auth_token_sessions` (one row per login ceremony; status/revoke_reason and
+  device columns; FK to `users` ON DELETE CASCADE) and `auth_refresh_grants`
+  (one row per minted refresh `jti`; FK to the family ON DELETE CASCADE).
+- `TokenSessionRepository` is the single liveness SSOT, read live on every
+  auth decision (no memo, per the `de573d6e` law). `AuthManager` stamps a `sid`
+  family claim on every mint, consumes the presented grant BEFORE minting the
+  next pair, and on replay outside the 10-second database-clock grace revokes
+  exactly the reused family and refuses — a benign multi-tab race rotates on.
+- Every access-token seam now honors family liveness: `AuthMiddleware` answers
+  its shipped `auth.invalid_token` challenge for a dead family, and
+  `AlexaAccountLink` answers its single null-unlink shape. The refresh refusal
+  keeps the hub's deliberate collapse text (`Invalid or expired refresh
+  token`) — the audit log carries the discriminating reason; zero new wire
+  codes ship.
+- Carrier layers are untouched by design: the hub has no per-user watermark
+  choke, logout stays carrier-only (`RefreshTokenRevocationService`), and the
+  nuclear reach is the user-row FK CASCADE. `revokeAllForUser` ships as the
+  parity primitive, convicted only by the real-DB test, with no production
+  call site — the repository docblock and the twin register record that.
+- New tests: `tests/Unit/Auth/TokenSessionFamilyTest.php` (21 legs),
+  `tests/Integration/Container/AuthTokenSessionWiringGuardTest.php` (4 legs —
+  container instance identity across manager/middleware/Alexa and the real
+  `register()` landing family rows), and
+  `tests/Integration/Auth/TokenSessionFamilyMigration055RealDbTest.php`
+  (11 legs — fresh apply, DDL fingerprint, replay idempotence, both CASCADEs,
+  the clock-grace ceremony through the repository). The migration and route
+  goldens (`MigrationFileTest` expected list, `RouteManifest`, openapi ops)
+  were rotated from measured reds in this commit.
+
 ### Changed [hub-route-sync] — S492 unblock: vendored contracts route export and the S332 snapshot re-derived to the shipped contracts regen; S280/S332 pins rotated from measured reds — 2026-11-10
 
 - `phlix-contracts` shipped `dist/server-route-manifest.json` regenerated for

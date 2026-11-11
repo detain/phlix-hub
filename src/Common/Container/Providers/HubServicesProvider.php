@@ -17,6 +17,7 @@ use Phlix\Hub\Alexa\AlexaRejectionAuditorInterface;
 use Phlix\Hub\Alexa\AuditLogAlexaRejectionAuditor;
 use Phlix\Hub\Alexa\CurlCertChainFetcher;
 use Phlix\Hub\Auth\JwtHandler;
+use Phlix\Hub\Auth\TokenSessionRepository;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Federation\FederationAdminDelegationRepository;
 use Phlix\Hub\Federation\FederationConnectionManager;
@@ -652,13 +653,21 @@ final class HubServicesProvider implements ServiceProviderInterface
             // S91. The seam a later step replaces when the hub issues its own
             // OAuth tokens: everything downstream depends on the resolved hub
             // user id, not on how the token was validated.
+            // CP-029 (D-1a hub twin): account linking rides the SAME live
+            // family check as the HTTP middleware — a token from a revoked
+            // family must unlink (resolve() returns null). The explicit
+            // ->parameter pin mirrors the block's existing belt style; the
+            // container-cached binding guarantees identity with AuthManager's
+            // store (wiring guard pins it).
             AlexaAccountLink::class => factory(static function (
                 JwtHandler $jwtHandler,
                 UserRepository $users,
+                TokenSessionRepository $tokenSessions,
             ): AlexaAccountLink {
-                return new AlexaAccountLink($jwtHandler, $users);
+                return new AlexaAccountLink($jwtHandler, $users, $tokenSessions);
             })->parameter('jwtHandler', get(JwtHandler::class))
-                ->parameter('users', get(UserRepository::class)),
+                ->parameter('users', get(UserRepository::class))
+                ->parameter('tokenSessions', get(TokenSessionRepository::class)),
 
             // S91. Handed the PRODUCTION ServerProxyController and
             // ServerListController — not copies, not repositories — for the same

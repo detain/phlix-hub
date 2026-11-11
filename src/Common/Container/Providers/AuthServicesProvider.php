@@ -15,6 +15,7 @@ use DI\ContainerBuilder;
 use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Auth\RefreshTokenRevocationService;
+use Phlix\Hub\Auth\TokenSessionRepository;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Container\MissingJwtSecretException;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
@@ -156,6 +157,29 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 return new UserRepository($db);
             }),
 
+            // CP-029 / D-1a. The ONE session-family store instance: PHP-DI
+            // caches this factory per container, and the AuthManager token
+            // path, the AuthMiddleware access path and the AlexaAccountLink
+            // seam all resolve THEIR parameter through this binding — so a
+            // family revoked by the device endpoint is dead on the very next
+            // request to any of them, with nothing memoized in between
+            // (de573d6e live-read law; instance identity pinned by
+            // AuthTokenSessionWiringGuardTest). The store rides the
+            // container's Connection node — the same pattern and pool
+            // semantics as the server twin's autowire binding and the
+            // DbLoginRateLimitStore lineage: every family statement is a
+            // single-statement autocommit, so no transaction ever spans it.
+            // Deliberately NOT the 'txn' handle: a pool-gated factory here
+            // would put ConnectionPool::init() on the dependency graph of
+            // every container that resolves the middleware or Alexa seam
+            // (unit-venue wiring tests build those containers DB-free, and
+            // the real-DB integration tests that do NOT init the pool
+            // resolved them green before CP-029 — the binding must stay as
+            // DB-neutral as the UserRepository node beside it).
+            TokenSessionRepository::class => factory(static function (Connection $db): TokenSessionRepository {
+                return new TokenSessionRepository($db);
+            }),
+
             // 🐛 S269. The second argument is NOT optional in practice.
             //
             // {@see AuditLogger::__construct()} declares
@@ -197,6 +221,7 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 RateLimiterInterface $rateLimiter,
                 ?EventDispatcherInterface $dispatcher,
                 RateLimiterInterface $signupRateLimiter,
+                TokenSessionRepository $tokenSessions,
             ) use ($signupsEnabled): AuthManager {
                 // Dedicated 'txn' connection: AuthManager wraps login/register in
                 // an explicit transaction (and now the first-admin election guard
@@ -241,6 +266,7 @@ final class AuthServicesProvider implements ServiceProviderInterface
                     $signupsEnabled,
                     new RefreshTokenRevocationService($txn),
                     self::makeSignupsDisabledResolver(),
+                    $tokenSessions,
                 );
             })->parameter('logger', get('logger.' . LogChannels::AUTH))
                 ->parameter('dispatcher', null)

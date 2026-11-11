@@ -1,5 +1,5 @@
 {
-    "generatedFrom": "2b427b4f-era serial Unit-only junit (3 RelayProxyBridge swoole-absence host errors pre-existing class; w32L1 CP-013 blesses CookieAuthCeremonyTest + re-measures CookiePolicyOriginLawTest; re-blessed post phpcs-wrap, same-shape timings; w21L6 SH-064 blesses ClientRelayWorkerTlsPostureTest + WsTlsContextTest + SyncPlayRelayWorkerTlsPostureTest (measured solo, new suites))",
+    "generatedFrom": "2b427b4f-era serial Unit-only junit (3 RelayProxyBridge swoole-absence host errors pre-existing class; w32L1 CP-013 blesses CookieAuthCeremonyTest + re-measures CookiePolicyOriginLawTest; re-blessed post phpcs-wrap, same-shape timings; w21L6 SH-064 blesses ClientRelayWorkerTlsPostureTest + WsTlsContextTest + SyncPlayRelayWorkerTlsPostureTest (measured solo, new suites); CP-029 twin hand-inserted tests/Unit/Auth/TokenSessionFamilyTest.php solo-measured 0.031s from the r22 docker serial junit — all other rows untouched)",
     "unit": {
         "tests/Common/Database/MigrationRunnerTest.php": 0.016,
         "tests/Health/HealthControllerTest.php": 0.006,
@@ -20,6 +20,7 @@
         "tests/Unit/Auth/JwtHandlerTest.php": 0.003,
         "tests/Unit/Auth/RateLimitExceptionTest.php": 0.001,
         "tests/Unit/Auth/RefreshTokenRevocationServiceTest.php": 0.002,
+        "tests/Unit/Auth/TokenSessionFamilyTest.php": 0.031,
         "tests/Unit/Auth/UserRepositoryTest.php": 1.919,
         "tests/Unit/Bootstrap/StopTimeoutBudgetTest.php": 0.001,
         "tests/Unit/Bootstrap/WorkermanLogRotationPinTest.php": 0.003,

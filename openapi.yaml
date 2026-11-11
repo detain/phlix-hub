@@ -1543,6 +1543,65 @@ paths:
                 $ref: "#/components/schemas/Error"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/auth/sessions":
+    get:
+      operationId: "get_api_v1_auth_sessions"
+      tags: ["Authentication"]
+      summary: "List active device families"
+      description: |-
+        CP-029 (D-1a hub twin of server 413765b6): every ACTIVE session family
+        of the caller, newest-used first, each flagged `current` when it minted
+        this very request's token. Rows carry id, created/last-used timestamps
+        and the device columns (NULL until a mint path supplies metadata).
+        With no family store wired the list is empty — the legacy wire shape.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  "/api/v1/auth/sessions/{id}":
+    delete:
+      operationId: "delete_api_v1_auth_sessions_id"
+      tags: ["Authentication"]
+      summary: "Revoke one device family"
+      description: |-
+        Ends exactly ONE of the caller's session families: every token that
+        carries its `sid` fails every auth seam from the next request on, and
+        a replayed grant of that family trips reuse detection. Foreign and
+        unknown ids answer the identical 404 frame — no ownership oracle.
+        Revoking an owned, already-revoked family is an idempotent 204.
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Session family id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        "204":
+          description: "Family revoked (also for an owned already-revoked family)."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
   "/api/v1/me":
     get:
       operationId: "get_api_v1_me"

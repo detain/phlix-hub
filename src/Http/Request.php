@@ -93,6 +93,17 @@ class Request
     public ?\Phlix\Shared\Auth\JwtClaims $claims = null;
 
     /**
+     * CP-029 / D-1a session-family id of the credential that authenticated
+     * this request, populated ONLY by {@see \Phlix\Hub\Http\Middleware\AuthMiddleware}
+     * from a signature-validated `sid` claim. Never from request input — a
+     * client header/cookie/body cannot put a value here; the read seam runs
+     * after verification and writes the trimmed claim or leaves null. Null
+     * means "authenticated without a family" (pre-055 token) or "not
+     * authenticated by the session path" (OAuth bearer, enrollment JWT).
+     */
+    public ?string $tokenSessionId = null;
+
+    /**
      * The OAuth 2.0 grant a `phlix-oat-…` access token resolved to, populated by
      * {@see \Phlix\Hub\Http\Middleware\OAuthResourceMiddleware} (S286). Null on
      * every request that did not authenticate with an OAuth access token —

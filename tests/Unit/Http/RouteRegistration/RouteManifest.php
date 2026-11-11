@@ -318,6 +318,14 @@ final class RouteManifest
                 'gate' => self::GATE_AUTH_JSON,
             ],
             [
+                'method' => 'GET', 'path' => '/api/v1/auth/sessions', 'url' => '/api/v1/auth/sessions',
+                'gate' => self::GATE_AUTH_JSON,
+            ],
+            [
+                'method' => 'DELETE', 'path' => '/api/v1/auth/sessions/{id}', 'url' => '/api/v1/auth/sessions/ses-1',
+                'gate' => self::GATE_AUTH_JSON,
+            ],
+            [
                 'method' => 'GET', 'path' => '/api/v1/me/servers', 'url' => '/api/v1/me/servers',
                 'gate' => self::GATE_AUTH_JSON,
             ],

@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Alexa;
 
 use Phlix\Hub\Auth\JwtHandler;
+use Phlix\Hub\Auth\TokenSessionRepository;
 use Phlix\Hub\Auth\UserRepository;
 
 /**
@@ -63,10 +64,16 @@ final class AlexaAccountLink
      * @param JwtHandler     $jwt   Validates the presented access token (HS256,
      *        issuer/audience/expiry checked, and the token TYPE must be `access`).
      * @param UserRepository $users Existence probe for the id inside the token.
+     * @param TokenSessionRepository|null $tokenSessions CP-029 / D-1a family
+     *        store. A linked-account token that NAMES a dead (or
+     *        store-unknown) family resolves to null — the shipped
+     *        "please link your account" answer, not a new failure mode. A
+     *        claim-less legacy token never consults it (byte-ident path).
      */
     public function __construct(
         private readonly JwtHandler $jwt,
         private readonly UserRepository $users,
+        private readonly ?TokenSessionRepository $tokenSessions = null,
     ) {
     }
 
@@ -85,8 +92,20 @@ final class AlexaAccountLink
             return null;
         }
 
-        $claims = $this->jwt->validateAccessToken($accessToken);
-        if ($claims === null) {
+        $lineage = $this->jwt->validateAccessTokenWithSession($accessToken);
+        if ($lineage === null) {
+            return null;
+        }
+        $claims = $lineage['claims'];
+
+        // CP-029 / D-1a: a revoked family ends this credential too — the
+        // null answer is this class's ONLY failure mode, so the family gate
+        // needs (and gets) no new shape.
+        $sessionId = $lineage['session_id'];
+        if (
+            $sessionId !== null
+            && ($this->tokenSessions === null || !$this->tokenSessions->isSessionActive($sessionId))
+        ) {
             return null;
         }
 

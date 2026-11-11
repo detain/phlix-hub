@@ -352,6 +352,60 @@ final class AuthController
     }
 
     /**
+     * GET /api/v1/auth/sessions — the caller's live device families
+     * (CP-029 / D-1a, hub twin of the server's list endpoint).
+     *
+     * Rows come straight from {@see AuthManager::listTokenSessions()} (the
+     * store's newest-activity-first order is the published order); the
+     * `current` flag is computed HERE from {@see Request::$tokenSessionId} —
+     * the family that authenticated THIS request — because only the HTTP
+     * layer knows which family is "me right now". A request authenticated by
+     * a pre-055 (claim-less) credential simply has no current row; an
+     * unwired store answers the honest empty list, never an error.
+     */
+    public function listTokenSessions(Request $request): Response
+    {
+        $sessions = $this->auth->listTokenSessions($request->userId ?? '');
+        $currentSessionId = $request->tokenSessionId ?? '';
+
+        foreach ($sessions as $index => $session) {
+            $sessions[$index]['current'] = $currentSessionId !== ''
+                && $session['id'] === $currentSessionId;
+        }
+
+        return (new Response())->json(['sessions' => $sessions], 200);
+    }
+
+    /**
+     * DELETE /api/v1/auth/sessions/{id} — end exactly ONE of the caller's
+     * device families (per-device sign-out; the family's tokens stop passing
+     * every auth seam within the current request, nothing else is touched).
+     *
+     * Foreign and unknown ids answer the SAME frame — one 404, never a 403
+     * ownership oracle ({@see AuthManager::revokeTokenSession()} carries that
+     * gate before anything is written). Revoking an OWNED family that is
+     * already revoked is an idempotent 204 (the server twin's semantics).
+     * The 404 reuses the contract-registered `not_found` word — zero new
+     * wire codes; no cookie clears here: the family's own credential dies on
+     * its next request, which is the whole capability.
+     *
+     * @param array<string, mixed> $params route path params (the `{id}` segment)
+     */
+    public function revokeTokenSession(Request $request, array $params = []): Response
+    {
+        /** @var mixed $rawId — route params are an untyped string map at this boundary */
+        $rawId = $params['id'] ?? '';
+        $sessionId = is_string($rawId) ? $rawId : '';
+        $revoked = $this->auth->revokeTokenSession($request->userId ?? '', $sessionId);
+
+        if (!$revoked) {
+            return self::errorFrame(404, 'not_found', 'Session not found');
+        }
+
+        return (new Response())->status(204);
+    }
+
+    /**
      * CP-011/CP-012 shared credential resolver for the two auth legs that
      * accept cookies: the body `refresh_token` takes PRECEDENCE (a presented
      * artifact is body lineage — every legacy native wire stays ungated),

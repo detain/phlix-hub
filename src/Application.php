@@ -738,6 +738,7 @@ final class Application
         });
 
         $this->router->group('/api/v1', function (Router $r) use (
+            $auth,
             $me,
             $serverList,
             $serverManage,
@@ -751,6 +752,19 @@ final class Application
             // `/auth/me` is the path the shared @phlix/ui SPA calls (matches
             // phlix-server); aliased to the same MeController as `/me`.
             $r->get('/auth/me', static fn (Request $req): Response => $me($req));
+            // CP-029 / D-1a (hub twin of server 413765b6): the session-family
+            // surface. Gated by this group's AuthMiddleware like every other
+            // `/api/v1` route — the list's `current` flag and the revoke's
+            // ownership gate both read ONLY what the middleware hydrated.
+            $r->get('/auth/sessions', static fn (Request $req): Response => $auth->listTokenSessions($req));
+            $r->delete(
+                '/auth/sessions/{id}',
+                static function (Request $req, array $params) use ($auth): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $auth->revokeTokenSession($req, $typedParams);
+                },
+            );
             $r->get('/me/servers', static fn (Request $req): Response => $serverList($req));
             $r->delete(
                 '/me/servers/{id}',

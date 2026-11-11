@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Http\Middleware;
 
 use Phlix\Hub\Auth\JwtHandler;
+use Phlix\Hub\Auth\TokenSessionRepository;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Hub\CookiePolicy;
 use Phlix\Hub\Http\Request;
@@ -117,10 +118,19 @@ final class AuthMiddleware
     /**
      * @param JwtHandler     $jwt   JWT validator.
      * @param UserRepository $users Repository used to load the user record.
+     * @param TokenSessionRepository|null $tokenSessions CP-029 / D-1a family
+     *        store consulted for liveness of a `sid`-bearing credential. Null
+     *        keeps a family-carrying token REFUSED (fail-closed — the store
+     *        existed when the token was minted; see the arm), and never
+     *        touches a claim-less (pre-055) request, whose behavior is
+     *        byte-ident either way. Wired by the HttpServicesProvider factory
+     *        as the same container singleton the token path writes through
+     *        (instance identity pinned by AuthTokenSessionWiringGuardTest).
      */
     public function __construct(
         private readonly JwtHandler $jwt,
         private readonly UserRepository $users,
+        private readonly ?TokenSessionRepository $tokenSessions = null,
     ) {
     }
 
@@ -135,8 +145,23 @@ final class AuthMiddleware
             return $this->challenge($request, 'auth.required');
         }
 
-        $claims = $this->jwt->validateAccessToken($token);
-        if ($claims === null) {
+        $lineage = $this->jwt->validateAccessTokenWithSession($token);
+        if ($lineage === null) {
+            return $this->challenge($request, 'auth.invalid_token');
+        }
+        $claims = $lineage['claims'];
+
+        // CP-029 / D-1a: a credential that NAMES a family must find it alive.
+        // The store being gone while a family token is in the wild is exactly
+        // the operator-removed-the-rug case — refuse it (fail closed) with the
+        // same invalid_token challenge any dead credential gets; no new
+        // envelope, no oracle. A claim-less (pre-055) token never consults
+        // the store: its path is the historical one, byte-ident.
+        $sessionId = $lineage['session_id'];
+        if (
+            $sessionId !== null
+            && ($this->tokenSessions === null || !$this->tokenSessions->isSessionActive($sessionId))
+        ) {
             return $this->challenge($request, 'auth.invalid_token');
         }
 
@@ -168,6 +193,11 @@ final class AuthMiddleware
 
         $request->userId = $userId;
         $request->claims = $claims;
+        // Hydrated only past every gate above (the CP-012 "refused requests
+        // leave no identity" law extended to the family id): by here the
+        // credential is verified, the user exists, the CSRF lineage passed,
+        // and any named family is live.
+        $request->tokenSessionId = $sessionId;
 
         return null;
     }

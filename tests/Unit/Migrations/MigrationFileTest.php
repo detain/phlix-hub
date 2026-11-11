@@ -76,6 +76,7 @@ final class MigrationFileTest extends TestCase
             '052_claim_code_hash.sql',
             '053_oauth_prune_sweep_indexes.sql',
             '054_drop_redundant_relay_user_quota_index.sql',
+            '055_auth_token_sessions.sql',
         ];
         $files = array_map('basename', glob(self::MIGRATIONS_DIR . '/*.sql') ?: []);
         sort($files);
