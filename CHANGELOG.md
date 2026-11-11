@@ -12,6 +12,36 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Changed [hub-route-sync-2] — S492 unblock, lockstep re-vendor of BOTH server-route derivations @ server `413765b6` (418 tuples): vendored contracts export + boot-derived snapshot regenerated in one commit; S280/S332/S492 pins rotated from measured reds — 2026-11-10
+
+- The hub's two independent derivations of the server route table — the
+  vendored `@phlix/contracts` export and the boot-derived S332 snapshot — were
+  re-synced to server `413765b6` (the D-1a session-family commit, the hub's
+  own twin `c0ed2c28` rides it) in lockstep: the contracts side via regen #38
+  (`phlix-contracts` `6335d818`, export md5 `c2111cd37f2d1f3148c7ff741e214570`
+  copied verbatim) and the snapshot side through the documented dumper at a
+  clean `413765b6` checkout (`route_count=418`,
+  `sha256=d51b8cefd738494aad2e9ed8a86921df6c6c91b4f0a9536ada8d4729e161dd88`).
+  The empirical tuple delta versus the `5c78f6a4`-era bytes is EXACTLY the two
+  `GET|DELETE /api/v1/auth/sessions` routes, zero removals — union math
+  379 Application + 50 WebPortal − 11 shared = 418.
+- The currency pins moved only where they actually reddened, and only to the
+  value the failing assertion measured: `S332_EXPECTED_SERVER_SOURCE_SHA`
+  (red: expected `5c78f6a4…`, got `413765b6…`) and the S280 denominator legs
+  (red: route_count/sum 418 vs pinned 416), with the S280 survival token's
+  sha/count suffix bumped in lockstep per its own docblock law. The cs#47
+  ritual token is data-independent and carries forward unmoved. The S492
+  checker's docblock current-state lines refreshed (its history clause stays
+  verbatim). The contracts trio — error codes and MCP scopes — is byte-frozen
+  through the regen; this commit ships no new hub wire surface, it records a
+  server fact.
+- Re-proven green after the rotation: `scripts/check-route-snapshot-currency.php`
+  against the live server tree, the full S280 parity suite, the S332/
+  source-sha filter, and the route/controller dirs — the CI job
+  `Server Route Snapshot Currency` that convicted `c0ed2c28` (only-in-live:
+  the two sessions routes) is unblocked by exactly these bytes, the regen #37
+  (`e27be256`) arc's own precedent.
+
 ### Added [CP-029] — hub twin of the server session-family program (server `413765b6`): device families, refresh-reuse detection with a database-clock grace, and per-device revocation under `GET|DELETE /api/v1/auth/sessions` — 2026-11-10
 
 - `migrations/055_auth_token_sessions.sql` lands the twin DDL byte-identically:

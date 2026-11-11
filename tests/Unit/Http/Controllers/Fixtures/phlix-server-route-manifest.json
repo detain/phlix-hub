@@ -1,9 +1,9 @@
 {
     "generator": "tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php",
     "source_repo": "detain/phlix-server",
-    "source_sha": "5c78f6a4dc36d4cb799b7131162fcfffba1fb822",
-    "route_count": 416,
-    "sha256": "7a14dd8bad618346e185ebebd3e4a197422adb62152306f350af8dfe9a0e0c60",
+    "source_sha": "413765b6d4385a3445ac1dddbc4ced16e0e281f6",
+    "route_count": 418,
+    "sha256": "d51b8cefd738494aad2e9ed8a86921df6c6c91b4f0a9536ada8d4729e161dd88",
     "routes": [
         {
             "method": "DELETE",
@@ -56,6 +56,10 @@
         {
             "method": "DELETE",
             "path": "/api/v1/admin/webhooks/{id}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/auth/sessions/{id}"
         },
         {
             "method": "DELETE",
@@ -500,6 +504,10 @@
         {
             "method": "GET",
             "path": "/api/v1/auth/quick-connect/{code}/status"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/auth/sessions"
         },
         {
             "method": "GET",
