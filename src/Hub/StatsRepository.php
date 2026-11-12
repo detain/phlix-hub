@@ -22,6 +22,10 @@ use Workerman\MySQL\Connection;
  * {@see self::dashboardCounts()}; the controller does no query work itself,
  * matching how every other controller delegates to a repository.
  *
+ * Note: the metrics tables these counters sit beside are written by several hub
+ * processes under one shared `worker_id` ('hub-relay'); that row contention is
+ * accepted (HUB-24, see MetricsFlushService and migration 033).
+ *
  * All queries use named `:params` (never positional `?` — that breaks the
  * hub's `bindMore()`).
  *

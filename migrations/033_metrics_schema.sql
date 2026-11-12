@@ -4,9 +4,13 @@
 -- (Phlix\Hub\Stats\Metrics): per-tunnel time-bucket rollups, per-route rollups,
 -- and a live snapshot of active connections.
 --
--- The hub model: a single relay process accumulates counters in RAM and flushes
--- its OWN rows keyed by a fixed worker_id string ('hub-relay'). No cross-worker
--- locking is required because there is only one worker. The admin read side
+-- The hub model: every hub process that arms a flush timer (the HTTP worker,
+-- RelayWorker, ClientRelayWorker) accumulates counters in RAM and flushes into
+-- the SAME rows, keyed by the fixed worker_id label 'hub-relay'. The upserts
+-- are additive (ON DUPLICATE KEY UPDATE col = col + new value), so concurrent
+-- writers are correct but contend on the one row per bucket; this contention
+-- is accepted (HUB-24) and no per-process worker_id / schema change is made.
+-- The label is not a claim of a single relay process. The admin read side
 -- aggregates with SUM/GROUP BY.
 --
 -- Idempotent: CREATE TABLE IF NOT EXISTS so the runner can re-apply every boot.
