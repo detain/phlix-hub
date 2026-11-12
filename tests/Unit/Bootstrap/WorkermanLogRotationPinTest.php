@@ -68,8 +68,8 @@ final class WorkermanLogRotationPinTest extends TestCase
             'the rotation policy must live in a dedicated, named installer function'
         );
         self::assertTrue(
-            str_contains($this->script, '${INSTALL_PATH}/.logs/workerman.log {'),
-            'the policy must target the exact file start.php pins Worker::$logFile to'
+            str_contains($this->script, '${INSTALL_PATH}/.logs/*.log {'),
+            'the policy must glob every .logs/*.log (workerman.log + dated Monolog files) so worst-case disk is bounded'
         );
         self::assertTrue(
             str_contains($this->script, '    copytruncate'),

@@ -859,10 +859,13 @@ phlix_apply_workerman_logrotate() {
   cat > "$PHLIX_LOGROTATE_FILE" <<LOGROTATE_EOF
 # Managed by phlix-hub scripts/install.sh — rewritten on every --update.
 #
-# The hub writes six log files; five rotate themselves (the Monolog channels
-# in config/logger.php keep 30 files each). Workerman's own log is the sixth:
-# start.php pins Worker::$logFile into this install's .logs/ directory, and
-# Workerman appends forever — the only hub log with no self-rotation.
+# The hub writes six log files; five rotate themselves BY DATE (the Monolog
+# channels in config/logger.php keep 30 files each) but have no byte ceiling
+# inside a day, and Workerman's own log (start.php pins Worker::$logFile into
+# this install's .logs/ directory) appends forever. One glob covers all of
+# them (the dated Monolog files app-YYYY-MM-DD.log etc. and workerman.log), so
+# worst-case disk is computable: <= (rotate + 1) x maxsize per live file.
+# Logrotate's own rotated copies (*.log.N[.gz]) do not match the *.log glob.
 #
 # copytruncate is MANDATORY, not a preference: the master opens the file once
 # and every forked worker inherits that fd, so a rename+create rotation would
@@ -875,7 +878,7 @@ phlix_apply_workerman_logrotate() {
 # considers BOTH size and age: the file rotates on its weekly mark, and just
 # as readily on any logrotate run that finds it past the threshold, bounding
 # worst-case growth by the cron cadence.
-${INSTALL_PATH}/.logs/workerman.log {
+${INSTALL_PATH}/.logs/*.log {
     weekly
     rotate 8
     maxsize 64M
@@ -887,7 +890,7 @@ ${INSTALL_PATH}/.logs/workerman.log {
 }
 LOGROTATE_EOF
   chmod 644 "$PHLIX_LOGROTATE_FILE"
-  info "workerman.log: weekly / maxsize 64M / rotate 8 / copytruncate."
+  info ".logs/*.log: weekly / maxsize 64M / rotate 8 / copytruncate."
 }
 
 # Parse the User= line from a systemd unit. Empty when the file is absent
