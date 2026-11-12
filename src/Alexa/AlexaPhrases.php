@@ -66,7 +66,7 @@ final class AlexaPhrases
     public const CAPABILITY = 'Phlix can answer questions about the titles in your library, send you a '
         . 'link to open one, and start one in a Phlix app you already have open. It cannot switch a '
         . 'screen on, and it cannot send video to a screen that is not already running Phlix. '
-        . 'Try asking, how long is Inception.';
+        . 'Try asking: how long is Inception?';
 
     /** Follow-up prompt after the capability statement. */
     public const CAPABILITY_REPROMPT = 'What would you like to know about your library?';
@@ -93,7 +93,7 @@ final class AlexaPhrases
 
     /** The user owns servers, but none has a live relay tunnel. */
     public const NO_CONNECTED_SERVER = 'None of your Phlix servers is connected to the hub right now, so I '
-        . 'cannot look anything up. Try again once it is back online.';
+        . 'cannot look anything up. Try again once one of them is back online.';
 
     /** The proxied lookup failed — a non-200 from the server, or an unreadable payload. */
     public const LOOKUP_FAILED = 'I could not reach your Phlix library just now. Please try again in a moment.';
