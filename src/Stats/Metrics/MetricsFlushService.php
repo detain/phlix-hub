@@ -17,7 +17,7 @@ use Phlix\Hub\Common\Database\ConnectionPool;
  * Persists the hub's {@see MetricsRegistry} state to MySQL.
  *
  * Uses named `:param` placeholders (hub convention). The UPSERTs
- * (`INSERT ... ON DUPLICATE KEY UPDATE col = col + VALUES(col)`) all target a
+ * (`INSERT ... ON DUPLICATE KEY UPDATE col = <table>.col + new_row.col`) all target a
  * shared `worker_id` of `'hub-relay'` — and every hub process that arms a
  * flush timer (the HTTP worker in `Application`, `RelayWorker`, and
  * `ClientRelayWorker` each do) writes into that one row. The ODKU additivity
@@ -245,22 +245,23 @@ final class MetricsFlushService
                          :duration_ms_sum, :duration_ms_max, :bytes_in, :bytes_out,
                          :h0, :h1, :h2, :h3, :h4,
                          :h5, :h6, :h7, :h8)
+                 AS new_row
                  ON DUPLICATE KEY UPDATE
-                     request_count   = request_count + VALUES(request_count),
-                     error_count     = error_count + VALUES(error_count),
-                     duration_ms_sum = duration_ms_sum + VALUES(duration_ms_sum),
-                     duration_ms_max = GREATEST(duration_ms_max, VALUES(duration_ms_max)),
-                     bytes_in        = bytes_in + VALUES(bytes_in),
-                     bytes_out       = bytes_out + VALUES(bytes_out),
-                     h_le_10         = h_le_10 + VALUES(h_le_10),
-                     h_le_50         = h_le_50 + VALUES(h_le_50),
-                     h_le_100        = h_le_100 + VALUES(h_le_100),
-                     h_le_250        = h_le_250 + VALUES(h_le_250),
-                     h_le_500        = h_le_500 + VALUES(h_le_500),
-                     h_le_1000       = h_le_1000 + VALUES(h_le_1000),
-                     h_le_2500       = h_le_2500 + VALUES(h_le_2500),
-                     h_le_5000       = h_le_5000 + VALUES(h_le_5000),
-                     h_gt_5000       = h_gt_5000 + VALUES(h_gt_5000)",
+                     request_count   = metrics_rollup.request_count + new_row.request_count,
+                     error_count     = metrics_rollup.error_count + new_row.error_count,
+                     duration_ms_sum = metrics_rollup.duration_ms_sum + new_row.duration_ms_sum,
+                     duration_ms_max = GREATEST(metrics_rollup.duration_ms_max, new_row.duration_ms_max),
+                     bytes_in        = metrics_rollup.bytes_in + new_row.bytes_in,
+                     bytes_out       = metrics_rollup.bytes_out + new_row.bytes_out,
+                     h_le_10         = metrics_rollup.h_le_10 + new_row.h_le_10,
+                     h_le_50         = metrics_rollup.h_le_50 + new_row.h_le_50,
+                     h_le_100        = metrics_rollup.h_le_100 + new_row.h_le_100,
+                     h_le_250        = metrics_rollup.h_le_250 + new_row.h_le_250,
+                     h_le_500        = metrics_rollup.h_le_500 + new_row.h_le_500,
+                     h_le_1000       = metrics_rollup.h_le_1000 + new_row.h_le_1000,
+                     h_le_2500       = metrics_rollup.h_le_2500 + new_row.h_le_2500,
+                     h_le_5000       = metrics_rollup.h_le_5000 + new_row.h_le_5000,
+                     h_gt_5000       = metrics_rollup.h_gt_5000 + new_row.h_gt_5000",
                 [
                     'bucket'          => $this->datetime($b['bucket_started_at']),
                     'worker_id'       => 'hub-relay',
@@ -314,11 +315,12 @@ final class MetricsFlushService
                   request_count, error_count, duration_ms_sum, duration_ms_max)
                  VALUES (:bucket, :worker_id, :method, :route,
                          :request_count, :error_count, :duration_ms_sum, :duration_ms_max)
+                 AS new_row
                  ON DUPLICATE KEY UPDATE
-                     request_count   = request_count + VALUES(request_count),
-                     error_count     = error_count + VALUES(error_count),
-                     duration_ms_sum = duration_ms_sum + VALUES(duration_ms_sum),
-                     duration_ms_max = GREATEST(duration_ms_max, VALUES(duration_ms_max))",
+                     request_count   = metrics_route_rollup.request_count + new_row.request_count,
+                     error_count     = metrics_route_rollup.error_count + new_row.error_count,
+                     duration_ms_sum = metrics_route_rollup.duration_ms_sum + new_row.duration_ms_sum,
+                     duration_ms_max = GREATEST(metrics_route_rollup.duration_ms_max, new_row.duration_ms_max)",
                 [
                     'bucket'          => $this->datetime($r['bucket_started_at']),
                     'worker_id'       => 'hub-relay',
@@ -376,17 +378,18 @@ final class MetricsFlushService
                  VALUES (:id, :worker_id, :kind, :user_id, :remote_ip, :session_id,
                          :media_item_id, :bytes_in_val, :bytes_out_val, :bytes_in_rate, :bytes_out_rate,
                          :opened_at, :last_seen_at)
+                 AS new_row
                  ON DUPLICATE KEY UPDATE
-                     kind           = VALUES(kind),
-                     user_id        = VALUES(user_id),
-                     remote_ip      = VALUES(remote_ip),
-                     session_id     = VALUES(session_id),
-                     media_item_id  = VALUES(media_item_id),
-                     bytes_in       = VALUES(bytes_in),
-                     bytes_out      = VALUES(bytes_out),
-                     bytes_in_rate  = VALUES(bytes_in_rate),
-                     bytes_out_rate = VALUES(bytes_out_rate),
-                     last_seen_at   = VALUES(last_seen_at)",
+                     kind           = new_row.kind,
+                     user_id        = new_row.user_id,
+                     remote_ip      = new_row.remote_ip,
+                     session_id     = new_row.session_id,
+                     media_item_id  = new_row.media_item_id,
+                     bytes_in       = new_row.bytes_in,
+                     bytes_out      = new_row.bytes_out,
+                     bytes_in_rate  = new_row.bytes_in_rate,
+                     bytes_out_rate = new_row.bytes_out_rate,
+                     last_seen_at   = new_row.last_seen_at",
                 [
                     'id'             => $id,
                     'worker_id'      => 'hub-relay',
@@ -422,8 +425,8 @@ final class MetricsFlushService
      * counters/gauges (pending gauge, reply-drops, 503/504 counters, decode
      * buffer gauge) are window totals with no per-observation bucket, so they
      * go into the current flush bucket. Counters accumulate
-     * (`col = col + VALUES(col)`); gauges take the window high-water mark
-     * (`GREATEST(col, VALUES(col))`), matching the migration-036 semantics
+     * (`col = <table>.col + new_row.col`); gauges take the window high-water mark
+     * (`GREATEST(<table>.col, new_row.col)`), matching the migration-036 semantics
      * ("pending requests gauge — high-water mark across the flush window").
      * An all-zero window is skipped so idle flushes never churn empty rows.
      *
@@ -502,22 +505,29 @@ final class MetricsFlushService
                          :rpending, :rdrops,
                          :rl0, :rl1, :rl2, :rl3, :rl4, :rl5, :rl6, :rl7, :rl8,
                          :re503, :re504, :rbuffer, :rcancels)
+                 AS new_row
                  ON DUPLICATE KEY UPDATE
-                     relay_pending_requests    = GREATEST(relay_pending_requests, VALUES(relay_pending_requests)),
-                     relay_reply_drops         = relay_reply_drops + VALUES(relay_reply_drops),
-                     relay_latency_h_le_10     = relay_latency_h_le_10 + VALUES(relay_latency_h_le_10),
-                     relay_latency_h_le_50     = relay_latency_h_le_50 + VALUES(relay_latency_h_le_50),
-                     relay_latency_h_le_100    = relay_latency_h_le_100 + VALUES(relay_latency_h_le_100),
-                     relay_latency_h_le_250    = relay_latency_h_le_250 + VALUES(relay_latency_h_le_250),
-                     relay_latency_h_le_500    = relay_latency_h_le_500 + VALUES(relay_latency_h_le_500),
-                     relay_latency_h_le_1000   = relay_latency_h_le_1000 + VALUES(relay_latency_h_le_1000),
-                     relay_latency_h_le_2500   = relay_latency_h_le_2500 + VALUES(relay_latency_h_le_2500),
-                     relay_latency_h_le_5000   = relay_latency_h_le_5000 + VALUES(relay_latency_h_le_5000),
-                     relay_latency_h_gt_5000   = relay_latency_h_gt_5000 + VALUES(relay_latency_h_gt_5000),
-                     relay_error_503           = relay_error_503 + VALUES(relay_error_503),
-                     relay_error_504           = relay_error_504 + VALUES(relay_error_504),
-                     relay_decode_buffer_bytes = GREATEST(relay_decode_buffer_bytes, VALUES(relay_decode_buffer_bytes)),
-                     relay_cancels             = relay_cancels + VALUES(relay_cancels)",
+                     relay_pending_requests =
+                         GREATEST(metrics_rollup.relay_pending_requests, new_row.relay_pending_requests),
+                     relay_reply_drops         = metrics_rollup.relay_reply_drops + new_row.relay_reply_drops,
+                     relay_latency_h_le_10     = metrics_rollup.relay_latency_h_le_10 + new_row.relay_latency_h_le_10,
+                     relay_latency_h_le_50     = metrics_rollup.relay_latency_h_le_50 + new_row.relay_latency_h_le_50,
+                     relay_latency_h_le_100    = metrics_rollup.relay_latency_h_le_100 + new_row.relay_latency_h_le_100,
+                     relay_latency_h_le_250    = metrics_rollup.relay_latency_h_le_250 + new_row.relay_latency_h_le_250,
+                     relay_latency_h_le_500    = metrics_rollup.relay_latency_h_le_500 + new_row.relay_latency_h_le_500,
+                     relay_latency_h_le_1000 =
+                         metrics_rollup.relay_latency_h_le_1000 + new_row.relay_latency_h_le_1000,
+                     relay_latency_h_le_2500 =
+                         metrics_rollup.relay_latency_h_le_2500 + new_row.relay_latency_h_le_2500,
+                     relay_latency_h_le_5000 =
+                         metrics_rollup.relay_latency_h_le_5000 + new_row.relay_latency_h_le_5000,
+                     relay_latency_h_gt_5000 =
+                         metrics_rollup.relay_latency_h_gt_5000 + new_row.relay_latency_h_gt_5000,
+                     relay_error_503           = metrics_rollup.relay_error_503 + new_row.relay_error_503,
+                     relay_error_504           = metrics_rollup.relay_error_504 + new_row.relay_error_504,
+                     relay_decode_buffer_bytes =
+                         GREATEST(metrics_rollup.relay_decode_buffer_bytes, new_row.relay_decode_buffer_bytes),
+                     relay_cancels             = metrics_rollup.relay_cancels + new_row.relay_cancels",
                 [
                     'bucket'    => $this->datetime($bucketTs),
                     'worker_id' => 'hub-relay',

@@ -99,9 +99,12 @@ final class MetricsFlushServiceTest extends TestCase
 
         $q = $overall[0];
         $this->assertStringContainsString('ON DUPLICATE KEY UPDATE', $q['sql']);
-        $this->assertStringContainsString('request_count   = request_count + VALUES(request_count)', $q['sql']);
         $this->assertStringContainsString(
-            'duration_ms_max = GREATEST(duration_ms_max, VALUES(duration_ms_max))',
+            'request_count   = metrics_rollup.request_count + new_row.request_count',
+            $q['sql'],
+        );
+        $this->assertStringContainsString(
+            'duration_ms_max = GREATEST(metrics_rollup.duration_ms_max, new_row.duration_ms_max)',
             $q['sql']
         );
 
@@ -511,11 +514,12 @@ final class MetricsFlushServiceTest extends TestCase
         $q = $relay[0];
         $this->assertStringContainsString('INSERT INTO metrics_rollup', $q['sql']);
         $this->assertStringContainsString(
-            'relay_reply_drops         = relay_reply_drops + VALUES(relay_reply_drops)',
+            'relay_reply_drops         = metrics_rollup.relay_reply_drops + new_row.relay_reply_drops',
             $q['sql'],
         );
-        $this->assertStringContainsString(
-            'relay_pending_requests    = GREATEST(relay_pending_requests, VALUES(relay_pending_requests))',
+        $this->assertMatchesRegularExpression(
+            '/relay_pending_requests =\s+GREATEST\(metrics_rollup\.relay_pending_requests, '
+            . 'new_row\.relay_pending_requests\)/',
             $q['sql'],
         );
 
@@ -529,7 +533,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertSame(9000, $p['rbuffer']);
         $this->assertSame(3, $p['rcancels']);
         $this->assertStringContainsString(
-            'relay_cancels             = relay_cancels + VALUES(relay_cancels)',
+            'relay_cancels             = metrics_rollup.relay_cancels + new_row.relay_cancels',
             $q['sql'],
         );
         // The two latency observations land in the <=10ms (rl0) and <=500ms (rl4)

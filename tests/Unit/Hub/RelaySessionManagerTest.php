@@ -468,8 +468,8 @@ final class RelaySessionManagerTest extends TestCase
 
         self::assertStringContainsString('INSERT INTO relay_user_quotas', $capturedSql);
         self::assertStringContainsString('ON DUPLICATE KEY UPDATE', $capturedSql);
-        self::assertStringContainsString('bytes_in = bytes_in + VALUES(bytes_in)', $capturedSql);
-        self::assertStringContainsString('bytes_out = bytes_out + VALUES(bytes_out)', $capturedSql);
+        self::assertStringContainsString('bytes_in = relay_user_quotas.bytes_in + new_row.bytes_in', $capturedSql);
+        self::assertStringContainsString('bytes_out = relay_user_quotas.bytes_out + new_row.bytes_out', $capturedSql);
 
         self::assertSame('user-abc', $capturedParams['user_id']);
         self::assertSame(date('Y-m-01'), $capturedParams['period_start']);
@@ -534,8 +534,8 @@ final class RelaySessionManagerTest extends TestCase
 
         self::assertStringContainsString('INSERT INTO relay_user_quotas', $capturedSql);
         self::assertStringContainsString('ON DUPLICATE KEY UPDATE', $capturedSql);
-        self::assertStringContainsString('quota_bytes_in = VALUES(quota_bytes_in)', $capturedSql);
-        self::assertStringContainsString('quota_bytes_out = VALUES(quota_bytes_out)', $capturedSql);
+        self::assertStringContainsString('quota_bytes_in = new_row.quota_bytes_in', $capturedSql);
+        self::assertStringContainsString('quota_bytes_out = new_row.quota_bytes_out', $capturedSql);
 
         self::assertSame('user-xyz', $capturedParams['user_id']);
         self::assertSame(date('Y-m-01'), $capturedParams['period_start']);
@@ -565,7 +565,7 @@ final class RelaySessionManagerTest extends TestCase
 
         self::assertStringContainsString('max_concurrent_streams', $capturedSql);
         self::assertStringContainsString(
-            'max_concurrent_streams = VALUES(max_concurrent_streams)',
+            'max_concurrent_streams = new_row.max_concurrent_streams',
             $capturedSql,
         );
         self::assertSame(10485760, $capturedParams['quota_bytes_in']);
@@ -881,7 +881,7 @@ final class RelaySessionManagerTest extends TestCase
         // period-scoped relay_user_quotas rollup.
         self::assertStringContainsString('INSERT INTO relay_user_settings', $capturedSql);
         self::assertStringContainsString('ON DUPLICATE KEY UPDATE', $capturedSql);
-        self::assertStringContainsString('throttle_bps = VALUES(throttle_bps)', $capturedSql);
+        self::assertStringContainsString('throttle_bps = new_row.throttle_bps', $capturedSql);
         // The throttle is a durable admin setting: it must NOT be period-scoped.
         self::assertStringNotContainsString('period_start', $capturedSql);
         self::assertStringNotContainsString('relay_user_quotas', $capturedSql);

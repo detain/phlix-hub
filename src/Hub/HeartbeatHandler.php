@@ -295,7 +295,7 @@ class HeartbeatHandler
         // library. The generated named placeholders follow the same
         // RelaySessionManager ladder as the prune DELETE below; the list is
         // hard-bounded by MAX_LIBRARY_COUNT at the HTTP boundary, so the
-        // single statement can never grow unbounded. VALUES() in the update
+        // single statement can never grow unbounded. The new_row alias in the update
         // clause keeps each conflicting row updating from its own tuple
         // (byte-identical effect to the old per-row :library_name_update).
         /** @var array<string, mixed> $upsertParams */
@@ -319,7 +319,7 @@ class HeartbeatHandler
         $this->db->query(
             'INSERT INTO server_libraries (id, server_id, library_id, library_name, created_at, updated_at)
              VALUES ' . implode(', ', $tuples) .
-            ' ON DUPLICATE KEY UPDATE library_name = VALUES(library_name), updated_at = NOW()',
+            ' AS new_row ON DUPLICATE KEY UPDATE library_name = new_row.library_name, updated_at = NOW()',
             $upsertParams,
         );
 
