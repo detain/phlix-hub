@@ -1,4 +1,4 @@
-import { createPhlixApp, ServerDetailPage, FederationSharesPage, RequestsPage, InviteLinksPage, AcceptInvitePage, SearchPage, MusicAlbumPage, MusicArtistsPage, MusicArtistPage, MusicTracksPage, MusicPlayerPage, BooksPage, BookDetailPage, BookReaderPage, AudiobooksPage, AudiobookDetailPage, AudiobookPlayerPage, PhotoAlbumsPage, PhotoAlbumPage, PhotoViewPage, PhotoSlideshowPage, buildHubAdminRoutes, mcpTokensMenuItem, useServerStore } from '@phlix/ui';
+import { createPhlixApp, ServerDetailPage, FederationSharesPage, RequestsPage, InviteLinksPage, AcceptInvitePage, SearchPage, MusicAlbumPage, MusicArtistsPage, MusicArtistPage, MusicTracksPage, MusicPlayerPage, BooksPage, BookDetailPage, BookReaderPage, AudiobooksPage, AudiobookDetailPage, AudiobookPlayerPage, PhotoAlbumsPage, PhotoAlbumPage, PhotoViewPage, PhotoSlideshowPage, buildHubAdminRoutes, mcpTokensMenuItem, useAuthStore, useServerStore } from '@phlix/ui';
 import '@phlix/ui/style.css';
 import '@phlix/ui/fonts.css';
 import { messagesForLocale, resolveLocale } from './i18n';
@@ -318,4 +318,6 @@ app.mount('#phlix-app');
 // body-append lands on the live document; wraps globalThis.fetch for the whole
 // app (the vendored @phlix/ui client uses fetch, so every API response is
 // observed). Law + inert-outside-browser guarantees in src/utils/maintenanceNotice.ts.
-installMaintenanceNotice();
+// The audience is read at each activation (auth settles after boot): only an
+// admin is pointed at the settings toggle; a member is told to retry shortly.
+installMaintenanceNotice({ isAdmin: () => useAuthStore().isAdmin });

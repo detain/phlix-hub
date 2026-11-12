@@ -357,7 +357,7 @@ function leaveParty(): void {
 }
 
 function disconnect(): void {
-    socket?.close();
+    if (socket !== null) { socket.onclose = null; socket.close(); }
     socket = null;
     phase.value = 'setup';
     party.value = null;
@@ -510,7 +510,7 @@ function selectLinkField(event: Event): void {
         <div v-if="inParty && party" class="wp__card">
             <h2 class="wp__card-title">{{ party.groupName }}</h2>
             <p class="wp__state">
-                {{ isHost ? 'You are hosting this watch party.' : 'You joined as a guest — the host controls playback.' }}
+                {{ isHost ? 'You are hosting this watch party.' : 'You joined as a member — the host controls playback.' }}
             </p>
 
             <dl class="wp__details">

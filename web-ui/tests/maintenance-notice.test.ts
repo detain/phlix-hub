@@ -12,7 +12,10 @@
  *     (`src/Application.php` via `MaintenanceGate`), each pinned against the
  *     other so a server-side frame change reddens here before the banner dies
  *     silently in production;
- *  4. the boot wiring: install AFTER mount in `src/main.ts`.
+ *  4. the boot wiring: install AFTER mount in `src/main.ts`, with the admin
+ *     audience resolver wired;
+ *  5. presentation (HUB-13/HUB-88): viewport-pinned placement + warning tone,
+ *     and audience-branded copy — only an admin is shown the settings link.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
  * @license   MIT
@@ -24,6 +27,10 @@ import { fileURLToPath } from 'node:url';
 
 import {
     MAINTENANCE_FRAME_CODE,
+    MAINTENANCE_NOTICE_CSS,
+    MAINTENANCE_NOTICE_ID,
+    MAINTENANCE_SETTINGS_PATH,
+    maintenanceNoticeCopy,
     maintenanceSignal,
     withMaintenanceSignal,
     type FetchLike,
@@ -137,9 +144,43 @@ describe('cross-boundary frame law (PHP emitter ⇄ TS matcher)', () => {
             main.includes("import { installMaintenanceNotice } from './utils/maintenanceNotice';"),
             'main.ts no longer imports the notice module',
         );
+        const call = 'installMaintenanceNotice({ isAdmin: () => useAuthStore().isAdmin });';
+        assert.ok(main.includes(call), 'main.ts must wire the admin audience resolver into the notice');
         assert.ok(
-            main.indexOf('installMaintenanceNotice();') > main.indexOf("app.mount('#phlix-app');"),
+            main.indexOf(call) > main.indexOf("app.mount('#phlix-app');"),
             'installMaintenanceNotice must run after app.mount',
         );
+    });
+});
+
+describe('maintenance notice presentation (HUB-13 / HUB-88)', () => {
+    it('only an admin is pointed at the admin-only settings route', () => {
+        const admin = maintenanceNoticeCopy('admin');
+        assert.deepEqual(admin.link, { href: MAINTENANCE_SETTINGS_PATH, label: 'Admin settings' });
+        assert.equal(MAINTENANCE_SETTINGS_PATH, '/app/admin/settings');
+
+        const member = maintenanceNoticeCopy('member');
+        assert.equal(member.link, null, 'a member must never be linked to an admin-only page');
+        assert.ok(!/admin/i.test(member.text), 'member copy must not mention admin settings');
+        assert.ok(/Try again shortly\./.test(member.text), 'member copy gives the retry advice the 503 frame gives');
+    });
+
+    it('both audiences share the lead and say actions will fail', () => {
+        for (const who of ['admin', 'member'] as const) {
+            const copy = maintenanceNoticeCopy(who);
+            assert.equal(copy.lead, 'Maintenance in progress.');
+            assert.ok(copy.text.includes('actions will fail'), `${who} copy lost the consequence`);
+        }
+    });
+
+    it('is pinned to the viewport in the warning tone, above modals', () => {
+        const css = MAINTENANCE_NOTICE_CSS;
+        assert.ok(css.includes(`#${MAINTENANCE_NOTICE_ID}:not([hidden])`), '[hidden] must still win over display');
+        assert.match(css, /position:\s*fixed;/);
+        assert.match(css, /bottom:\s*0;/);
+        assert.match(css, /z-index:\s*1050;/);
+        assert.ok(css.includes('var(--color-warning-bg'), 'warning wash missing');
+        assert.ok(css.includes('border-top: 3px solid var(--color-warning'), 'warning accent rule missing');
+        assert.ok(css.includes('background-color: var(--surface-1'), 'banner must be opaque over page content');
     });
 });

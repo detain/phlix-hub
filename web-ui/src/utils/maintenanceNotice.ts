@@ -10,8 +10,9 @@
  * portal saw buttons die, never WHY.
  *
  * This module is the hub-level banner: it wraps `globalThis.fetch` once at
- * boot, keys on the uniform 503 frame, and shows/hides a static notice. The
- * banner is deliberately dumb:
+ * boot, keys on the uniform 503 frame, and shows/hides a viewport-pinned
+ * warning notice whose copy is branded per audience (admin: where to switch it
+ * off; member: wait and retry). The banner is deliberately dumb:
  *
  *  - it never blocks a request — the server is the authority, the notice only
  *    narrates what the responses already say;
@@ -100,17 +101,97 @@ export function withMaintenanceSignal(
     };
 }
 
-/** The notice sentence (English, law above). */
-const NOTICE_TEXT_BEFORE =
-    'This hub is under maintenance — some actions will fail until it ends. It can be toggled at the ';
-const NOTICE_LINK_TEXT = 'admin settings';
-const NOTICE_TEXT_AFTER = ' page.';
+/**
+ * Who is reading the banner. The toggle lives behind the admin gate
+ * (`/app/admin/settings`), so pointing a member at it is a dead end: only an
+ * admin is told where maintenance is switched off; a member is told what to
+ * do instead (wait and retry — the same advice the server's 503 frame gives).
+ */
+export type MaintenanceAudience = 'admin' | 'member';
+
+/** Where an admin turns maintenance mode off (hub admin settings route). */
+export const MAINTENANCE_SETTINGS_PATH = '/app/admin/settings';
+
+/** One rendered banner: a bold lead, the sentence, and an optional link. */
+export interface MaintenanceNoticeCopy {
+    lead: string;
+    text: string;
+    link: { href: string; label: string } | null;
+}
 
 /**
- * Install once per document: create the hidden banner, then wrap
- * `globalThis.fetch`. Idempotent by element id; inert outside a browser.
+ * Pure copy table (English, law above). The lead + text are shared; only an
+ * admin gets the settings link — a member never sees an admin-only route.
  */
-export function installMaintenanceNotice(): void {
+export function maintenanceNoticeCopy(audience: MaintenanceAudience): MaintenanceNoticeCopy {
+    const lead = 'Maintenance in progress.';
+    if (audience === 'admin') {
+        return {
+            lead,
+            text: 'Maintenance mode is on, so some hub actions will fail until it is turned off in ',
+            link: { href: MAINTENANCE_SETTINGS_PATH, label: 'Admin settings' },
+        };
+    }
+    return {
+        lead,
+        text: 'This hub is under maintenance, so some actions will fail. Try again shortly.',
+        link: null,
+    };
+}
+
+/**
+ * Presentation law: the banner is pinned to the BOTTOM of the viewport
+ * (`position: fixed`) so it stays in view at any scroll depth without fighting
+ * the shell's sticky top bar (`@phlix/ui` `.shell__bar`, sticky top:0). It sits
+ * above modals (1000) — failures inside a dialog are exactly when the reader
+ * needs the reason — and below the command palette / tooltips (1100) and
+ * toasts (1200). Tone is the theme's warning pair (`--color-warning` accent,
+ * `--color-warning-bg` wash over an opaque surface so page content never
+ * bleeds through). `[hidden]` must win over the flex display, hence the
+ * `:not([hidden])` guard. While shown, the body reserves the banner's height
+ * at the bottom so it never permanently covers the end of the page.
+ */
+export const MAINTENANCE_NOTICE_CSS = `
+#${MAINTENANCE_NOTICE_ID}:not([hidden]) {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1050;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.5rem;
+    padding: 0.75rem 1rem;
+    background-color: var(--surface-1, #18181b);
+    background-image: linear-gradient(var(--color-warning-bg, #e8a33d29), var(--color-warning-bg, #e8a33d29));
+    border-top: 3px solid var(--color-warning, #e8a33d);
+    color: var(--color-text, #e4e4e7);
+    font-size: var(--text-sm, 0.875rem);
+    line-height: 1.4;
+    box-shadow: var(--shadow-3, 0 8px 24px #0006);
+}
+#${MAINTENANCE_NOTICE_ID} strong {
+    color: var(--color-warning, #e8a33d);
+}
+#${MAINTENANCE_NOTICE_ID} a {
+    color: inherit;
+    font-weight: 600;
+    text-decoration: underline;
+}
+`;
+
+/** Optional boot wiring: how the banner learns who is reading it. */
+export interface MaintenanceNoticeOptions {
+    /** Read at every activation (auth may settle after boot). Throws → member. */
+    isAdmin?: () => boolean;
+}
+
+/**
+ * Install once per document: inject the style, create the hidden banner, then
+ * wrap `globalThis.fetch`. Idempotent by element id; inert outside a browser.
+ */
+export function installMaintenanceNotice(options: MaintenanceNoticeOptions = {}): void {
     if (typeof document === 'undefined' || typeof globalThis.fetch !== 'function') {
         return;
     }
@@ -118,22 +199,54 @@ export function installMaintenanceNotice(): void {
         return;
     }
 
+    const style = document.createElement('style');
+    style.textContent = MAINTENANCE_NOTICE_CSS;
+    document.head.appendChild(style);
+
     const banner = document.createElement('div');
     banner.id = MAINTENANCE_NOTICE_ID;
     banner.setAttribute('role', 'status');
     banner.hidden = true;
-
-    const link = document.createElement('a');
-    link.href = '/app/admin/settings';
-    link.textContent = NOTICE_LINK_TEXT;
-
-    banner.append(NOTICE_TEXT_BEFORE, link, NOTICE_TEXT_AFTER);
     document.body.appendChild(banner);
+
+    let rendered: MaintenanceAudience | null = null;
+    const audience = (): MaintenanceAudience => {
+        try {
+            return options.isAdmin?.() === true ? 'admin' : 'member';
+        } catch {
+            return 'member';
+        }
+    };
+    const render = (who: MaintenanceAudience): void => {
+        if (rendered === who) {
+            return;
+        }
+        const copy = maintenanceNoticeCopy(who);
+        const lead = document.createElement('strong');
+        lead.textContent = copy.lead;
+        const body = document.createElement('span');
+        body.append(copy.text);
+        if (copy.link !== null) {
+            const link = document.createElement('a');
+            link.href = copy.link.href;
+            link.textContent = copy.link.label;
+            body.append(link, '.');
+        }
+        banner.replaceChildren(lead, body);
+        rendered = who;
+    };
 
     globalThis.fetch = withMaintenanceSignal(
         globalThis.fetch as unknown as FetchLike,
         (signal) => {
-            banner.hidden = signal !== 'active';
+            if (signal === 'active') {
+                render(audience());
+                banner.hidden = false;
+                document.body.style.paddingBottom = `${banner.offsetHeight}px`;
+            } else {
+                banner.hidden = true;
+                document.body.style.paddingBottom = '';
+            }
         },
     ) as unknown as typeof globalThis.fetch;
 }
