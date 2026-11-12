@@ -1,5 +1,5 @@
 {
-    "generatedFrom": "2b427b4f-era serial Unit-only junit (3 RelayProxyBridge swoole-absence host errors pre-existing class; w32L1 CP-013 blesses CookieAuthCeremonyTest + re-measures CookiePolicyOriginLawTest; re-blessed post phpcs-wrap, same-shape timings; w21L6 SH-064 blesses ClientRelayWorkerTlsPostureTest + WsTlsContextTest + SyncPlayRelayWorkerTlsPostureTest (measured solo, new suites); CP-029 twin hand-inserted tests/Unit/Auth/TokenSessionFamilyTest.php solo-measured 0.031s from the r22 docker serial junit — all other rows untouched)",
+    "generatedFrom": "2b427b4f-era serial Unit-only junit (3 RelayProxyBridge swoole-absence host errors pre-existing class; w32L1 CP-013 blesses CookieAuthCeremonyTest + re-measures CookiePolicyOriginLawTest; re-blessed post phpcs-wrap, same-shape timings; w21L6 SH-064 blesses ClientRelayWorkerTlsPostureTest + WsTlsContextTest + SyncPlayRelayWorkerTlsPostureTest (measured solo, new suites); CP-029 twin hand-inserted tests/Unit/Auth/TokenSessionFamilyTest.php solo-measured 0.031s from the r22 docker serial junit; HUB-S18 hand-inserted tests/Unit/StatCacheFreshnessTest.php — all other rows untouched)",
     "unit": {
         "tests/Common/Database/MigrationRunnerTest.php": 0.016,
         "tests/Health/HealthControllerTest.php": 0.006,
@@ -295,6 +295,7 @@
         "tests/Unit/Runtime/CuratedHookDeliveryProbeTest.php": 0,
         "tests/Unit/Runtime/HookEnforcementGuardTest.php": 0.009,
         "tests/Unit/Runtime/SwooleRuntimeTest.php": 0.002,
+        "tests/Unit/StatCacheFreshnessTest.php": 0.005,
         "tests/Unit/Stats/Metrics/MetricsCollectorTest.php": 0.002,
         "tests/Unit/Stats/Metrics/MetricsFlushRetentionTest.php": 0.001,
         "tests/Unit/Stats/Metrics/MetricsFlushServiceTest.php": 0.032,

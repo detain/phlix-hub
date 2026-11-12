@@ -93,6 +93,7 @@ final class HubRestartController
     public function restart(Request $request, array $params): Response
     {
         try {
+            clearstatcache(true, $this->pidFile);
             if (!is_file($this->pidFile)) {
                 return (new Response())->status(500)->json([
                     'success' => false,

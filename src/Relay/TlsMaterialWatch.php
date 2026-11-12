@@ -98,6 +98,7 @@ final class TlsMaterialWatch
     {
         /** @param string $path */
         return static function (string $path): string {
+            clearstatcache(true, $path);
             if (!is_file($path)) {
                 return self::MISSING;
             }

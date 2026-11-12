@@ -471,6 +471,7 @@ final class MaintenanceHeartbeat
      */
     private function read(): ?array
     {
+        clearstatcache(true, $this->path);
         if (!is_file($this->path) || !is_readable($this->path)) {
             return null;
         }
