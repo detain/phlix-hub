@@ -146,7 +146,8 @@ export function maintenanceNoticeCopy(audience: MaintenanceAudience): Maintenanc
  * above modals (1000) — failures inside a dialog are exactly when the reader
  * needs the reason — and below the command palette / tooltips (1100) and
  * toasts (1200). Tone is the theme's warning pair (`--color-warning` accent,
- * `--color-warning-bg` wash over an opaque surface so page content never
+ * `--color-warning-bg` wash over the theme's opaque `--surface` (defined by
+ * every @phlix/ui theme; `--surface-1` is not) so page content never
  * bleeds through). `[hidden]` must win over the flex display, hence the
  * `:not([hidden])` guard. While shown, the body reserves the banner's height
  * at the bottom so it never permanently covers the end of the page.
@@ -163,7 +164,7 @@ export const MAINTENANCE_NOTICE_CSS = `
     align-items: baseline;
     gap: 0.25rem 0.5rem;
     padding: 0.75rem 1rem;
-    background-color: var(--surface-1, #18181b);
+    background-color: var(--surface, #16130f);
     background-image: linear-gradient(var(--color-warning-bg, #e8a33d29), var(--color-warning-bg, #e8a33d29));
     border-top: 3px solid var(--color-warning, #e8a33d);
     color: var(--color-text, #e4e4e7);

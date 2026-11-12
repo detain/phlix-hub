@@ -181,6 +181,8 @@ describe('maintenance notice presentation (HUB-13 / HUB-88)', () => {
         assert.match(css, /z-index:\s*1050;/);
         assert.ok(css.includes('var(--color-warning-bg'), 'warning wash missing');
         assert.ok(css.includes('border-top: 3px solid var(--color-warning'), 'warning accent rule missing');
-        assert.ok(css.includes('background-color: var(--surface-1'), 'banner must be opaque over page content');
+        assert.ok(css.includes('background-color: var(--surface,'), 'banner must be opaque over page content');
+        // --surface-1 is defined by no @phlix/ui theme: its dark fallback would win in Daylight (dark text on a near-black bar).
+        assert.ok(!css.includes('--surface-1'), 'banner must use a theme-defined surface token');
     });
 });

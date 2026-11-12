@@ -357,7 +357,7 @@ function leaveParty(): void {
 }
 
 function disconnect(): void {
-    if (socket !== null) { socket.onclose = null; socket.close(); }
+    if (socket !== null) { socket.onclose = null; socket.onerror = null; socket.close(); }
     socket = null;
     phase.value = 'setup';
     party.value = null;
