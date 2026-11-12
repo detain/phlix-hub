@@ -12,20 +12,38 @@
  * Contract mirrors the ui pattern:
  * a dismissable contextual paragraph + at least one link, persisted
  * dismissal keyed by `hintId`.
+ *
+ * HUB-S9: `dismissible` (default true) opts a hint OUT of that contract. A
+ * non-dismissible hint is a standing disclosure — copy that corrects the
+ * page it sits on (e.g. the federation page's servers→hubs terminology band)
+ * must not vanish with a click, or the uncorrected copy beneath it reads as
+ * true again. Such a hint renders no dismiss button, never reads or writes
+ * the dismissal key, and is exposed as a note rather than a dismissable aside.
  */
 import { ref, watchEffect } from 'vue';
 
-const props = defineProps<{
-    /** Stable per-hint id for the localStorage dismissal key. */
-    hintId: string;
-    /** In-app router targets: { to, label } pairs. */
-    links: Array<{ to: string; label: string }>;
-}>();
+const props = withDefaults(
+    defineProps<{
+        /** Stable per-hint id for the localStorage dismissal key. */
+        hintId: string;
+        /** In-app router targets: { to, label } pairs. */
+        links: Array<{ to: string; label: string }>;
+        /** False = standing disclosure: always shown, no dismiss control. */
+        dismissible?: boolean;
+    }>(),
+    { dismissible: true },
+);
 
 const STORAGE_PREFIX = 'phlix-hub-pagehint:';
 const dismissed = ref(false);
 
 watchEffect(() => {
+    if (!props.dismissible) {
+        // A standing disclosure ignores any stored dismissal (including one
+        // left by an earlier dismissable build under the same id).
+        dismissed.value = false;
+        return;
+    }
     try {
         dismissed.value = localStorage.getItem(STORAGE_PREFIX + props.hintId) === 'hidden';
     } catch {
@@ -35,6 +53,9 @@ watchEffect(() => {
 });
 
 function hide(): void {
+    if (!props.dismissible) {
+        return;
+    }
     dismissed.value = true;
     try {
         localStorage.setItem(STORAGE_PREFIX + props.hintId, 'hidden');
@@ -45,7 +66,13 @@ function hide(): void {
 </script>
 
 <template>
-    <aside v-if="!dismissed" class="hub-page-hint" :data-hint-id="hintId">
+    <aside
+        v-if="!dismissed"
+        class="hub-page-hint"
+        :class="{ 'hub-page-hint--standing': !dismissible }"
+        :data-hint-id="hintId"
+        :role="dismissible ? undefined : 'note'"
+    >
         <div class="hub-page-hint__body">
             <slot />
             <nav v-if="links.length" class="hub-page-hint__links" aria-label="Related pages">
@@ -53,6 +80,7 @@ function hide(): void {
             </nav>
         </div>
         <button
+            v-if="dismissible"
             type="button"
             class="hub-page-hint__dismiss"
             aria-label="Dismiss this hint"
