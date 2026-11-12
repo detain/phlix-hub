@@ -88,7 +88,7 @@ async function submit(): Promise<void> {
         message.value = passwordErrorSentence(
             code,
             text,
-            errMessage(e, 'The hub could not change the password. Try again.'),
+            errMessage(e, 'The hub couldn’t change the password. Try again.'),
         );
     } finally {
         submitting.value = false;
@@ -106,7 +106,7 @@ async function submit(): Promise<void> {
         <form class="sec__card" autocomplete="on" @submit.prevent="submit">
             <h2 class="sec__card-title">Change password</h2>
             <p class="sec__card-note">
-                Your current password is checked first — nothing is written unless it is
+                Your current password is checked first — nothing is written unless it’s
                 correct. Repeated wrong answers are throttled like failed logins. Existing
                 sign-in sessions keep working until their tokens expire; a stolen device
                 should be signed out by an admin.
@@ -158,7 +158,7 @@ async function submit(): Promise<void> {
         <section class="sec__card sec__card--passkeys" aria-label="Passkeys">
             <h2 class="sec__card-title">Passkeys</h2>
             <p class="sec__card-note">
-                This hub does not offer passkey sign-in yet — there is nothing to
+                This hub doesn’t offer passkey sign-in yet — there’s nothing to
                 register or remove here. Passkeys are available on Phlix media
                 servers, not on the hub account itself.
             </p>

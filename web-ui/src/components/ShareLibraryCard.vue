@@ -76,7 +76,7 @@ async function loadServers(): Promise<void> {
     try {
         servers.value = parseServers(await http.get<unknown>('/api/v1/me/servers'));
     } catch (e) {
-        refusal.value = errMessage(e, 'The hub could not list your servers.');
+        refusal.value = errMessage(e, 'The hub couldn’t list your servers.');
         serversPhase.value = 'failed';
         return;
     }
@@ -103,7 +103,7 @@ async function loadLibraries(): Promise<void> {
             await http.get<unknown>('/api/v1/me/libraries?server_id=' + encodeURIComponent(serverId)),
         );
     } catch (e) {
-        refusal.value = errMessage(e, 'The hub could not list that server\u2019s libraries.');
+        refusal.value = errMessage(e, 'The hub couldn’t list that server’s libraries.');
         librariesPhase.value = 'failed';
         return;
     }
@@ -166,7 +166,7 @@ async function shareNow(): Promise<void> {
 
         <p v-if="serversPhase === 'loading'" class="slc__state">Loading your servers…</p>
         <template v-else-if="serversPhase === 'failed'">
-            <p class="slc__state">Your servers could not be listed, so nothing can be shared.</p>
+            <p class="slc__state">Your servers couldn’t be listed, so nothing can be shared.</p>
             <button type="button" class="slc__button" @click="loadServers">Retry</button>
         </template>
         <template v-else-if="serversPhase === 'empty'">
@@ -188,11 +188,11 @@ async function shareNow(): Promise<void> {
 
             <p v-if="librariesPhase === 'loading'" class="slc__state">Loading its libraries…</p>
             <p v-else-if="librariesPhase === 'failed'" class="slc__state">
-                That server’s libraries could not be listed — retry by switching servers,
+                That server’s libraries couldn’t be listed — retry by switching servers,
                 or check its relay tunnel under <RouterLink to="/app/servers">My Servers</RouterLink>.
             </p>
             <p v-else-if="librariesPhase === 'empty'" class="slc__state">
-                The hub has not seen any libraries on this server yet — its relay tunnel must
+                The hub hasn’t seen any libraries on this server yet — its relay tunnel must
                 report them first (see <RouterLink to="/app/servers">My Servers</RouterLink>).
             </p>
             <label v-else-if="librariesPhase === 'ready'" class="slc__field">

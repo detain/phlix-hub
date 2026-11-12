@@ -89,7 +89,7 @@ function statusLine(share: HubIncomingShare): string {
                 ? `Tunnelled to this hub right now (${seen}).`
                 : `The hub sees this server online (${seen}).`;
         case 'unreachable':
-            return `The hub cannot reach this server (${seen}).`;
+            return `The hub can’t reach this server (${seen}).`;
         case 'unknown':
         default:
             return 'The hub has no fresh signal about this server — the link may work anyway.';
@@ -118,7 +118,7 @@ function openServer(share: HubIncomingShare): void {
         <p class="swn__note">
             Server status below is measured <strong>from the hub’s vantage</strong>: whether the
             hub can see the owner’s server right now, not the path from your device to it. A
-            server the hub cannot reach is usually offline or behind NAT — try again later.
+            server the hub can’t reach is usually offline or behind NAT — try again later.
         </p>
 
         <p v-if="loading" class="swn__state">Loading shared libraries…</p>

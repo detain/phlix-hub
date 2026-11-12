@@ -232,7 +232,7 @@ describe('wire-of-component — hub security page', () => {
     });
 
     it('the page states the passkeys truth instead of rendering a dead form', () => {
-        assert.match(PAGE_SOURCE, /does not offer passkey sign-in yet/);
+        assert.match(PAGE_SOURCE, /doesn’t offer passkey sign-in yet/);
     });
 
     it('the page never submits when the pre-flight complains', () => {

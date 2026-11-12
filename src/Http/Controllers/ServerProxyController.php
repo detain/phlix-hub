@@ -1047,13 +1047,17 @@ final class ServerProxyController
             // legitimately have no tunnel. Either way we still REFUSE to proxy
             // (the tunnel is the trust boundary and there is nothing to forward
             // to) — only the code/message differ so the UI can explain why.
+            // House register (HUB-S5): API prose carries no contractions, so
+            // no straight apostrophe ever reaches the wire; contractions with
+            // the typographic apostrophe are the SPA's register, not the API's
+            // (pinned by web-ui/tests/copy-register.test.ts).
             if ($owner['status'] === ServerInfoDto::STATUS_ONLINE) {
                 return (new Response())->error(
                     503,
                     'server.relay_unavailable',
                     'Relay tunnel unavailable',
-                    ['message' => 'This server is online but its secure relay tunnel isn\'t connected. '
-                        . 'Browsing over the hub isn\'t available until the tunnel reconnects.'],
+                    ['message' => 'This server is online but its secure relay tunnel is not connected. '
+                        . 'Browsing over the hub is not available until the tunnel reconnects.'],
                 );
             }
 

@@ -128,7 +128,7 @@ export function maintenanceNoticeCopy(audience: MaintenanceAudience): Maintenanc
     if (audience === 'admin') {
         return {
             lead,
-            text: 'Maintenance mode is on, so some hub actions will fail until it is turned off in ',
+            text: 'Maintenance mode is on, so some hub actions will fail until it’s turned off in ',
             link: { href: MAINTENANCE_SETTINGS_PATH, label: 'Admin settings' },
         };
     }
