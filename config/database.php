@@ -58,7 +58,7 @@ $mysql = [
     'database' => getenv('HUB_DB_NAME') ?: 'phlix_hub',
 
     // Coroutine connection POOL (default ON). Each coroutine leases its own
-    // connection, so no two coroutines ever multiplex queries onto ONE PDO
+    // connection, so no two coroutines ever multiplex queries onto ONE mysqli (workerman/mysql)
     // socket. Without it, the single shared socket desyncs under the Swoole
     // runtime hook — every fetch returns the PREVIOUS query's result set
     // ("lag-by-one"), which is what intermittently 500'd/401'd the authed API
@@ -97,7 +97,7 @@ return [
     // socket a reaper query lands mid-transaction and trips "SQLSTATE[HY000] 2014
     // unbuffered queries active", corrupting the transaction so the next
     // beginTrans() throws "There is already an active transaction" → heartbeat/
-    // claim 500s. A separate PDO socket for the transactional handlers means a
+    // claim 500s. A separate mysqli (workerman/mysql) socket for the transactional handlers means a
     // reaper physically cannot interfere with an open transaction.
     'txn' => $mysql,
 ];
