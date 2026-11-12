@@ -294,6 +294,22 @@ final class PooledMySQLConnectionTest extends TestCase
     }
 
     /**
+     * HUB-S13 leak-counter pin: a ROLLBACK that throws during the defer release
+     * retires the connection (closed once, not re-pooled) and frees its slot —
+     * the next lessee on a maxSize=1 pool gets a fresh conn instead of a leaked
+     * counter / 10 s exhaustion.
+     */
+    public function testFailedRollbackOnReleaseRetiresConnectionAndFreesSlot(): void
+    {
+        $out = $this->runHarness('rollback_fail');
+
+        self::assertStringContainsString('conns=2', $out, "replacement connection must open\n{$out}");
+        self::assertStringContainsString('idxB=1', $out, "lessee must get the fresh conn\n{$out}");
+        self::assertStringContainsString('conn0_closes=1', $out, "failed-rollback conn must be closed\n{$out}");
+        self::assertStringNotContainsString('pool exhausted', $out, $out);
+    }
+
+    /**
      * Dead-connection eviction: a pooled connection that fails its SELECT 1
      * liveness probe is CLOSED (FD released) and evicted, and a fresh
      * connection is opened for the lessee — never handing out a dead socket.

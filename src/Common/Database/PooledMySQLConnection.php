@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Common\Database;
 
+use Phlix\Hub\Common\Logger\LogChannels;
+use Phlix\Hub\Common\Logger\LoggerFactory;
 use Workerman\MySQL\Connection;
 
 /**
@@ -283,8 +285,29 @@ final class PooledMySQLConnection extends Connection
             // Never return a dirty (open-transaction) connection to the pool.
             // Rollback any uncommitted transaction before reuse — an interrupted
             // coroutine must not poison the next lessee.
+            // A rollback that fails or throws means the connection's transaction
+            // state is unknown: RETIRE it (close, free the slot, log) and never
+            // push it back idle, mirroring acquire()'s dead-connection arms. The
+            // try/catch also guarantees the defer cannot abort before the slot
+            // is either returned or released (no leaked `created` count).
             if ($hadPendingTx) {
-                $released->rollBackTrans();
+                $rolledBack = false;
+                try {
+                    $rolledBack = $released->rollBackTrans() !== false;
+                } catch (\Throwable $e) {
+                    LoggerFactory::get(LogChannels::DATABASE)->warning(
+                        'PooledMySQLConnection: rollback on release threw; retiring connection: ' . $e->getMessage(),
+                    );
+                }
+                if (!$rolledBack) {
+                    try {
+                        $released->closeConnection();
+                    } catch (\Throwable) {
+                        // Best-effort: the slot is released regardless.
+                    }
+                    $this->created--;
+                    return;
+                }
             }
             $this->idle->push($released);
         });

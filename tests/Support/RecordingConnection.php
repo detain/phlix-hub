@@ -32,6 +32,9 @@ final class RecordingConnection extends Connection
     /** @var bool When false, the `SELECT 1` liveness probe throws (simulates a dead socket). */
     public bool $alive = true;
 
+    /** @var bool When true, {@see rollBackTrans()} throws (simulates a failed ROLLBACK on a broken socket). */
+    public bool $rollbackThrows = false;
+
     /** @var int Times {@see closeConnection()} was invoked (FD-release accounting). */
     public int $closes = 0;
 
@@ -114,6 +117,9 @@ final class RecordingConnection extends Connection
     public function rollBackTrans(): bool
     {
         $this->calls[] = 'rollback';
+        if ($this->rollbackThrows) {
+            throw new \RuntimeException('server has gone away');
+        }
         return true;
     }
 

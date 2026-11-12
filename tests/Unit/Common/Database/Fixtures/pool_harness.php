@@ -297,6 +297,34 @@ switch ($scenario) {
         echo $dump($conns) . "\n";
         break;
 
+    // Leak-counter pin: a dirty release whose ROLLBACK throws must RETIRE the
+    // connection (closed, never pushed idle) and free its created-slot, so a
+    // maxSize=1 pool can still lease a fresh connection to the next coroutine.
+    case 'rollback_fail':
+        /** @var list<RecordingConnection> $conns */
+        $conns = [];
+        run(static function () use ($makePool, $findCall, &$conns): void {
+            $pool = $makePool(1, $conns);
+            $d = new Channel(1);
+            Coroutine::create(static function () use ($pool, $d, &$conns): void {
+                $pool->beginTrans();
+                $conns[0]->rollbackThrows = true;
+                $d->push(true); // ends WITHOUT commit; defer rollback throws
+            });
+            $d->pop();
+            Coroutine::sleep(0.02);
+            $d2 = new Channel(1);
+            Coroutine::create(static function () use ($pool, $d2): void {
+                $pool->query('SELECT B'); // must open conn1, not hang/exhaust
+                $d2->push(true);
+            });
+            $d2->pop();
+            echo 'idxB=' . $findCall($conns, 'query:SELECT B') . "\n";
+            echo 'conn0_closes=' . $conns[0]->closes . "\n";
+        });
+        echo $dump($conns) . "\n";
+        break;
+
     // A pooled connection that fails its SELECT 1 liveness probe is CLOSED and
     // evicted, and a fresh connection is opened for the lessee — never handing
     // out a dead socket.
