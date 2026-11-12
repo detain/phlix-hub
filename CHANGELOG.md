@@ -12,6 +12,49 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Chore [ui-27-1111] — re-vendor `@phlix/ui` #v0.99.27 + `/app` SPA regen — the device-sessions rows reach the hosted hub SPA (hub leg of the .27 consumer wave) — 2026-11-11
+
+- Pin tarball `v0.99.26` → `v0.99.27` (tag obj c262b681, peel 1f906979 —
+  ls-remote-verified). package.json 1+/1-; lock surgical 4+/4- (root echo + the
+  ui node's version/resolved/integrity), computed under node 24.20.0 / npm
+  11.19.0 with `NPM_CONFIG_USERCONFIG=/dev/null`, re-run idempotent; contracts
+  `#v0.5.7` / syncplay `#v0.1.7` pins unchanged by .27's own manifest. Fresh
+  `npm ci`: the installed dist tree is byte-identical to the codeload tag
+  (`diff -r` clean; `phlix-ui.js` `c7368aa3`, `player.js` `530ebbcf`).
+- `/app` rebuilt deterministic ×2 (mutual `diff -r` clean): 198 files; the
+  version stamp `0.99.27` sits on `index-DPCcy8lr.js`, zero `.26` residue;
+  carrier `PlayerPage-CHLjXsKa-B1sBmqzd.js`. Per-file md5 manifest recorded in
+  the lane register (per-file md5s are the identity; the aggregate is
+  recipe-variant).
+- The device-sessions feature is PROVEN in the committed bundle: the ui barrel
+  exports `DeviceSessionsPage` and `createPhlixApp` mounts `/settings` for
+  every consumer, whose sessions tab renders it — merged into the
+  `SettingsPage-D54KbsJZ-CEiN3iXN.js` chunk, with the `/api/v1/auth/sessions`
+  wire literal and the `tabSessions` label present in the entry chunk. The
+  hub's D1a listing/revocation endpoints (migration 056 + the 200-row ceiling)
+  finally have portal surface. No hub route added: the shell already mounts it.
+- Four pin-era docblock coordinates rotated by the M-HUB-12 tripwire's own
+  conviction (green after rotation): the i18n seam, `HubPageHint.vue`,
+  `shareLiveness.ts` — where the `safeHref` type-barrel coordinate moved
+  `219→220`, pushed by the .27 `DeviceSessionsPage` export at `index.d.ts:182`,
+  re-executed against the new install — and `watchPartyWire.ts` (dial-law `:16`
+  re-executed byte-equal). `HubWatchPartyPage.vue`'s historical `.13` sentence
+  follows the .20–.26 non-rotation precedent (no measured red).
+- Zero new wire codes, zero PHP src moved, no migrations. S253 holds by
+  construction (this lane built from the committed lock; CI re-proves). The
+  S181 hub row reads OK at push time (`v0.99.27` == newest live tag); the
+  server/windows/tizen rows are the same wave's other legs.
+- Gates: `node --test` 161/161; canonical `Unit,Integration` parallel battery
+  5906 tests / 49026 assertions / 31 skipped, single red bucket = the
+  documented host-swoole absence (3 `RelayProxyBridgeTest` errors; CI installs
+  swoole — same class as the .26 register; a first battery also convicted one
+  `McpE2EGateTest` assertion from a node-less PATH, green when re-run under nvm
+  node 24.20.0); targeted currency filter 70/518 OK; CI-faithful phpstan level
+  9 (swoole-stripped ini scan per the S306 docblock) `[OK]`; S299 phpcs corpus
+  659 files 0E/0W; `composer validate --strict` OK; `security-audit-check` 97
+  packages clean (composer.lock untouched). Psalm skipped by disclosure: zero
+  PHP files changed in this commit.
+
 ### Fixed [hub-d1a-cure] — D1a cure twin, hub-first of the pair (mirrors the server cure register's two booked minors): the refresh-grant table gains its missing retention leg, the device-family listing gains a published ceiling — 2026-11-11
 
 - Every grant row now carries its own expiry — the presented mint's baked
