@@ -3,7 +3,7 @@
 # wait-for-free-ports.sh — systemd ExecStartPre gate for phlix-hub.
 #
 # Blocks (default 90 s, override with `-t SECONDS`) until every given TCP
-# port on 127.0.0.1 is FREE, then exits 0 so the new Workerman master can
+# port on 127.0.0.1 AND ::1 is FREE, then exits 0 so the new Workerman master can
 # start and bind cleanly.
 #
 # Why: on `systemctl restart phlix-hub` the old master can take several
@@ -43,9 +43,15 @@ while :; do
   for port in "$@"; do
     # Subshell so fd 3 closes on exit; stderr silenced (ECONNREFUSED is the
     # GOOD case — it means the port is free).
-    if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
-      busy="${busy} ${port}"
-    fi
+    # Both loopback families are probed unconditionally: a listener bound
+    # to [::1]:PORT (e.g. HUB_WS_BIND=::1) is invisible to a 127.0.0.1
+    # connect. A family the host lacks just refuses => treated as free.
+    for host in 127.0.0.1 ::1; do
+      if (exec 3<>"/dev/tcp/${host}/${port}") 2>/dev/null; then
+        busy="${busy} ${port}"
+        break
+      fi
+    done
   done
 
   if [ -z "$busy" ]; then

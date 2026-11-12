@@ -74,6 +74,7 @@
         "tests/Unit/Contracts/ErrorCodesOpenApiEnumContractTest.php": 0.025,
         "tests/Unit/Coroutine/ContextIsolationTest.php": 0.001,
         "tests/Unit/Docker/DockerImageContractTest.php": 0.005,
+        "tests/Unit/Scripts/WaitForFreePortsTest.php": 2.1,
         "tests/Unit/Federation/FederationAdminDelegationRepositoryTest.php": 0.003,
         "tests/Unit/Federation/FederationBinaryOpcodeTest.php": 0.02,
         "tests/Unit/Federation/FederationConnectionManagerTest.php": 0.007,

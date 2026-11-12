@@ -2250,6 +2250,7 @@ Environment="HOME=${INSTALL_PATH}/var"
 # runtime; update this gate's values to match if you do. On timeout the
 # script still exits 0 — the bind then
 # fails fast and Restart=on-failure sends us back through this gate.
+# The gate probes both 127.0.0.1 and ::1, so a HUB_WS_BIND=::1 listener is seen.
 # NOTE: SO_REUSEPORT (Workerman \$reusePort) is deliberately NOT used as an
 # alternative fix — during the stop/start overlap BOTH masters would accept
 # on the same ports, splitting relay tunnels and WS sessions between a dying
