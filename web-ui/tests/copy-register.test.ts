@@ -61,18 +61,6 @@ function uiProse(source: string): string {
         .replace(/^\s*\/\/.*$/gm, ' ');
 }
 
-/** Template text only: tags, attributes and mustaches removed. */
-function templateText(source: string): string {
-    const start = source.indexOf('<template>');
-    const end = source.lastIndexOf('</template>');
-    assert.ok(start >= 0 && end > start, 'template found');
-    return source
-        .slice(start + '<template>'.length, end)
-        .replace(/<!--[\s\S]*?-->/g, ' ')
-        .replace(/\{\{[\s\S]*?\}\}/g, ' ')
-        .replace(/<[^>]*>/g, ' ');
-}
-
 describe('house register rule — UI leg (HUB-S5)', () => {
     for (const [name, source] of Object.entries(UI_SOURCES)) {
         it(`${name}: negations are contracted in member-visible prose`, () => {
@@ -81,8 +69,8 @@ describe('house register rule — UI leg (HUB-S5)', () => {
             assert.equal(hit, null, `${name} speaks the expanded register: "${hit?.[0]}"`);
         });
 
-        it(`${name}: no straight apostrophe in template prose or escaped in literals`, () => {
-            assert.equal(/[A-Za-z]'[A-Za-z]/.test(templateText(source)), false, `${name} template has a straight apostrophe`);
+        it(`${name}: no straight apostrophe in member-visible prose or escaped in literals`, () => {
+            assert.equal(/[A-Za-z]'[A-Za-z]/.test(uiProse(source)), false, `${name} prose has a straight apostrophe`);
             assert.equal(/\\'/.test(uiProse(source)), false, `${name} escapes a straight apostrophe into a literal`);
         });
     }

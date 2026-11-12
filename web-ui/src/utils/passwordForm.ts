@@ -57,6 +57,23 @@ export function validatePasswordForm(form: PasswordForm): string | null {
 }
 
 /**
+ * The login limiter's default window (`RateLimitProfiles::LOGIN`, 5 / 900 s)
+ * — failed password-change proofs spend that same shared budget, so a
+ * throttled owner waits AT MOST this long. Pinned to the PHP default by a
+ * cross-language test (HUB-19).
+ */
+export const LOGIN_LOCKOUT_WINDOW_SECONDS = 900;
+
+/**
+ * Leading words of every `RateLimitException::retryAfterMessage()` sentence
+ * (`MESSAGE_PREFIX` on the PHP side, pinned by a cross-language test). A
+ * `rate_limited` frame whose text starts with this carries the server's EXACT
+ * wait ("… try again in 14 minutes.") and wins over the generic sentence
+ * below; the bare `'Too Many Requests'` machine label does not.
+ */
+export const SERVER_WAIT_SENTENCE_PREFIX = 'Too many attempts — ';
+
+/**
  * The wire codes `POST /api/v1/me/password` can answer with, mapped to what
  * the OWNER should read. Every code is in the contracts vocab already used by
  * the login/signup siblings — this map adds no new machine surface, only
@@ -68,21 +85,32 @@ export const PASSWORD_ERROR_SENTENCES: Record<string, string> = {
     'auth.invalid_credentials': 'That current password is not correct.',
     'auth.missing_credentials': 'Both the current and the new password are required.',
     'auth.required': 'Your session expired — sign in again before changing the password.',
-    'rate_limited': 'Too many recent attempts from this network. Wait a few minutes and try again.',
+    'rate_limited': `Too many recent attempts from this network. Wait up to ${LOGIN_LOCKOUT_WINDOW_SECONDS / 60} minutes and try again.`,
 };
 
 /**
- * Resolve a failure to its display sentence: registered-code map first, then
- * whatever human text the server sent (hub frames keep the sentence in
- * `error`, mirrored to `message` per the M2 envelope law), then the caller's
- * fallback. `code`/`serverText` arrive pre-extracted by the page (it owns the
- * ApiError shape); keeping them primitives is what makes this pure.
+ * Resolve a failure to its display sentence. A `rate_limited` frame that
+ * carries the server's exact-wait sentence shows THAT (server-exact text
+ * wins: it names the real remaining wait, and stays honest when an operator
+ * tuned the window away from the default). Otherwise: registered-code map
+ * first, then whatever human text the server sent (hub frames keep the
+ * sentence in `message`, mirrored from `error` per the M2 envelope law),
+ * then the caller's fallback. `code`/`serverText` arrive pre-extracted by
+ * the page (it owns the ApiError shape); keeping them primitives is what
+ * makes this pure.
  */
 export function passwordErrorSentence(
     code: string | null,
     serverText: string | null,
     fallback: string,
 ): string {
+    if (
+        code === 'rate_limited' &&
+        serverText !== null &&
+        serverText.startsWith(SERVER_WAIT_SENTENCE_PREFIX)
+    ) {
+        return serverText;
+    }
     if (code !== null && Object.prototype.hasOwnProperty.call(PASSWORD_ERROR_SENTENCES, code)) {
         return PASSWORD_ERROR_SENTENCES[code];
     }

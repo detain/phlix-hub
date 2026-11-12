@@ -130,6 +130,13 @@ final class UserPasswordControllerTest extends TestCase
         $payload = self::arrayNode(json_decode($response->body, true));
         self::assertSame('rate_limited', $payload['code']);
         self::assertArrayHasKey('Retry-After', $response->headers);
+        // HUB-19: the exact-wait sentence rides beside the header, composed
+        // from the SAME number, so the Security page never has to guess.
+        self::assertSame('Too Many Requests', $payload['error']);
+        self::assertSame(
+            RateLimitException::retryAfterMessage((int) $response->headers['Retry-After']),
+            $payload['message'],
+        );
     }
 
     public function testSuccessReturnsMessageEnvelopeForTheScopedUser(): void

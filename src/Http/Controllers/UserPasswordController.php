@@ -37,8 +37,9 @@ use Phlix\Hub\Http\Response;
  *  - new secret fails policy        → 400 `validation_failed`
  *    (AuthController::signupJson :111-112 frame);
  *  - login budget exhausted         → 429 `rate_limited` + `Retry-After`
- *    (AuthController::rateLimited :179-184 frame — failed proofs consume
- *    the shared per-IP login budget, see AuthManager::changePassword()).
+ *    + the exact-wait `message` sentence (AuthController::rateLimited()
+ *    frame — failed proofs consume the shared per-IP login budget, see
+ *    AuthManager::changePassword()).
  *
  * Success is the same `{message}` JSON shape as the admin reset
  * (AdminUserController::resetPassword :305-308).
@@ -124,14 +125,24 @@ final class UserPasswordController
     }
 
     /**
-     * Shared 429 envelope — byte-identical frame to AuthController::rateLimited
-     * :179-184 (status + Retry-After + `{error, code}`).
+     * Shared 429 envelope — the same frame as AuthController::rateLimited():
+     * status + Retry-After + `{error, code}` plus the human `message`
+     * sentence (HUB-19). The sentence is composed from the SAME number the
+     * header carries via {@see RateLimitException::retryAfterMessage()}, so
+     * the Security page can show the exact wait instead of guessing one.
+     * Wire-additive: `error`/`code` are unchanged for existing readers.
      */
     private static function rateLimited(RateLimitException $e): Response
     {
+        $retryAfter = $e->retryAfterSeconds();
+
         return (new Response())
             ->status(429)
-            ->header('Retry-After', (string) $e->retryAfterSeconds())
-            ->json(['error' => 'Too Many Requests', 'code' => 'rate_limited']);
+            ->header('Retry-After', (string) $retryAfter)
+            ->json([
+                'error' => 'Too Many Requests',
+                'code' => 'rate_limited',
+                'message' => RateLimitException::retryAfterMessage($retryAfter),
+            ]);
     }
 }

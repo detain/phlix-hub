@@ -76,4 +76,49 @@ final class RateLimitExceptionTest extends TestCase
             RateLimitException::retryAfterMessage(-5),
         );
     }
+
+    public function testRetryAfterMessageStaysInSecondsBelowAMinute(): void
+    {
+        self::assertSame(
+            'Too many attempts — try again in 59 seconds.',
+            RateLimitException::retryAfterMessage(59),
+        );
+    }
+
+    public function testRetryAfterMessageSpeaksMinutesRoundedUp(): void
+    {
+        // HUB-19: the login lockout is a 900 s window; a person reads
+        // minutes, and rounding UP keeps the sentence a ceiling — never an
+        // unlock promise that arrives early.
+        self::assertSame(
+            'Too many attempts — try again in 1 minute.',
+            RateLimitException::retryAfterMessage(60),
+        );
+        self::assertSame(
+            'Too many attempts — try again in 2 minutes.',
+            RateLimitException::retryAfterMessage(61),
+        );
+        self::assertSame(
+            'Too many attempts — try again in 15 minutes.',
+            RateLimitException::retryAfterMessage(897),
+        );
+        self::assertSame(
+            'Too many attempts — try again in 15 minutes.',
+            RateLimitException::retryAfterMessage(900),
+        );
+    }
+
+    public function testEveryArmSharesTheClientRecognisedPrefix(): void
+    {
+        // The SPA password form lets a sentence starting with this prefix
+        // win over its generic copy (web-ui security-settings-page pins the
+        // literal against this file).
+        self::assertSame('Too many attempts — ', RateLimitException::MESSAGE_PREFIX);
+        foreach ([-5, 0, 1, 45, 60, 61, 900, 3600] as $seconds) {
+            self::assertStringStartsWith(
+                RateLimitException::MESSAGE_PREFIX,
+                RateLimitException::retryAfterMessage($seconds),
+            );
+        }
+    }
 }

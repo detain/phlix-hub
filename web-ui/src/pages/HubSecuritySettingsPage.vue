@@ -42,11 +42,14 @@ function frameOf(e: unknown): FailureFrame {
     if (e instanceof ApiError) {
         const body = e.body as { code?: unknown; error?: unknown; message?: unknown } | null;
         const code = typeof body?.code === 'string' ? body.code : null;
+        // `message` first: on errorFrame() refusals it mirrors `error`
+        // byte-for-byte, and on the 429 it is the exact-wait sentence while
+        // `error` is only the 'Too Many Requests' label (HUB-19).
         const text =
-            typeof body?.error === 'string' && body.error !== ''
-                ? body.error
-                : typeof body?.message === 'string' && body.message !== ''
-                  ? body.message
+            typeof body?.message === 'string' && body.message !== ''
+                ? body.message
+                : typeof body?.error === 'string' && body.error !== ''
+                  ? body.error
                   : e.message || null;
         return { code, text };
     }

@@ -62,7 +62,17 @@ namespace Phlix\Hub\Common\RateLimit;
  */
 final class RateLimitProfiles
 {
-    /** Container id for the login limiter (5 / 900s; shared DB-backed {@see DbRateLimiter}). */
+    /**
+     * Container id for the login limiter (5 / 900s; shared DB-backed {@see DbRateLimiter}).
+     *
+     * The self-service password change spends this same budget, and the
+     * Security page's fallback refusal copy states the default window
+     * ("up to 15 minutes") — `LOGIN_LOCKOUT_WINDOW_SECONDS` in
+     * web-ui/src/utils/passwordForm.ts mirrors the `window` default in
+     * {@see defaults()}, pinned by a cross-language test (HUB-19). An
+     * operator-tuned `rate_limit.login.window` is covered by the server's
+     * exact-wait sentence, which the page prefers whenever it arrives.
+     */
     public const string LOGIN = 'rate_limiter.login';
 
     /** Container id for the reverse-proxy limiter (generous, userId-keyed). */

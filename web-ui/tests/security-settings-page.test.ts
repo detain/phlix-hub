@@ -40,6 +40,8 @@ import {
     PASSWORD_ERROR_SENTENCES,
     MIN_PASSWORD_LENGTH,
     MAX_PASSWORD_LENGTH,
+    LOGIN_LOCKOUT_WINDOW_SECONDS,
+    SERVER_WAIT_SENTENCE_PREFIX,
 } from '../src/utils/passwordForm.ts';
 import type { PasswordForm } from '../src/utils/passwordForm.ts';
 
@@ -61,6 +63,14 @@ const APPLICATION_SOURCE = readFileSync(
 );
 const AUTH_MANAGER_SOURCE = readFileSync(
     fileURLToPath(new URL('../../src/Auth/AuthManager.php', import.meta.url)),
+    'utf8',
+);
+const RATE_LIMIT_EXCEPTION_SOURCE = readFileSync(
+    fileURLToPath(new URL('../../src/Auth/RateLimitException.php', import.meta.url)),
+    'utf8',
+);
+const RATE_LIMIT_PROFILES_SOURCE = readFileSync(
+    fileURLToPath(new URL('../../src/Common/RateLimit/RateLimitProfiles.php', import.meta.url)),
     'utf8',
 );
 const OPENAPI_SOURCE = readFileSync(
@@ -143,12 +153,61 @@ describe('passwordErrorSentence — failure vocabulary', () => {
         );
         assert.equal(
             passwordErrorSentence('rate_limited', 'Too Many Requests', 'fb'),
-            'Too many recent attempts from this network. Wait a few minutes and try again.',
+            'Too many recent attempts from this network. Wait up to 15 minutes and try again.',
         );
         assert.equal(
             passwordErrorSentence('auth.required', 'Unauthorized', 'fb'),
             'Your session expired — sign in again before changing the password.',
         );
+    });
+
+    it('rate_limited: the server exact-wait sentence wins over the generic copy (HUB-19)', () => {
+        assert.equal(
+            passwordErrorSentence('rate_limited', 'Too many attempts — try again in 14 minutes.', 'fb'),
+            'Too many attempts — try again in 14 minutes.',
+        );
+        assert.equal(
+            passwordErrorSentence('rate_limited', 'Too many attempts — you may try again now.', 'fb'),
+            'Too many attempts — you may try again now.',
+        );
+        // The bare machine label (central Application::rateLimitResponse
+        // frame, no `message`) is NOT a wait sentence: the honest ceiling
+        // copy shows instead.
+        for (const label of ['Too Many Requests', '', null]) {
+            assert.equal(
+                passwordErrorSentence('rate_limited', label, 'fb'),
+                PASSWORD_ERROR_SENTENCES.rate_limited,
+            );
+        }
+    });
+
+    it('rate_limited: the generic copy states the real lockout ceiling, never "a few minutes"', () => {
+        const copy = PASSWORD_ERROR_SENTENCES.rate_limited;
+        assert.ok(copy.includes(`up to ${LOGIN_LOCKOUT_WINDOW_SECONDS / 60} minutes`), copy);
+        assert.ok(!/a few minutes/.test(copy), 'vague wait copy is back');
+    });
+
+    it('cross-language tripwire: lockout window mirrors RateLimitProfiles LOGIN default', () => {
+        const login = RATE_LIMIT_PROFILES_SOURCE.match(
+            /self::LOGIN\s*=>\s*\['key' => 'login',\s*'max' => (\d+),\s*'window' => (\d+)\]/,
+        );
+        assert.ok(login, 'RateLimitProfiles LOGIN default row vanished');
+        assert.equal(Number(login[2]), LOGIN_LOCKOUT_WINDOW_SECONDS);
+        assert.equal(LOGIN_LOCKOUT_WINDOW_SECONDS % 60, 0, 'window must read as whole minutes');
+    });
+
+    it('cross-language tripwire: the wait-sentence prefix mirrors RateLimitException::MESSAGE_PREFIX', () => {
+        const prefix = RATE_LIMIT_EXCEPTION_SOURCE.match(/const string MESSAGE_PREFIX = '([^']+)';/);
+        assert.ok(prefix, 'RateLimitException::MESSAGE_PREFIX vanished');
+        assert.equal(prefix[1], SERVER_WAIT_SENTENCE_PREFIX);
+    });
+
+    it('the password 429 frame carries the exact-wait message sentence', () => {
+        const limited = CONTROLLER_SOURCE.match(
+            /private static function rateLimited\(RateLimitException \$e\): Response\s*\{[\s\S]*?\n {4}\}/,
+        );
+        assert.ok(limited, 'UserPasswordController::rateLimited() vanished');
+        assert.match(limited[0], /'message' => RateLimitException::retryAfterMessage\(\$retryAfter\)/);
     });
 
     it('passes through the server sentence for unmapped codes (validation_failed carries registration wording)', () => {
@@ -233,6 +292,14 @@ describe('wire-of-component — hub security page', () => {
 
     it('the page states the passkeys truth instead of rendering a dead form', () => {
         assert.match(PAGE_SOURCE, /doesn’t offer passkey sign-in yet/);
+    });
+
+    it('the page reads `message` before `error` (the 429 sentence lives in message)', () => {
+        const frame = PAGE_CODE.match(/function frameOf\(e: unknown\): FailureFrame \{[\s\S]*?\n\}/);
+        assert.ok(frame, 'frameOf() vanished');
+        const msgAt = frame[0].indexOf('body?.message');
+        const errAt = frame[0].indexOf('body?.error ===');
+        assert.ok(msgAt >= 0 && errAt > msgAt, 'frameOf must prefer body.message over body.error');
     });
 
     it('the page never submits when the pre-flight complains', () => {
