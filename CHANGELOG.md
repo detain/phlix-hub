@@ -12,6 +12,16 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Fixed [HUB-S11] — drop `server_libraries`' redundant standalone `server_id` key (migration 058) — 2026-11-12
+
+- `031` gave `server_libraries` both KEY `idx_server_libraries_server_id (server_id)` and
+  UNIQUE `unique_server_library (server_id, library_id)`; the unique key's leading column
+  serves every `server_id = ?` lookup (heartbeat prune DELETE, ServerInfoHandler COUNT/JOIN,
+  LibrarySharingHandler owner listing) and satisfies the FK, so the standalone key only
+  taxed each heartbeat upsert. `migrations/058_drop_redundant_server_libraries_index.sql`
+  drops it under the 054 replay-safe shape guard (no-op when absent). Pinned by a unit
+  test and a real-InnoDB test (both guard arms, EXPLAIN possible_keys on the unique key).
+
 ### Chore [ui-27-1111] — re-vendor `@phlix/ui` #v0.99.27 + `/app` SPA regen — the device-sessions rows reach the hosted hub SPA (hub leg of the .27 consumer wave) — 2026-11-11
 
 - Pin tarball `v0.99.26` → `v0.99.27` (tag obj c262b681, peel 1f906979 —
