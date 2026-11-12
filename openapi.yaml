@@ -2696,9 +2696,10 @@ paths:
         Policy on the new secret is the registration policy (8-4096 chars).
         A failed proof consumes one unit of the shared per-IP login budget, so
         brute-forcing this endpoint is throttled exactly like repeated bad logins
-        (429 + `Retry-After` once exhausted). A wrong proof is 401
-        `auth.invalid_credentials` — indistinguishable from a failed login, and
-        an unknown account id fails the same way: this endpoint is no oracle.
+        (429 + `Retry-After` + an exact-wait `message` sentence once exhausted).
+        A wrong proof is 401 `auth.invalid_credentials` — indistinguishable from
+        a failed login, and an unknown account id fails the same way: this
+        endpoint is no oracle.
         Existing sessions are not revoked (they ride out the access-token TTL),
         matching the admin reset path.
       x-phlix-middleware: [AuthMiddleware]

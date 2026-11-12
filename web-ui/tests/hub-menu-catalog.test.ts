@@ -110,7 +110,67 @@ describe('hub-local chrome catalog (Minor 50)', () => {
         assert.equal(setLocaleGet('de', 'menu.admin'), 'Administration');
         assert.equal(setLocaleGet('it', 'links.hubSettings'), 'Impostazioni dell’hub');
         assert.equal(setLocaleGet('pt_BR', 'menu.requests'), 'Solicitações');
-        assert.equal(setLocaleGet('ja', 'links.sharedWithMe'), '共有中');
+        assert.equal(setLocaleGet('ja', 'links.incomingShares'), '受信共有');
+    });
+
+    it('[HUB-21] menu labels stay distinct: equal-folded or bare-truncation pairs are red', () => {
+        // A top-bar label that is a bare prefix of a sibling reads as the same
+        // item at a glance ('Compartido' / 'Compartido conmigo', '共有' / '共有中'
+        // were exactly this: outgoing Shares vs incoming Shared-With-Me
+        // collapsing onto one stem). An extension is legitimate only when the
+        // extra words name ANOTHER menu section — 'Federation Shares' is
+        // Federation x Shares, and every locale's federationShares row
+        // composes the same way.
+        for (const locale of SUPPORTED_LOCALES) {
+            const menu = HUB_MESSAGES[locale].menu as Record<string, string>;
+            const folded = Object.entries(menu).map(([key, label]) => [key, label.toLocaleLowerCase(locale.replace('_', '-'))] as const);
+            for (const [keyA, a] of folded) {
+                for (const [keyB, b] of folded) {
+                    if (keyA === keyB) {
+                        continue;
+                    }
+                    assert.notEqual(a, b, `${locale}: menu.${keyA} and menu.${keyB} render the same label`);
+                    if (!b.startsWith(a)) {
+                        continue;
+                    }
+                    const tail = b.slice(a.length);
+                    const qualified = folded.some(([keyC, c]) => keyC !== keyA && keyC !== keyB && tail.includes(c));
+                    assert.ok(
+                        qualified,
+                        `${locale}: menu.${keyB} '${menu[keyB]}' is a bare extension of menu.${keyA} '${menu[keyA]}' — `
+                            + 'the extra words must name another menu section or the two items read as one',
+                    );
+                }
+            }
+        }
+    });
+
+    it('[HUB-21] quick links are distinct per locale and agree with the menu item for the same page', () => {
+        for (const locale of SUPPORTED_LOCALES) {
+            const tag = locale.replace('_', '-');
+            const menu = HUB_MESSAGES[locale].menu as Record<string, string>;
+            const links = HUB_MESSAGES[locale].links as Record<string, string>;
+            const foldedLinks = Object.values(links).map((label) => label.toLocaleLowerCase(tag));
+            assert.equal(new Set(foldedLinks).size, foldedLinks.length, `${locale}: two quick links render the same label`);
+            for (const key of Object.keys(links)) {
+                if (key in menu) {
+                    assert.equal(
+                        links[key].toLocaleLowerCase(tag),
+                        menu[key].toLocaleLowerCase(tag),
+                        `${locale}: links.${key} must name the page exactly as menu.${key} does (case aside)`,
+                    );
+                }
+            }
+        }
+    });
+
+    it('[HUB-21] es/ja byte-pins for the distinct Shares / Shared-With-Me pair', () => {
+        assert.equal(setLocaleGet('es', 'menu.shares'), 'Recursos compartidos');
+        assert.equal(setLocaleGet('es', 'menu.federationShares'), 'Recursos compartidos de la federación');
+        assert.equal(setLocaleGet('es', 'menu.sharedWithMe'), 'Compartido conmigo');
+        assert.equal(setLocaleGet('ja', 'menu.shares'), '共有');
+        assert.equal(setLocaleGet('ja', 'menu.sharedWithMe'), '自分宛ての共有');
+        assert.equal(setLocaleGet('ja', 'links.sharedWithMe'), '自分宛ての共有');
     });
 
     it('lookup fails loud on a malformed or unknown key', () => {

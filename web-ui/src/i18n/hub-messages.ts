@@ -40,6 +40,18 @@
  * partial adoption. The catalog is the seam that follow-up page copy threads
  * through; adding a key is one line per locale.
  *
+ * ## The distinctness law (HUB-21)
+ *
+ * Within a locale no menu label may equal a sibling or be a bare prefix of
+ * one: outgoing Shares and incoming Shared-With-Me once collapsed onto a
+ * single stem (es 'Compartido' / 'Compartido conmigo', ja '共有' / '共有中' —
+ * the latter even reads as "currently sharing", i.e. outgoing). An extension
+ * is legal only when its extra words name another menu section
+ * (federationShares = federation x shares). A quick link names its page
+ * exactly as the menu item for the same page does, case aside. es uses ui's
+ * own "recurso compartido" vocabulary for a share. Pinned by
+ * tests/hub-menu-catalog.test.ts.
+ *
  * @copyright 2026 Joe Huss <detain@interserver.net>
  * @license   MIT
  */
@@ -75,8 +87,8 @@ export const HUB_MESSAGES = {
             myServers: 'Mis servidores',
             search: 'Buscar',
             federation: 'Federación',
-            federationShares: 'Compartido de la federación',
-            shares: 'Compartido',
+            federationShares: 'Recursos compartidos de la federación',
+            shares: 'Recursos compartidos',
             sharedWithMe: 'Compartido conmigo',
             watchParty: 'Fiesta de visionado',
             inviteLinks: 'Enlaces de invitación',
@@ -187,7 +199,7 @@ export const HUB_MESSAGES = {
             federation: 'フェデレーション',
             federationShares: 'フェデレーション共有',
             shares: '共有',
-            sharedWithMe: '共有中',
+            sharedWithMe: '自分宛ての共有',
             watchParty: 'パーティ観賞',
             inviteLinks: '招待リンク',
             requests: 'リクエスト',
@@ -199,7 +211,7 @@ export const HUB_MESSAGES = {
             hubSettings: 'ハブ設定',
             inviteLinks: '招待リンク',
             myServers: 'マイサーバー',
-            sharedWithMe: '共有中',
+            sharedWithMe: '自分宛ての共有',
         },
     },
 } as const;
