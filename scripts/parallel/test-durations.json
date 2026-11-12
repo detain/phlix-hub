@@ -238,6 +238,7 @@
         "tests/Unit/Mcp/PlaybackControlToolTest.php": 0.016,
         "tests/Unit/Mcp/WorkermanStreamTimersTest.php": 0.001,
         "tests/Unit/Migrations/MigrationFileTest.php": 0.06,
+        "tests/Unit/Migrations/RelaySessionsClosedAtIndexMigrationTest.php": 0.002,
         "tests/Unit/Migrations/RelayUserSettingsMigrationTest.php": 0.001,
         "tests/Unit/OAuth/ConsentScreenTest.php": 0.003,
         "tests/Unit/OAuth/OAuthClientTest.php": 0.006,

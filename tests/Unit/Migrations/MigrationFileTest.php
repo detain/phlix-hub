@@ -78,6 +78,7 @@ final class MigrationFileTest extends TestCase
             '054_drop_redundant_relay_user_quota_index.sql',
             '055_auth_token_sessions.sql',
             '056_auth_refresh_grants_expiry.sql',
+            '057_relay_sessions_closed_at_index.sql',
         ];
         $files = array_map('basename', glob(self::MIGRATIONS_DIR . '/*.sql') ?: []);
         sort($files);
