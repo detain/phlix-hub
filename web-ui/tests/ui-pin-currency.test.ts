@@ -42,6 +42,11 @@ describe('ui pin-coordinate currency (M-HUB-12)', () => {
     const sites = [
         { file: '../src/i18n/index.ts', anchor: 'release tag' },
         { file: '../src/components/HubPageHint.vue', anchor: 'vendored' },
+        // HUB-S3: the watch-party trio's package-boundary docblocks (the page
+        // sat at a stale v0.99.13 coordinate under a .27 pin).
+        { file: '../src/pages/HubWatchPartyPage.vue', anchor: 'vendored' },
+        { file: '../src/utils/watchPartyWire.ts', anchor: 'pinned' },
+        { file: '../src/utils/shareLiveness.ts', anchor: 'vendored' },
     ];
 
     for (const site of sites) {

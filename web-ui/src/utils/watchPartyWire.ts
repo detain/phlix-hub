@@ -385,6 +385,34 @@ export function normalizePartyCode(raw: unknown): string | null {
 
 /* ------------------------------------------------------ honest sentences --- */
 
+/*
+ * HOUSE COPY POLICY for every member-visible sentence this module and
+ * HubWatchPartyPage.vue render (review hub HUB-7/60/61/62; pinned by
+ * `tests/watch-party.test.ts` "house copy policy"):
+ *
+ *  - Terms law (README glossary "watch party / group / room"): members read
+ *    *watch party* (short form *party* inside compound labels like "party
+ *    name"); the wire's *group* and the internals' *room* never reach them.
+ *  - Register: no wire vocabulary (frame, catalog, protocol operation, token
+ *    minting) and no ports, EXCEPT the port-8804 unreachable sentence, whose
+ *    "relay on port 8804 is unreachable" clause the README troubleshooting
+ *    heading quotes verbatim — and that clause is now said only when the
+ *    page really dialed :8804 (see {@see relayUnreachableSentence}).
+ *  - Punctuation: typographic apostrophe (U+2019) and ellipsis (U+2026); a
+ *    spaced em dash joins a remedy clause; every curated sentence ends with a
+ *    full stop; no ALL-CAPS emphasis in copy (docblocks may shout, members
+ *    are never shouted at).
+ *  - Honesty: a sentence states only what the hub's code can actually mean —
+ *    each curated code below was re-read against the worker emitter that
+ *    sends it (wire text itself is untouched; the client owns the copy).
+ */
+
+/** Member cap per watch party (SyncPlayRelayWorker::MAX_ROOM_MEMBERS, pinned by test). */
+export const MAX_PARTY_MEMBERS = 50;
+
+/** Queue cap per watch party (SyncPlayRelayWorker::CANONICAL_MAX_QUEUE_SIZE, pinned by test). */
+export const MAX_PARTY_QUEUE = 1000;
+
 /**
  * Mint-time failure sentences, keyed by EXACTLY the codes
  * `ClientRelayTokenController::mint` can answer with (zero-new-wire-codes law:
@@ -396,29 +424,51 @@ export const MINT_FAILURE_SENTENCES: Readonly<Record<string, string>> = Object.f
     'auth.required': 'You are signed out — sign in to your hub account to open a watch party.',
     'server.not_found': 'That server is not registered with this hub. Connect it first under My Servers.',
     'server.not_owned':
-        'This server belongs to another account. A hub watch party spans the devices of the '
-        + 'account that owns the server — friend-to-friend guest access is a hub capability still to come.',
+        'This server belongs to another account. A watch party on this hub spans the devices of the '
+        + 'account that owns the server — guest access for friends is a hub capability still to come.',
 });
 
 /**
  * Canonical relay refusal sentences for the ops THIS page can perform
- * (create/join/list/leave), keyed by the codes the hub actually answers with
- * (docs/websockets.md catalog; `handleCanonicalJoin` /
- * `sendCanonicalError`). Unknown codes fall through to the hub's own message —
- * displayed verbatim with its code, never dressed up.
+ * (create/join/list/leave) plus the host/queue refusals a party member can
+ * meet, keyed by the codes the hub actually answers with (docs/websockets.md
+ * catalog; `handleCanonicalJoin` / `handleCanonicalLeave` /
+ * `sendCanonicalError`). Each sentence was re-derived from its emitter:
+ *
+ *  - `syncplay.group_not_found` — the worker answers it ONLY for a join whose
+ *    `group_id` is missing or blank; a non-empty unknown name AUTO-CREATES a
+ *    new party (`handleCanonicalJoin`), so "no party has that name" was never
+ *    a reachable diagnosis.
+ *  - `syncplay.group_full` — the M-HUB-28 cap; previously uncurated, so a
+ *    full party surfaced as raw "Group is full" plus its code.
+ *  - `INVALID_NEW_HOST` — the worker means "no new-host member id was sent",
+ *    not "that member is absent" (that is `MEMBER_NOT_FOUND`).
+ *  - `HANDLER_ERROR` — the worker's catch-all "Internal relay error".
+ *
+ * Unknown codes fall through to the hub's own message — displayed verbatim
+ * with its code, never dressed up.
  */
 export const WIRE_ERROR_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
-    'syncplay.group_not_found': 'No party is open with that name — type the exact party name to join.',
-    'syncplay.leave_failed': 'You were not in a party — the leave had nothing to do.',
-    'syncplay.queue_limit_exceeded': 'That queue exceeded the relay cap of 1000 items.',
-    UNKNOWN_MESSAGE: 'The relay refused that frame as not part of its documented catalog.',
-    NOT_HOST: 'Only the party host can do that on this relay.',
-    NOT_IN_GROUP: 'You are not in a party right now.',
-    INVALID_NEW_HOST: 'That member is not in this party.',
-    MEMBER_NOT_FOUND: 'That member could not be found in the party.',
-    SAME_HOST: 'That member already hosts the party.',
-    'hub.protocol_unsupported': 'The hub does not support that protocol operation on :8804.',
+    'syncplay.group_not_found': 'The hub did not receive a party name. Type the party name and try again.',
+    'syncplay.group_full': `That watch party is full — it already has ${MAX_PARTY_MEMBERS} members.`,
+    'syncplay.leave_failed': 'You were not in a watch party, so there was nothing to leave.',
+    'syncplay.queue_limit_exceeded':
+        `That queue is too long — a watch party holds at most ${MAX_PARTY_QUEUE.toLocaleString('en-US')} items.`,
+    UNKNOWN_MESSAGE: 'The hub did not recognize that request. Reload the page and try again.',
+    NOT_HOST: 'Only the party host can do that.',
+    NOT_IN_GROUP: 'You are not in a watch party right now.',
+    INVALID_NEW_HOST: 'No member was chosen to take over as host.',
+    MEMBER_NOT_FOUND: 'That member is no longer in this watch party.',
+    SAME_HOST: 'You are already the host.',
+    HANDLER_ERROR: 'The hub hit an internal error handling that request. Try again — if it keeps happening, tell your hub admin.',
+    'hub.protocol_unsupported': 'This hub does not support that request from this version of the page. Reload the page and try again.',
 });
+
+/** Close a hub-supplied fragment as a sentence (house policy: full stop). */
+function asSentence(text: string): string {
+    const trimmed = text.trim();
+    return /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
 
 /** Plain sentence for any wire refusal — known code → curated truth; else raw. */
 export function partyErrorSentence(code: string, message: string): string {
@@ -426,8 +476,8 @@ export function partyErrorSentence(code: string, message: string): string {
     if (curated !== undefined) {
         return curated;
     }
-    const detail = message.trim() === '' ? 'the relay gave no message' : message.trim();
-    return `The relay refused the operation (${code}): ${detail}`;
+    const detail = message.trim() === '' ? 'the hub gave no reason' : message.trim();
+    return asSentence(`The hub refused that request (${code}): ${detail}`);
 }
 
 /** Plain sentence for a mint refusal, whatever shape the ApiError carried. */
@@ -436,6 +486,89 @@ export function mintFailureSentence(code: string | null, fallback: string): stri
         return MINT_FAILURE_SENTENCES[code];
     }
     return fallback;
+}
+
+/**
+ * Activity-feed sentence for a `syncplay_info` message, or null when the page
+ * already said it.
+ *
+ * The worker's two fixed prose shapes speak wire vocabulary
+ * (`<name> joined the group` broadcast to the others on a join;
+ * `<name> left the group` acked ONLY to the leaver) — the wire text stays
+ * untouched (other clients branch on it); this page re-voices it under the
+ * terms law. The leave ack returns null: `leaveParty()` notes the leave at
+ * request time, so rendering the ack too would log the same event twice.
+ * Any other info message passes through verbatim, closed as a sentence.
+ */
+export function activitySentence(message: string): string | null {
+    const text = message.trim();
+    if (text === '') {
+        return null;
+    }
+    if (/ left the group$/.test(text)) {
+        return null;
+    }
+    const joined = / joined the group$/.exec(text);
+    if (joined !== null) {
+        return `${text.slice(0, joined.index)} joined the watch party.`;
+    }
+    return asSentence(text);
+}
+
+/**
+ * Close codes the `:8804` relay sends (SyncPlayRelayWorker::CLOSE_*, pinned
+ * by test; docs/websockets.md "Rejection close codes").
+ */
+export const RELAY_CLOSE_UNAUTHORIZED = 4401;
+export const RELAY_CLOSE_DO_NOT_RETRY = 1011;
+export const RELAY_CLOSE_TRY_AGAIN_LATER = 1013;
+
+/**
+ * Sentence for a relay socket close, from the close code the browser saw.
+ *
+ * Replaces the old token-expiry explanation: the token is checked once, at
+ * the handshake, and this page fetches a fresh one on every connect — so its
+ * lifetime was never why an open party dropped. Browsers often report a
+ * handshake refusal as a bare 1006 (docs "Carrier caveat"), which lands in
+ * the generic arm.
+ */
+export function relayCloseSentence(code: number, wasInParty: boolean): string {
+    switch (code) {
+        case RELAY_CLOSE_UNAUTHORIZED:
+            return 'The hub stopped accepting this device for that server — your sign-in may have ended, '
+                + 'or the server is no longer on your account. Sign in again, then retry.';
+        case RELAY_CLOSE_DO_NOT_RETRY:
+            return 'The hub could not tell which server this watch party belongs to. Pick the server again and retry.';
+        case RELAY_CLOSE_TRY_AGAIN_LATER:
+            return 'The hub closed the connection — it was busy, or this device stopped answering for a while. '
+                + 'Reconnect to carry on.';
+        default:
+            return wasInParty
+                ? 'The connection to the hub closed. If anyone else is still in the watch party, rejoin it by name.'
+                : 'The connection to the hub closed before the watch party opened. Try again.';
+    }
+}
+
+/**
+ * Sentence for a relay socket that never opened, naming the endpoint the page
+ * REALLY dialed. The "relay on port 8804 is unreachable" clause is the
+ * README troubleshooting heading's verbatim quote, so it is kept — but only
+ * for a dial that actually went to :8804; behind the operator `__PHLIX__`
+ * seam the dial goes elsewhere and saying "port 8804" would misdirect.
+ */
+export function relayUnreachableSentence(relayUrl: string): string {
+    let where = 'relay';
+    try {
+        const url = new URL(relayUrl);
+        where = url.port === String(RELAY_PORT)
+            ? `relay on port ${RELAY_PORT}`
+            : `relay at ${url.host}`;
+    } catch {
+        // Unparsable dial: keep the neutral noun rather than invent a place.
+    }
+    return `The hub’s watch-party ${where} is unreachable from this browser. `
+        + 'If you run this hub, check that the relay is running and reachable from the internet; '
+        + 'otherwise ask your hub admin — the page cannot open the connection on its own.';
 }
 
 /* ---------------------------------------------------------- display math --- */
@@ -469,7 +602,12 @@ export function formatPlaybackPosition(ms: number): string {
     return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
 }
 
-/** "just now / Nm ago / Nh ago" from unix SECONDS; null-safe to "unknown". */
+/**
+ * Age from unix SECONDS in the house time register shared with
+ * `shareLiveness.ts`'s `formatLastSeen` ("5 min ago", "2 h ago",
+ * "3 days ago" — the two modules used to say "5m"/"5 min" for the same
+ * fact; the parity is pinned by test). Null-safe to "unknown".
+ */
 export function formatAge(seconds: number | null, nowSeconds: number): string {
     if (seconds === null) {
         return 'unknown';
@@ -478,8 +616,45 @@ export function formatAge(seconds: number | null, nowSeconds: number): string {
     if (delta < 60) {
         return 'just now';
     }
-    if (delta < 3600) {
-        return `${Math.floor(delta / 60)}m ago`;
+    const minutes = Math.floor(delta / 60);
+    if (minutes < 60) {
+        return `${minutes} min ago`;
     }
-    return `${Math.floor(delta / 3600)}h ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 48) {
+        return `${hours} h ago`;
+    }
+    return `${Math.floor(hours / 24)} days ago`;
+}
+
+/**
+ * The "last heard" clause for a server whose relay tunnel is down. A server
+ * the hub never heard from has no age — "last heard from it unknown" was the
+ * old ungrammatical render of exactly that case.
+ */
+export function lastHeardClause(seconds: number | null, nowSeconds: number): string {
+    return seconds === null
+        ? 'the hub has no record of hearing from it'
+        : `the hub last heard from it ${formatAge(seconds, nowSeconds)}`;
+}
+
+/**
+ * Member-facing playback line from the group payload's `playback_state`
+ * (`playing` | `paused` | `stopped`, SyncPlayRelayWorker::$roomStates) and
+ * ms anchor — replaces the raw "playing @ 1:01" wire echo.
+ */
+export function playbackLine(state: string, positionMs: number): string {
+    const at = formatPlaybackPosition(positionMs);
+    switch (state) {
+        case 'playing':
+            return `Playing at ${at}`;
+        case 'paused':
+            return `Paused at ${at}`;
+        case 'stopped':
+            return 'Stopped';
+        default: {
+            const label = state.trim() === '' ? 'Unknown state' : state.charAt(0).toUpperCase() + state.slice(1);
+            return `${label} at ${at}`;
+        }
+    }
 }

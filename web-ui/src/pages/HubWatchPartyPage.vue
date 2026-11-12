@@ -32,8 +32,9 @@
  * All frame parsing/building, link math and refusal sentences live in
  * `utils/watchPartyWire.ts` (pure, node-tested); this file only binds them.
  *
- * Package-boundary posture: the vendored @phlix/ui at the pin (v0.99.13) DOES
- * export the pure dial primitives at its package entry (`buildHubRelayUrl`,
+ * Package-boundary posture: the vendored @phlix/ui at the pin (v0.99.27, the
+ * tag web-ui/package.json names — kept current by tests/ui-pin-currency.test.ts)
+ * DOES export the pure dial primitives at its package entry (`buildHubRelayUrl`,
  * `HUB_SYNC_PLAY_PORT` — dist/index.d.ts:16), but its socket API
  * `openHubRelayConnection` is a store-bound `pending_command`/`play_media`
  * consumer that ignores the `syncplay_group_*` vocabulary — the wrong shape
@@ -41,6 +42,10 @@
  * hub-local in `utils/watchPartyWire.ts`, cross-pinned by tests against BOTH
  * the PHP worker and the ui entry's exports. Only the ui's `SyncPlayPage`
  * component is genuinely unexported at the pin.
+ *
+ * Copy: every member-visible sentence follows the HOUSE COPY POLICY declared
+ * in `utils/watchPartyWire.ts` (terms law, plain register, typographic
+ * punctuation, no shouting) — pinned by tests/watch-party.test.ts.
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { ApiClient, ApiError, errMessage, useAuthStore } from '@phlix/ui';
@@ -56,9 +61,13 @@ import {
     parsePartyFrame,
     partyErrorSentence,
     mintFailureSentence,
+    activitySentence,
+    relayCloseSentence,
+    relayUnreachableSentence,
     sortMembersForDisplay,
-    formatPlaybackPosition,
+    playbackLine,
     formatAge,
+    lastHeardClause,
 } from '../utils/watchPartyWire';
 import type { PartyState, PartySummary } from '../utils/watchPartyWire';
 
@@ -162,7 +171,7 @@ async function loadServers(): Promise<void> {
         // refusal the moment the party cannot be dialed.
         refusal.value =
             'That party link points at a server your account has not registered with this hub. '
-            + 'Hub parties live on the account that owns the media server.';
+            + 'A watch party belongs to the account that owns the media server.';
     }
     phase.value = 'setup';
     if (wanted !== null && match !== null && code !== null) {
@@ -200,13 +209,15 @@ function handleFrame(raw: unknown): void {
                 refusal.value = null;
             }
             break;
-        case 'info':
-            if (frame.message !== '') {
-                noteActivity(frame.message);
+        case 'info': {
+            // Re-voiced under the terms law; the leave ack maps to null —
+            // the local view noted the leave at the moment it was REQUESTED.
+            const sentence = activitySentence(frame.message);
+            if (sentence !== null) {
+                noteActivity(sentence);
             }
-            // The leave ack also lands here — the local view is cleared at the
-            // moment leave is REQUESTED, so the ack is pure announcement.
             break;
+        }
         case 'host_elect': {
             const name =
                 party.value?.members.find((m) => m.id === frame.electedId)?.name ?? frame.electedId;
@@ -226,16 +237,10 @@ function handleFrame(raw: unknown): void {
     }
 }
 
-function socketCloseReason(): string {
-    return yourId.value !== null
-        ? 'The relay closed the connection. The party still exists on the hub — rejoin with its name (relay tokens expire about an hour after being issued).'
-        : 'The relay closed the connection before the party act completed. Relay tokens expire about an hour after being issued — try again.';
-}
-
 function dial(intent: { join?: string; create?: string } = {}): void {
     const serverId = selectedServerId.value;
     if (serverId === '') {
-        refusal.value = 'Pick one of your servers first — a party is hosted on a single media server.';
+        refusal.value = 'Pick one of your servers first — a watch party is hosted on a single media server.';
         return;
     }
     pendingFrames =
@@ -252,7 +257,7 @@ function dial(intent: { join?: string; create?: string } = {}): void {
         try {
             const minted = await http.post<{ token?: unknown }>('/api/v1/me/servers/' + serverId + '/relay-token');
             if (typeof minted.token !== 'string' || minted.token === '') {
-                refusal.value = 'The hub issued an empty relay token — the party cannot be joined.';
+                refusal.value = 'The hub issued an empty relay token, so the watch party cannot be joined. Try again.';
                 phase.value = 'setup';
                 return;
             }
@@ -269,14 +274,18 @@ function dial(intent: { join?: string; create?: string } = {}): void {
 
         phase.value = 'connecting';
         let ws: WebSocket;
+        let relayUrl: string;
         try {
-            ws = new WebSocket(buildRelayUrl(undefined, serverId), relaySubprotocols(token));
+            relayUrl = buildRelayUrl(undefined, serverId);
+            ws = new WebSocket(relayUrl, relaySubprotocols(token));
         } catch {
-            refusal.value = 'This browser could not even build the relay connection — the hub origin is unusable.';
+            refusal.value = 'This browser could not open a connection to the hub’s watch-party relay. Reload the page and try again.';
             phase.value = 'setup';
             return;
         }
+        let opened = false;
         ws.onopen = () => {
+            opened = true;
             for (const frame of pendingFrames) {
                 ws.send(JSON.stringify(frame));
             }
@@ -285,19 +294,20 @@ function dial(intent: { join?: string; create?: string } = {}): void {
         };
         ws.onmessage = (event: MessageEvent) => handleFrame(event.data);
         ws.onerror = () => {
-            refusal.value =
-                'The hub SyncPlay relay on port 8804 is unreachable from this browser. '
-                + 'If you run this hub, check that the relay listener is running and its port is '
-                + 'open; otherwise ask your hub admin — opening a port is an operator action, '
-                + 'not something the page can do for you.';
+            // An error before the open is an unreachable relay; after it, the
+            // close event below carries the real reason.
+            if (!opened) {
+                refusal.value = relayUnreachableSentence(relayUrl);
+            }
         };
-        ws.onclose = () => {
+        ws.onclose = (event: CloseEvent) => {
+            const wasInParty = yourId.value !== null;
             socket = null;
             yourId.value = null;
             party.value = null;
             groups.value = [];
             pendingFrames = [];
-            refusal.value = refusal.value ?? socketCloseReason();
+            refusal.value = refusal.value ?? relayCloseSentence(event.code, wasInParty);
             phase.value = 'closed';
         };
         socket = ws;
@@ -307,7 +317,7 @@ function dial(intent: { join?: string; create?: string } = {}): void {
 function startParty(): void {
     const name = normalizePartyCode(partyName.value);
     if (name === null) {
-        refusal.value = 'Type a party name first — the name IS the join code on this relay.';
+        refusal.value = 'Type a party name first — the name is also the join code.';
         return;
     }
     dial({ create: name });
@@ -316,7 +326,7 @@ function startParty(): void {
 function joinParty(code: string): void {
     const name = normalizePartyCode(code);
     if (name === null) {
-        refusal.value = 'Type the exact party name — an empty name has no room on the relay.';
+        refusal.value = 'Type the party name to join — it must match the name the host chose.';
         return;
     }
     if (joinCode.value !== name) {
@@ -343,7 +353,7 @@ function leaveParty(): void {
             socket.send(JSON.stringify(frameGroupList()));
         }
     }
-    noteActivity('You left the party.');
+    noteActivity('You left the watch party.');
 }
 
 function disconnect(): void {
@@ -383,16 +393,16 @@ function selectLinkField(event: Event): void {
         <header class="wp__head">
             <h1 id="watch-party-heading" class="wp__title">Watch Parties</h1>
             <p class="wp__subtitle">
-                Sync one media server across devices through the hub's SyncPlay relay.
+                Watch in step across your devices — the hub keeps every player in sync.
             </p>
         </header>
 
         <p class="wp__note">
-            A party is hosted on ONE of your servers and spans the signed-in devices of
-            YOUR account — the relay scopes every room to the account that owns the server,
-            so a friend signed in elsewhere cannot join it yet (guest access is a hub
-            capability still to come). The party name IS the join code: this hub issues no
-            secret ticket, and the link below simply carries both.
+            A watch party is hosted on one of your servers and spans the devices signed in to
+            your account. The hub keeps each watch party private to the account that owns the
+            server, so a friend signed in to a different account cannot join yet — guest access
+            is a hub capability still to come. The party name is also the join code: the hub
+            issues no secret ticket, and the party link simply carries the server and the name.
         </p>
 
         <!-- Honest per-state refusals: visible, never tooltips. -->
@@ -401,7 +411,7 @@ function selectLinkField(event: Event): void {
         <!-- Loading / failure / empty-server states with reasons -->
         <p v-if="phase === 'loading-servers'" class="wp__state">Loading your servers…</p>
         <template v-else-if="phase === 'servers-failed'">
-            <p class="wp__state">Your servers could not be listed, so no party can be joined.</p>
+            <p class="wp__state">Your servers could not be listed, so no watch party can be started or joined.</p>
             <button type="button" class="wp__button" @click="loadServers">Retry</button>
         </template>
         <template v-else-if="phase === 'no-servers'">
@@ -418,22 +428,22 @@ function selectLinkField(event: Event): void {
                 <span class="wp__label">Host server</span>
                 <select v-model="selectedServerId" :disabled="busy || inParty">
                     <option v-for="s in servers" :key="s.serverId" :value="s.serverId">
-                        {{ s.serverName }} — {{ s.relayActive ? 'relay online' : s.status }}
+                        {{ s.serverName }} — {{ s.relayActive ? 'connected' : s.status }}
                     </option>
                 </select>
                 <span v-if="selectedServer && !selectedServer.relayActive" class="wp__hint">
-                    This server's relay tunnel is not online right now (the hub last heard from it
-                    {{ formatAge(selectedServer.lastSeenAt, now()) }}). The party forms between
-                    your connected clients on the hub regardless; media ids still resolve against
-                    that server on each device.
+                    This server is not connected to the hub right now
+                    ({{ lastHeardClause(selectedServer.lastSeenAt, now()) }}). You can still start
+                    or join a watch party — the hub keeps your devices in step either way — but each
+                    device still needs to reach the server itself to play anything.
                 </span>
             </label>
             <label class="wp__field">
                 <span class="wp__label">Your name in the party</span>
                 <input v-model="displayName" type="text" maxlength="80" placeholder="Host" :disabled="inParty" />
                 <span class="wp__hint">
-                    Display label only — the relay identifies members by hub-issued ids, not by
-                    this name.
+                    Shown to the other members. It does not have to be unique — the hub tells
+                    members apart on its own.
                 </span>
             </label>
         </div>
@@ -446,7 +456,8 @@ function selectLinkField(event: Event): void {
                     v-model="partyName"
                     type="text"
                     maxlength="80"
-                    placeholder="Party name (this is also the join code)"
+                    placeholder="Friday movie night"
+                    aria-label="Party name"
                     :disabled="busy"
                     @keyup.enter="startParty"
                 />
@@ -454,6 +465,9 @@ function selectLinkField(event: Event): void {
                     {{ busy ? 'Connecting…' : 'Start' }}
                 </button>
             </div>
+            <p class="wp__hint">
+                The name you choose is also the join code for your other devices.
+            </p>
 
             <h2 class="wp__card-title">Join by party name</h2>
             <div class="wp__row">
@@ -461,7 +475,8 @@ function selectLinkField(event: Event): void {
                     v-model="joinCode"
                     type="text"
                     maxlength="80"
-                    placeholder="Exact party name"
+                    placeholder="Party name"
+                    aria-label="Party name to join"
                     :disabled="busy"
                     @keyup.enter="joinParty(joinCode)"
                 />
@@ -469,11 +484,15 @@ function selectLinkField(event: Event): void {
                     {{ busy ? 'Connecting…' : 'Join' }}
                 </button>
             </div>
+            <p class="wp__hint">
+                Type the name exactly as the host did. A name nobody is using starts a new, empty
+                watch party with you as host instead.
+            </p>
 
             <template v-if="phase === 'lobby'">
-                <h2 class="wp__card-title">Your live parties on this server</h2>
+                <h2 class="wp__card-title">Your watch parties on this server</h2>
                 <p v-if="groups.length === 0" class="wp__state">
-                    None right now — a party only exists while at least one client keeps it open.
+                    None right now. A watch party lasts only while at least one device is in it.
                 </p>
                 <ul v-else class="wp__list">
                     <li v-for="g in groups" :key="g.id" class="wp__list-row">
@@ -491,13 +510,12 @@ function selectLinkField(event: Event): void {
         <div v-if="inParty && party" class="wp__card">
             <h2 class="wp__card-title">{{ party.groupName }}</h2>
             <p class="wp__state">
-                {{ isHost ? 'You are hosting.' : 'Guest of the host.' }}
-                You are member {{ yourId ?? '(id pending)' }}.
+                {{ isHost ? 'You are hosting this watch party.' : 'You joined as a guest — the host controls playback.' }}
             </p>
 
             <dl class="wp__details">
-                <div><dt>Playback</dt><dd>{{ party.playbackState }} @ {{ formatPlaybackPosition(party.playbackPositionMs) }}</dd></div>
-                <div><dt>Current media id</dt><dd>{{ party.currentMediaId ?? 'nothing queued' }}</dd></div>
+                <div><dt>Playback</dt><dd>{{ playbackLine(party.playbackState, party.playbackPositionMs) }}</dd></div>
+                <div><dt>Current media</dt><dd>{{ party.currentMediaId ?? 'None selected' }}</dd></div>
                 <div><dt>Queue</dt><dd>{{ party.queueLength }} item{{ party.queueLength === 1 ? '' : 's' }}</dd></div>
                 <div><dt>Started</dt><dd>{{ formatAge(party.createdAt, now()) }}</dd></div>
                 <div><dt>Last activity</dt><dd>{{ formatAge(party.lastActivityAt, now()) }}</dd></div>
@@ -512,7 +530,7 @@ function selectLinkField(event: Event): void {
                 </li>
             </ul>
 
-            <h3 class="wp__card-title">Party link (same-account devices)</h3>
+            <h3 class="wp__card-title">Party link (for your other devices)</h3>
             <div class="wp__row">
                 <input :value="partyLink" type="text" readonly @click="selectLinkField" />
                 <button type="button" class="wp__button" :disabled="!isHost" @click="copyLink">
@@ -520,7 +538,7 @@ function selectLinkField(event: Event): void {
                 </button>
             </div>
             <p v-if="copyUnavailable" class="wp__hint">
-                This browser blocked clipboard writes — the field above is selected; copy it manually.
+                This browser blocked copying. Click the link above to select it, then copy it manually.
             </p>
             <p v-else-if="!isHost" class="wp__hint">
                 Every member of this party holds the same link — the field above is visible to
@@ -541,7 +559,7 @@ function selectLinkField(event: Event): void {
         </div>
 
         <p v-else-if="phase === 'closed'" class="wp__state">
-            Disconnected from the relay.
+            Disconnected from the hub.
             <button type="button" class="wp__button wp__button--small" @click="dial()">Reconnect</button>
         </p>
     </section>

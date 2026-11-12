@@ -76,7 +76,10 @@ export function shareOpenBlockReason(share: HubIncomingShare): string | null {
         return 'This server has not advertised a web address to the hub yet.';
     }
     if (shareLiveness(share) === 'unreachable') {
-        return 'The hub cannot currently reach this server — it is offline or its owner is behind NAT. Try again later.';
+        // Hub vantage: the cause is a likelihood, never a verdict — the hub
+        // cannot tell a powered-off server from one its NAT hides.
+        return 'The hub cannot currently reach this server — it may be offline, or its owner’s '
+            + 'network (NAT) may be blocking connections. Try again later.';
     }
     return null;
 }
@@ -108,7 +111,10 @@ export function livenessBadge(share: HubIncomingShare): LivenessBadge {
 
 /**
  * Human "last seen" clause for the card hint, from the hub's stored heartbeat
- * epoch. Renders nothing suggestive when the signal is absent.
+ * epoch. Renders nothing suggestive when the signal is absent. Its time
+ * register ("5 min ago", "2 h ago", "3 days ago") is the house register the
+ * Watch Party page's `formatAge` (utils/watchPartyWire.ts) shares — parity
+ * pinned by tests/watch-party.test.ts.
  */
 export function formatLastSeen(unixSeconds: number | null | undefined, nowMs: number = Date.now()): string {
     if (typeof unixSeconds !== 'number' || !Number.isFinite(unixSeconds)) {

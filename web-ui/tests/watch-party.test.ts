@@ -65,7 +65,18 @@ import {
     sortMembersForDisplay,
     formatPlaybackPosition,
     formatAge,
+    lastHeardClause,
+    playbackLine,
+    activitySentence,
+    relayCloseSentence,
+    relayUnreachableSentence,
+    MAX_PARTY_MEMBERS,
+    MAX_PARTY_QUEUE,
+    RELAY_CLOSE_UNAUTHORIZED,
+    RELAY_CLOSE_DO_NOT_RETRY,
+    RELAY_CLOSE_TRY_AGAIN_LATER,
 } from '../src/utils/watchPartyWire.ts';
+import { formatLastSeen } from '../src/utils/shareLiveness.ts';
 import type { PartyMember } from '../src/utils/watchPartyWire.ts';
 import {
     HUB_SYNC_PLAY_PORT,
@@ -319,8 +330,9 @@ describe('display math', () => {
     it('age bands from unix seconds', () => {
         assert.equal(formatAge(null, 1000), 'unknown');
         assert.equal(formatAge(999, 1000), 'just now');
-        assert.equal(formatAge(1000 - 120, 1000), '2m ago');
-        assert.equal(formatAge(1000 - 7200, 1000), '2h ago');
+        assert.equal(formatAge(1000 - 120, 1000), '2 min ago');
+        assert.equal(formatAge(1000 - 7200, 1000), '2 h ago');
+        assert.equal(formatAge(1_000_000 - 86_400 * 3, 1_000_000), '3 days ago');
         assert.equal(formatAge(1001, 1000), 'just now', 'future clamp');
     });
 });
@@ -498,5 +510,180 @@ describe('dial law vs the pinned @phlix/ui entry (r2 cross-pins)', () => {
         assert.ok(fn.length > 0, 'leaveParty body found');
         assert.equal((fn.match(/socket\.send/g) ?? []).length, 2);
         assert.equal((fn.match(/readyState === WebSocket\.OPEN/g) ?? []).length, 2);
+    });
+});
+
+/* ================================================ house copy policy ======== */
+/*
+ * HUB-S3 (review hub HUB-7/60/61/62): the watch-party copy surface speaks the
+ * member register declared in watchPartyWire.ts's HOUSE COPY POLICY block.
+ * Every rule below is pinned so a later sentence cannot quietly regress it.
+ */
+
+/** Member-visible text of the page template: tags, attributes and mustache
+ *  expressions removed (mustache string literals are checked separately). */
+function templateText(source: string): string {
+    const start = source.indexOf('<template>');
+    const end = source.lastIndexOf('</template>');
+    assert.ok(start >= 0 && end > start, 'page template found');
+    return source
+        .slice(start + '<template>'.length, end)
+        .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/\{\{[\s\S]*?\}\}/g, ' ')
+        .replace(/<[^>]*>/g, ' ');
+}
+
+/** Sentence-shaped single-quoted literals in the page script + mustaches
+ *  (a space inside = prose; paths and identifiers carry none). */
+function proseLiterals(source: string): string[] {
+    const code = source
+        .replace(/<style[\s\S]*?<\/style>/g, '')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+    return [...code.matchAll(/'([^'\n]*\s[^'\n]*)'/g)].map((m) => m[1]);
+}
+
+const CURATED = [...Object.values(WIRE_ERROR_SENTENCES), ...Object.values(MINT_FAILURE_SENTENCES)];
+
+describe('house copy policy (HUB-S3)', () => {
+    it('terms law: members never read the wire *group* or the internal *room*', () => {
+        const banned = /\b(group|groups|room|rooms)\b/i;
+        for (const sentence of CURATED) {
+            assert.equal(banned.test(sentence), false, `curated sentence leaks wire/internal noun: ${sentence}`);
+        }
+        assert.equal(banned.test(templateText(PAGE_SOURCE)), false, 'template text leaks group/room');
+        for (const literal of proseLiterals(PAGE_SOURCE)) {
+            assert.equal(banned.test(literal), false, `page sentence leaks group/room: ${literal}`);
+        }
+    });
+
+    it('register: no wire vocabulary or ports in curated sentences', () => {
+        for (const sentence of CURATED) {
+            assert.equal(/\b(frame|catalog|protocol operation|mint(ed)?)\b|:?8804/i.test(sentence), false, sentence);
+        }
+    });
+
+    it('punctuation: typographic apostrophes, full stops, no shouting', () => {
+        for (const sentence of CURATED) {
+            assert.equal(sentence.includes("'"), false, `straight apostrophe: ${sentence}`);
+            assert.match(sentence, /\.$/, `curated sentence ends with a full stop: ${sentence}`);
+            assert.equal(/\b[A-Z]{2,}\b/.test(sentence), false, `ALL-CAPS emphasis: ${sentence}`);
+        }
+        const text = templateText(PAGE_SOURCE);
+        assert.equal(text.includes("'"), false, 'template prose uses the typographic apostrophe');
+        assert.equal(/\b(?!NAT\b)[A-Z]{2,}\b/.test(text), false, 'template prose shouts');
+        assert.equal(text.includes('...'), false, 'ellipsis is the single character');
+        for (const literal of proseLiterals(PAGE_SOURCE)) {
+            assert.equal(/\b[A-Z]{2,}\b/.test(literal), false, `page sentence shouts: ${literal}`);
+        }
+    });
+
+    it('caps quoted in copy equal the worker constants', () => {
+        const php = REPO('src/SyncPlay/SyncPlayRelayWorker.php');
+        assert.equal(MAX_PARTY_MEMBERS, Number(php.match(/MAX_ROOM_MEMBERS\s*=\s*(\d+)/)?.[1]));
+        assert.equal(MAX_PARTY_QUEUE, Number(php.match(/CANONICAL_MAX_QUEUE_SIZE\s*=\s*(\d+)/)?.[1]));
+        assert.match(partyErrorSentence('syncplay.group_full', 'Group is full'), new RegExp(`${MAX_PARTY_MEMBERS} members`));
+        assert.match(partyErrorSentence('syncplay.queue_limit_exceeded', ''), /1,000 items/);
+    });
+
+    it('every refusal the worker can send a party member is curated (group_full, HANDLER_ERROR were raw)', () => {
+        const php = REPO('src/SyncPlay/SyncPlayRelayWorker.php');
+        assert.ok(php.includes("'syncplay.group_full'") && php.includes("'HANDLER_ERROR'"));
+        for (const code of ['syncplay.group_full', 'HANDLER_ERROR']) {
+            assert.equal(partyErrorSentence(code, 'raw').includes(code), false, `${code} curated`);
+        }
+    });
+
+    it('group_not_found states what the worker means (blank name), not "no party has that name"', () => {
+        const php = REPO('src/SyncPlay/SyncPlayRelayWorker.php');
+        // The worker's only emitter: a join with a missing/blank group_id.
+        assert.match(php, /!is_string\(\$roomField\) \|\| \$roomField === ''\) \{\s*\$this->sendCanonicalError\(\$client, 'syncplay\.group_not_found'/);
+        const sentence = partyErrorSentence('syncplay.group_not_found', '');
+        assert.match(sentence, /did not receive a party name/);
+        assert.equal(/open with that name/.test(sentence), false);
+    });
+
+    it('INVALID_NEW_HOST matches its emitter ("Missing new host member ID")', () => {
+        const php = REPO('src/SyncPlay/SyncPlayRelayWorker.php');
+        assert.ok(php.includes("'INVALID_NEW_HOST', 'Missing new host member ID'"));
+        assert.match(partyErrorSentence('INVALID_NEW_HOST', ''), /No member was chosen/);
+    });
+
+    it('unknown-code fallback keeps code + hub words and closes the sentence', () => {
+        assert.equal(partyErrorSentence('weird', 'Raw words'), 'The hub refused that request (weird): Raw words.');
+        assert.equal(partyErrorSentence('weird', 'Done.'), 'The hub refused that request (weird): Done.');
+        assert.equal(partyErrorSentence('weird', '  '), 'The hub refused that request (weird): the hub gave no reason.');
+    });
+
+    it('activity feed re-voices the worker prose; the leave ack is not logged twice', () => {
+        const php = REPO('src/SyncPlay/SyncPlayRelayWorker.php');
+        assert.ok(php.includes("$displayName . ' joined the group'"), 'join prose emitter');
+        assert.ok(php.includes("$memberName . ' left the group'"), 'leave-ack prose emitter');
+        assert.equal(activitySentence('Bo joined the group'), 'Bo joined the watch party.');
+        assert.equal(activitySentence('Ana left the group'), null);
+        assert.equal(activitySentence('Something else'), 'Something else.');
+        assert.equal(activitySentence('   '), null);
+        assert.match(PAGE_SOURCE, /activitySentence\(frame\.message\)/);
+        assert.match(PAGE_SOURCE, /noteActivity\('You left the watch party\.'\)/);
+    });
+
+    it('close sentences key on the worker close codes, and no longer blame token expiry', () => {
+        const php = REPO('src/SyncPlay/SyncPlayRelayWorker.php');
+        assert.equal(RELAY_CLOSE_UNAUTHORIZED, Number(php.match(/CLOSE_UNAUTHORIZED\s*=\s*(\d+)/)?.[1]));
+        assert.equal(RELAY_CLOSE_DO_NOT_RETRY, Number(php.match(/CLOSE_DO_NOT_RETRY\s*=\s*(\d+)/)?.[1]));
+        assert.equal(RELAY_CLOSE_TRY_AGAIN_LATER, Number(php.match(/CLOSE_TRY_AGAIN_LATER\s*=\s*(\d+)/)?.[1]));
+        assert.match(relayCloseSentence(4401, true), /Sign in again/);
+        assert.match(relayCloseSentence(1013, true), /Reconnect/);
+        assert.match(relayCloseSentence(1011, false), /Pick the server again/);
+        assert.match(relayCloseSentence(1006, true), /rejoin it by name/);
+        assert.match(relayCloseSentence(1006, false), /before the watch party opened/);
+        assert.match(PAGE_SOURCE, /relayCloseSentence\(event\.code, wasInParty\)/);
+        assert.equal(/expire about an hour/.test(PAGE_SOURCE), false);
+    });
+
+    it('unreachable sentence names the endpoint really dialed; the README quote survives for :8804', () => {
+        const readme = REPO('README.md');
+        const quote = 'relay on port 8804 is unreachable';
+        assert.ok(readme.includes(`"${quote}"`), 'README troubleshooting heading quotes the page');
+        assert.ok(relayUnreachableSentence('ws://hub.lan:8804/syncplay/s').includes(quote));
+        const seam = relayUnreachableSentence('wss://relay.example.com:9443/syncplay/s');
+        assert.ok(seam.includes('relay.example.com:9443'));
+        assert.equal(seam.includes('8804'), false, 'a seam dial never blames port 8804');
+        assert.match(PAGE_SOURCE, /relayUnreachableSentence\(relayUrl\)/);
+    });
+
+    it('time register is shared with shareLiveness (min / h / days)', () => {
+        const now = 1_800_000_000;
+        for (const age of [300, 7200, 86_400 * 3]) {
+            assert.equal(formatLastSeen(now - age, now * 1000), `last seen: ${formatAge(now - age, now)}`);
+        }
+    });
+
+    it('a never-seen server reads as a sentence, not "last heard from it unknown"', () => {
+        assert.equal(lastHeardClause(null, 1000), 'the hub has no record of hearing from it');
+        assert.equal(lastHeardClause(880, 1000), 'the hub last heard from it 2 min ago');
+        assert.match(PAGE_SOURCE, /lastHeardClause\(selectedServer\.lastSeenAt, now\(\)\)/);
+    });
+
+    it('playback reads as words, not the raw wire state with "@"', () => {
+        assert.equal(playbackLine('playing', 61_500), 'Playing at 1:01');
+        assert.equal(playbackLine('paused', 0), 'Paused at 0:00');
+        assert.equal(playbackLine('stopped', 9_000), 'Stopped');
+        assert.equal(playbackLine('buffering', 1_000), 'Buffering at 0:01');
+        assert.equal(PAGE_SOURCE.includes(' @ '), false);
+    });
+
+    it('the page never shows a member their internal hub id', () => {
+        assert.equal(PAGE_SOURCE.includes('You are member'), false);
+        assert.equal(PAGE_SOURCE.includes('(id pending)'), false);
+    });
+
+    it('instructions live in visible hints, not in vanishing placeholders', () => {
+        assert.equal(PAGE_SOURCE.includes('placeholder="Party name (this is also the join code)"'), false);
+        assert.match(PAGE_SOURCE, /A name nobody is using starts a new, empty\s+watch party with you as host instead\./);
+    });
+
+    it('the clipboard-failure hint does not claim a selection the code never made', () => {
+        assert.equal(PAGE_SOURCE.includes('the field above is selected'), false);
     });
 });

@@ -209,11 +209,11 @@ async function shareNow(): Promise<void> {
                     v-model="email"
                     type="email"
                     autocomplete="off"
-                    placeholder="they already have a Phlix account"
+                    placeholder="name@example.com"
                     :disabled="busy"
                 />
                 <span class="slc__hint">
-                    No account there yet? Create an
+                    They need a Phlix account on this hub already. No account there yet? Create an
                     <RouterLink to="/app/invite-links">invite link</RouterLink> instead —
                     it opens the account and the share in one step.
                 </span>
