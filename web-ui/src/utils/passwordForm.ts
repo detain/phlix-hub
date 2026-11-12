@@ -6,7 +6,9 @@
  * before anything else, so a stolen token alone cannot lock the owner out).
  * This module is THE single client truth table for that form: the pre-flight
  * checks (so a hopeless submit never round-trips) and the code→sentence map
- * for every failure frame the endpoint can answer with.
+ * for every failure frame the endpoint can answer with — plus, for each
+ * complaint, WHICH input it is about (HUB-51: the page marks only that input
+ * `aria-invalid`; a form-level refusal marks none).
  *
  * Deliberately dependency-free (Law 3, same posture as shareLiveness.ts):
  * `npm test` (node --test) pins the table without a DOM and without importing
@@ -32,26 +34,68 @@ export interface PasswordForm {
     confirmPassword: string;
 }
 
+/** The three inputs of the form, by model key (the page's `ref` names). */
+export type PasswordField = keyof PasswordForm;
+
 /**
- * Client pre-flight: first complaint as a human sentence, or `null` when the
- * form may be submitted. Order matters — an empty current password must not
- * be hidden behind a confirm-mismatch message.
+ * One pre-flight complaint: the sentence to announce AND the input it is
+ * about, so the page can mark exactly that input `aria-invalid` and point it
+ * at the announced sentence with `aria-describedby` (HUB-51).
  */
-export function validatePasswordForm(form: PasswordForm): string | null {
+export interface PasswordComplaint {
+    field: PasswordField;
+    sentence: string;
+}
+
+/**
+ * Client pre-flight: first complaint (sentence + offending input), or `null`
+ * when the form may be submitted. Order matters — an empty current password
+ * must not be hidden behind a confirm-mismatch message.
+ */
+export function checkPasswordForm(form: PasswordForm): PasswordComplaint | null {
     if (form.currentPassword === '') {
-        return 'Enter your current password.';
+        return { field: 'currentPassword', sentence: 'Enter your current password.' };
     }
     if (form.newPassword === '') {
-        return 'Enter a new password.';
+        return { field: 'newPassword', sentence: 'Enter a new password.' };
     }
     if (form.newPassword.length < MIN_PASSWORD_LENGTH) {
-        return `The new password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
+        return {
+            field: 'newPassword',
+            sentence: `The new password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
+        };
     }
     if (form.newPassword.length > MAX_PASSWORD_LENGTH) {
-        return `The new password must be at most ${MAX_PASSWORD_LENGTH} characters.`;
+        return {
+            field: 'newPassword',
+            sentence: `The new password must be at most ${MAX_PASSWORD_LENGTH} characters.`,
+        };
     }
     if (form.newPassword !== form.confirmPassword) {
-        return 'The new passwords do not match.';
+        return { field: 'confirmPassword', sentence: 'The new passwords do not match.' };
+    }
+    return null;
+}
+
+/** Sentence-only view of {@link checkPasswordForm}. */
+export function validatePasswordForm(form: PasswordForm): string | null {
+    return checkPasswordForm(form)?.sentence ?? null;
+}
+
+/**
+ * Which input a SERVER refusal is about, or `null` for a form-level refusal
+ * (throttle, expired session, missing fields, network) — those mark no input
+ * invalid, because no single input is wrong. A wrong proof is the current
+ * password; a policy rejection (`validation_failed`) is the new one.
+ */
+export const PASSWORD_ERROR_FIELDS: Record<string, PasswordField> = {
+    'auth.invalid_credentials': 'currentPassword',
+    'validation_failed': 'newPassword',
+};
+
+export function passwordErrorField(code: string | null): PasswordField | null {
+    if (code !== null && Object.prototype.hasOwnProperty.call(PASSWORD_ERROR_FIELDS, code)) {
+        return PASSWORD_ERROR_FIELDS[code];
     }
     return null;
 }

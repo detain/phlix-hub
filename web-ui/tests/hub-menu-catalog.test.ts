@@ -145,7 +145,7 @@ describe('hub-local chrome catalog (Minor 50)', () => {
         }
     });
 
-    it('[HUB-21] quick links are distinct per locale and agree with the menu item for the same page', () => {
+    it('[HUB-21] quick links are distinct per locale and agree with the same-key menu item', () => {
         for (const locale of SUPPORTED_LOCALES) {
             const tag = locale.replace('_', '-');
             const menu = HUB_MESSAGES[locale].menu as Record<string, string>;

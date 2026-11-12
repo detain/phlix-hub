@@ -47,9 +47,10 @@
  * single stem (es 'Compartido' / 'Compartido conmigo', ja '共有' / '共有中' —
  * the latter even reads as "currently sharing", i.e. outgoing). An extension
  * is legal only when its extra words name another menu section
- * (federationShares = federation x shares). A quick link names its page
- * exactly as the menu item for the same page does, case aside. es uses ui's
- * own "recurso compartido" vocabulary for a share. Pinned by
+ * (federationShares = federation x shares). A quick link that shares a key
+ * with a menu item names its page exactly as that item does, case aside
+ * (links.incomingShares names /app/federation/shares by direction). es uses
+ * ui's own "recurso compartido" vocabulary for a share. Pinned by
  * tests/hub-menu-catalog.test.ts.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>

@@ -18,9 +18,14 @@
  * drains the shared per-IP login budget). The passkey section states the
  * truth plainly instead of rendering a dead form.
  */
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
 import { ApiClient, ApiError, errMessage } from '@phlix/ui';
-import { validatePasswordForm, passwordErrorSentence } from '../utils/passwordForm';
+import {
+    checkPasswordForm,
+    passwordErrorField,
+    passwordErrorSentence,
+} from '../utils/passwordForm';
+import type { PasswordField } from '../utils/passwordForm';
 
 const http = new ApiClient();
 
@@ -28,9 +33,43 @@ const currentPassword = ref('');
 const newPassword = ref('');
 const confirmPassword = ref('');
 const submitting = ref(false);
-/** null = no message; otherwise the sentence to render under the form. */
-const message = ref<string | null>(null);
-const failed = ref(false);
+/*
+ * Announcement split (HUB-51, house pattern of ShareLibraryCard.vue): a
+ * refusal renders in a role="alert" region (assertive — the owner must hear
+ * the change did NOT happen), the success line in a role="status" region
+ * (polite). One shared role="status" used to carry both, so a wrong current
+ * password was announced as calmly as a success.
+ */
+const refusal = ref<string | null>(null);
+const success = ref<string | null>(null);
+/**
+ * The input the refusal is about (aria-invalid + aria-describedby → the
+ * alert), or null for a form-level refusal that no single input caused.
+ */
+const invalidField = ref<PasswordField | null>(null);
+
+/** id of the refusal sentence, the target of the invalid input's aria-describedby. */
+const REFUSAL_ID = 'security-password-refusal';
+
+// Editing the flagged input withdraws its invalid mark — a corrected value
+// must not keep announcing "invalid". The refusal sentence stays until the
+// next submit. (The post-success field reset never trips this: a success
+// leaves no flagged input.)
+watch([currentPassword, newPassword, confirmPassword], () => {
+    invalidField.value = null;
+});
+
+function invalidAttrs(field: PasswordField): Record<string, string> {
+    return invalidField.value === field
+        ? { 'aria-invalid': 'true', 'aria-describedby': REFUSAL_ID }
+        : {};
+}
+
+function refuse(sentence: string, field: PasswordField | null): void {
+    success.value = null;
+    refusal.value = sentence;
+    invalidField.value = field;
+}
 
 interface FailureFrame {
     code: string | null;
@@ -57,20 +96,20 @@ function frameOf(e: unknown): FailureFrame {
 }
 
 async function submit(): Promise<void> {
-    const complaint = validatePasswordForm({
+    const complaint = checkPasswordForm({
         currentPassword: currentPassword.value,
         newPassword: newPassword.value,
         confirmPassword: confirmPassword.value,
     });
     if (complaint !== null) {
-        failed.value = true;
-        message.value = complaint;
+        refuse(complaint.sentence, complaint.field);
         return;
     }
 
     submitting.value = true;
-    message.value = null;
-    failed.value = false;
+    refusal.value = null;
+    success.value = null;
+    invalidField.value = null;
     try {
         const data = await http.post<{ message?: string }>('/api/v1/me/password', {
             current_password: currentPassword.value,
@@ -84,14 +123,16 @@ async function submit(): Promise<void> {
         // one sentence cannot read two ways depending on which branch fired.
         const apiMessage =
             typeof data.message === 'string' ? data.message : 'Password updated successfully';
-        message.value = apiMessage.endsWith('.') ? apiMessage : `${apiMessage}.`;
+        success.value = apiMessage.endsWith('.') ? apiMessage : `${apiMessage}.`;
     } catch (e) {
-        failed.value = true;
         const { code, text } = frameOf(e);
-        message.value = passwordErrorSentence(
-            code,
-            text,
-            errMessage(e, 'The hub couldn’t change the password. Try again.'),
+        refuse(
+            passwordErrorSentence(
+                code,
+                text,
+                errMessage(e, 'The hub couldn’t change the password. Try again.'),
+            ),
+            passwordErrorField(code),
         );
     } finally {
         submitting.value = false;
@@ -122,6 +163,7 @@ async function submit(): Promise<void> {
                     type="password"
                     autocomplete="current-password"
                     required
+                    v-bind="invalidAttrs('currentPassword')"
                 />
             </label>
             <label class="sec__field">
@@ -133,6 +175,7 @@ async function submit(): Promise<void> {
                     minlength="8"
                     maxlength="4096"
                     required
+                    v-bind="invalidAttrs('newPassword')"
                 />
             </label>
             <label class="sec__field">
@@ -144,11 +187,15 @@ async function submit(): Promise<void> {
                     minlength="8"
                     maxlength="4096"
                     required
+                    v-bind="invalidAttrs('confirmPassword')"
                 />
             </label>
 
-            <p v-if="message" class="sec__status" :class="{ 'sec__status--error': failed }" role="status">
-                {{ message }}
+            <p v-if="refusal" :id="REFUSAL_ID" class="sec__status sec__status--error" role="alert">
+                {{ refusal }}
+            </p>
+            <p v-if="success" class="sec__status" role="status">
+                {{ success }}
             </p>
 
             <div class="sec__actions">

@@ -20,6 +20,12 @@
  *     member-auth group (never admin), and the SPA constant names mirror the
  *     PHP constants (cross-language drift tripwire).
  *
+ *  3. A11Y ROLES (HUB-51): a refusal is announced assertively (role="alert"),
+ *     a success politely (role="status") — never one shared region; the input
+ *     a refusal is about (pre-flight field, or server code → field) carries
+ *     aria-invalid + aria-describedby → the alert; form-level refusals mark
+ *     no input.
+ *
  * Mutation teeth: re-adding the vendored import, dropping the menu entry,
  * swapping the POST path, or moving the route to the admin group each reddens
  * a NAMED assertion below.
@@ -35,8 +41,11 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import {
+    checkPasswordForm,
     validatePasswordForm,
+    passwordErrorField,
     passwordErrorSentence,
+    PASSWORD_ERROR_FIELDS,
     PASSWORD_ERROR_SENTENCES,
     MIN_PASSWORD_LENGTH,
     MAX_PASSWORD_LENGTH,
@@ -303,7 +312,106 @@ describe('wire-of-component — hub security page', () => {
     });
 
     it('the page never submits when the pre-flight complains', () => {
-        assert.match(PAGE_SOURCE, /validatePasswordForm\(\{[\s\S]*?\}\);[\s\S]*?complaint !== null[\s\S]*?return;/);
+        assert.match(PAGE_SOURCE, /checkPasswordForm\(\{[\s\S]*?\}\);[\s\S]*?complaint !== null[\s\S]*?return;/);
+    });
+});
+
+describe('[HUB-51] password-form a11y roles — field truth table', () => {
+    const cases: Array<[string, Partial<PasswordForm>, string]> = [
+        ['empty current', { currentPassword: '', newPassword: 'x', confirmPassword: 'y' }, 'currentPassword'],
+        ['empty new', { newPassword: '', confirmPassword: '' }, 'newPassword'],
+        ['too short', { newPassword: 'short', confirmPassword: 'short' }, 'newPassword'],
+        [
+            'too long',
+            { newPassword: 'a'.repeat(MAX_PASSWORD_LENGTH + 1), confirmPassword: 'a'.repeat(MAX_PASSWORD_LENGTH + 1) },
+            'newPassword',
+        ],
+        ['mismatch', { confirmPassword: 'different-secret' }, 'confirmPassword'],
+    ];
+    for (const [name, overrides, field] of cases) {
+        it(`pre-flight "${name}" names the ${field} input`, () => {
+            const complaint = checkPasswordForm(form(overrides));
+            assert.ok(complaint, `${name} must complain`);
+            assert.equal(complaint.field, field);
+            // The sentence-only view is the same truth, never a second table.
+            assert.equal(validatePasswordForm(form(overrides)), complaint.sentence);
+        });
+    }
+
+    it('a well-formed pair names no input', () => {
+        assert.equal(checkPasswordForm(form()), null);
+    });
+
+    it('server refusals mark the input they are about, form-level ones mark none', () => {
+        assert.equal(passwordErrorField('auth.invalid_credentials'), 'currentPassword');
+        assert.equal(passwordErrorField('validation_failed'), 'newPassword');
+        for (const code of ['rate_limited', 'auth.required', 'auth.missing_credentials', 'toString', null]) {
+            assert.equal(passwordErrorField(code), null, `${String(code)} is form-level`);
+        }
+    });
+
+    it('cross-language tripwire: every field-mapped code is one the controller emits', () => {
+        const controllerCodes = new Set(
+            [...CONTROLLER_SOURCE.matchAll(/errorFrame\(\d+, '([a-z_.]+)'/g)].map((m) => m[1]),
+        );
+        for (const code of Object.keys(PASSWORD_ERROR_FIELDS)) {
+            assert.ok(controllerCodes.has(code), `SPA marks an input for ${code}, which the controller never emits`);
+        }
+    });
+});
+
+describe('[HUB-51] password-form a11y roles — wire-of-component', () => {
+    it('a refusal renders in a role="alert" region carrying the describedby id', () => {
+        assert.match(
+            PAGE_SOURCE,
+            /<p v-if="refusal" :id="REFUSAL_ID" class="sec__status sec__status--error" role="alert">\s*\{\{ refusal \}\}/,
+        );
+    });
+
+    it('success renders in its own role="status" region', () => {
+        assert.match(PAGE_SOURCE, /<p v-if="success" class="sec__status" role="status">\s*\{\{ success \}\}/);
+    });
+
+    it('no single region announces both outcomes (the old shared role="status" split)', () => {
+        const regions = [...PAGE_SOURCE.matchAll(/<p [^>]*role="(alert|status)"[^>]*>\s*\{\{ (\w+) \}\}/g)];
+        assert.deepEqual(
+            regions.map((m) => [m[1], m[2]]),
+            [
+                ['alert', 'refusal'],
+                ['status', 'success'],
+            ],
+        );
+        assert.ok(!/sec__status--error': failed/.test(PAGE_CODE), 'the role-agnostic failed toggle is back');
+    });
+
+    it('every input binds its invalid state', () => {
+        for (const field of ['currentPassword', 'newPassword', 'confirmPassword']) {
+            const input = PAGE_SOURCE.match(new RegExp(`<input\\s+v-model="${field}"[\\s\\S]*?/>`));
+            assert.ok(input, `${field} input vanished`);
+            assert.ok(
+                input[0].includes(`v-bind="invalidAttrs('${field}')"`),
+                `${field} input does not bind its own aria-invalid state`,
+            );
+        }
+    });
+
+    it('invalidAttrs marks aria-invalid and points aria-describedby at the alert', () => {
+        const fn = PAGE_CODE.match(/function invalidAttrs\(field: PasswordField\)[\s\S]*?\n\}/);
+        assert.ok(fn, 'invalidAttrs() vanished');
+        assert.match(fn[0], /invalidField\.value === field/);
+        assert.match(fn[0], /'aria-invalid': 'true', 'aria-describedby': REFUSAL_ID/);
+    });
+
+    it('both refusal paths name their input: pre-flight field and server code field', () => {
+        assert.match(PAGE_CODE, /refuse\(complaint\.sentence, complaint\.field\)/);
+        assert.match(PAGE_CODE, /passwordErrorField\(code\),\s*\);/);
+    });
+
+    it('editing a field withdraws the invalid mark', () => {
+        assert.match(
+            PAGE_CODE,
+            /watch\(\[currentPassword, newPassword, confirmPassword\], \(\) => \{\s*invalidField\.value = null;/,
+        );
     });
 });
 
