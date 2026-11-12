@@ -518,13 +518,22 @@ final class HubRestartControllerTest extends TestCase
         // timers REPEAT by default, and a repeating reload signal would cycle
         // the workers forever).
         $oneShot = '/Timer::add\(\s*self::SIGNAL_DELAY_SECONDS,'
-            . '\s*fn \(\): bool => posix_kill\(\$pid, self::RELOAD_SIGNAL\),'
+            . '\s*function \(\) use \(\$pid\): bool \{'
+            . '\s*self::resetOpcacheIfEnabled\(\);'
+            . '\s*return posix_kill\(\$pid, self::RELOAD_SIGNAL\);\s*\},'
             . '\s*\[\],\s*false,\s*\)/';
         self::assertMatchesRegularExpression(
             $oneShot,
             $source,
             'scheduleGracefulReload must stay a ONE-SHOT deferred Timer::add '
             . '(ack flushes first, no repeating reload)',
+        );
+
+        // HUB-67: opcache is reset only when the status says it is enabled.
+        self::assertMatchesRegularExpression(
+            '/opcache_get_status\(false\).*opcache_enabled.*opcache_reset\(\)/s',
+            $source,
+            'opcache_reset() must be gated on opcache_get_status() showing enabled',
         );
 
         // The probe stays a no-delivery signal-0 check.

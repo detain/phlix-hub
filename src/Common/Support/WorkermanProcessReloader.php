@@ -73,9 +73,33 @@ final class WorkermanProcessReloader implements ProcessReloaderInterface
         // workers forever.
         Timer::add(
             self::SIGNAL_DELAY_SECONDS,
-            fn (): bool => posix_kill($pid, self::RELOAD_SIGNAL),
+            function () use ($pid): bool {
+                self::resetOpcacheIfEnabled();
+
+                return posix_kill($pid, self::RELOAD_SIGNAL);
+            },
             [],
             false,
         );
+    }
+
+    /**
+     * Drop the compiled-script cache before the reload signal (HUB-67).
+     * docker/php.ini ships opcache.validate_timestamps=0, so without this a
+     * graceful reload re-forks workers that still serve the OLD cached
+     * bytecode after a deploy. The opcache SHM segment is shared across the
+     * forked process tree, so resetting from this worker reaches the master
+     * and every future worker. Only runs when opcache is actually enabled
+     * (CLI SAPI needs opcache.enable_cli); otherwise it is a no-op.
+     */
+    private static function resetOpcacheIfEnabled(): void
+    {
+        if (!function_exists('opcache_get_status') || !function_exists('opcache_reset')) {
+            return;
+        }
+        $status = @opcache_get_status(false);
+        if (is_array($status) && ($status['opcache_enabled'] ?? false) === true) {
+            @opcache_reset();
+        }
     }
 }
