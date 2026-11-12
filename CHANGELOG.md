@@ -12,6 +12,16 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Fixed [HUB-S25] — update-marker fetcher verifies TLS (HUB-11) — 2026-11-12
+
+- `AsyncVersionMarkerFetcher` now builds its `workerman/http-client` with a strict ssl
+  context (`verify_peer`/`verify_peer_name` on, `allow_self_signed` off), overriding the
+  vendor pool's permissive default; pinned by a unit test on the merged pool context.
+
+### Added [HUB-S23] — `/health` reports a `channel_broker` key (HUB-28) — 2026-11-12
+
+- The `/health` payload gained a `channel_broker` key (HUB-S23 / HUB-28).
+
 ### Fixed [HUB-S11] — drop `server_libraries`' redundant standalone `server_id` key (migration 058) — 2026-11-12
 
 - `031` gave `server_libraries` both KEY `idx_server_libraries_server_id (server_id)` and

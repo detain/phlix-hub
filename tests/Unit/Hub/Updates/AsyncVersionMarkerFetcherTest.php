@@ -253,6 +253,38 @@ final class AsyncVersionMarkerFetcherTest extends TestCase
     }
 
     /**
+     * HUB-11: the lazily built client must carry a STRICT ssl context, which
+     * the vendor pool merges over its permissive (verify_peer=false) default.
+     */
+    public function testTheLazyClientCarriesAStrictTlsContext(): void
+    {
+        $fetcher  = new AsyncVersionMarkerFetcher(5);
+        $property = (new ReflectionClass(AsyncVersionMarkerFetcher::class))->getProperty('client');
+        $property->setAccessible(true);
+        $fetcher->fetch('not-a-url', static function (?string $body, ?string $error): void {
+        });
+        $client = $property->getValue($fetcher);
+        self::assertInstanceOf(Client::class, $client);
+
+        $clientRef = new ReflectionClass(Client::class);
+        $pool      = $clientRef->getProperty('_connectionPool')->getValue($client);
+        self::assertIsObject($pool);
+        $options = (new ReflectionClass($pool))->getProperty('options')->getValue($pool);
+        self::assertIsArray($options);
+        self::assertIsArray($options['context'] ?? null);
+
+        // Mirror ConnectionPool::create(): array_merge(default, options['context']).
+        $default = ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false, 'allow_self_signed' => true]];
+        $merged  = array_merge($default, $options['context']);
+
+        $ssl = $merged['ssl'];
+        self::assertIsArray($ssl);
+        self::assertTrue($ssl['verify_peer']);
+        self::assertTrue($ssl['verify_peer_name']);
+        self::assertFalse($ssl['allow_self_signed']);
+    }
+
+    /**
      * The REAL vendor error path, pinned against the real {@see Client}.
      *
      * MEASURED, not assumed: `Client::request()` catches a synchronous failure

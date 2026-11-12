@@ -90,6 +90,21 @@ final class AsyncVersionMarkerFetcher implements VersionMarkerFetcherInterface
      */
     private const GITHUB_RAW_ACCEPT = 'application/vnd.github.raw';
 
+    /**
+     * Strict TLS context merged over the vendor pool's default (which is
+     * `verify_peer=false`, `verify_peer_name=false`, `allow_self_signed=true`;
+     * `ConnectionPool::create()` array_merge()s `options['context']` over it).
+     * Same strict-verify law as the federation peer client (HUB-11).
+     */
+    private const STRICT_TLS_CONTEXT = [
+        'ssl' => [
+            'verify_peer'       => true,
+            'verify_peer_name'  => true,
+            'allow_self_signed' => false,
+            'SNI_enabled'       => true,
+        ],
+    ];
+
     /** Lazily-created shared HTTP client (one per process). */
     private ?Client $client = null;
 
@@ -136,7 +151,10 @@ final class AsyncVersionMarkerFetcher implements VersionMarkerFetcherInterface
         };
 
         try {
-            $client = $this->client ??= new Client(['timeout' => $this->timeoutSeconds]);
+            $client = $this->client ??= new Client([
+                'timeout' => $this->timeoutSeconds,
+                'context' => self::STRICT_TLS_CONTEXT,
+            ]);
             $this->requestMarker($client, $url, $complete);
         } catch (Throwable $e) {
             $complete(null, $e->getMessage());
