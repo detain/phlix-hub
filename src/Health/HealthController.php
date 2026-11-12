@@ -65,9 +65,39 @@ final class HealthController
      * @param MaintenanceHeartbeat|null $maintenance The maintenance worker's liveness record. Nullable so
      *                                               a bare `new HealthController()` still answers, which is
      *                                               what several boot paths and tests do.
+     * @param (\Closure(): bool)|null $channelProbe HUB-28: answers "is the cross-process channel broker
+     *                                               accepting connections?". Null (a bare controller) omits
+     *                                               the `channel_broker` key entirely. Informational only:
+     *                                               it never flips `status`, same precedent as
+     *                                               `maintenance.status = degraded`.
      */
-    public function __construct(private readonly ?MaintenanceHeartbeat $maintenance = null)
+    public function __construct(
+        private readonly ?MaintenanceHeartbeat $maintenance = null,
+        private readonly ?\Closure $channelProbe = null,
+    ) {
+    }
+
+    /**
+     * TCP-connect probe for the channel broker on loopback (HUB-28).
+     *
+     * Application only logs a broker bind failure; without this the hub
+     * answers `ok` while every relay-proxy round trip times out.
+     *
+     * @return \Closure(): bool
+     */
+    public static function tcpChannelProbe(string $host, int $port): \Closure
     {
+        return static function () use ($host, $port): bool {
+            $errno = 0;
+            $errstr = '';
+            $sock = @stream_socket_client("tcp://{$host}:{$port}", $errno, $errstr, 0.25);
+            if ($sock === false) {
+                return false;
+            }
+            fclose($sock);
+
+            return true;
+        };
     }
 
     /**
@@ -79,6 +109,7 @@ final class HealthController
      *     version: string,
      *     phlixShared: string,
      *     timestamp: int,
+     *     channel_broker?: string,
      *     maintenance: array{
      *         status: string,
      *         reason: string,
@@ -107,7 +138,7 @@ final class HealthController
             'stale_after_seconds' => MaintenanceHeartbeat::DEFAULT_STALE_AFTER_SECONDS,
         ];
 
-        return [
+        $payload = [
             'status' => MaintenanceHeartbeat::isProbeFailure($maintenance) ? 'unhealthy' : 'ok',
             'service' => 'phlix-hub',
             'version' => Version::VERSION,
@@ -115,6 +146,17 @@ final class HealthController
             'timestamp' => time(),
             'maintenance' => $maintenance,
         ];
+
+        if ($this->channelProbe !== null) {
+            try {
+                $up = ($this->channelProbe)();
+            } catch (\Throwable) {
+                $up = false;
+            }
+            $payload['channel_broker'] = $up ? 'up' : 'down';
+        }
+
+        return $payload;
     }
 
     /**

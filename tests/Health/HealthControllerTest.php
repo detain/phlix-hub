@@ -49,6 +49,36 @@ final class HealthControllerTest extends TestCase
         parent::tearDown();
     }
 
+    public function testChannelBrokerKeyOmittedWithoutProbe(): void
+    {
+        self::assertArrayNotHasKey('channel_broker', (new HealthController())());
+    }
+
+    public function testChannelBrokerUpAndDownNeverFlipStatus(): void
+    {
+        $up = (new HealthController(null, static fn (): bool => true))();
+        $down = (new HealthController(null, static fn (): bool => false))();
+        $boom = (new HealthController(null, static function (): bool {
+            throw new RuntimeException('x');
+        }))();
+
+        self::assertSame('up', ($up['channel_broker'] ?? null));
+        self::assertSame('down', ($down['channel_broker'] ?? null));
+        self::assertSame('down', ($boom['channel_broker'] ?? null));
+        self::assertSame($up['status'], $down['status']);
+    }
+
+    public function testTcpChannelProbeDetectsListenerAndRefusal(): void
+    {
+        $srv = stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
+        self::assertNotFalse($srv);
+        $port = (int) substr((string) strrchr((string) stream_socket_get_name($srv, false), ':'), 1);
+
+        self::assertTrue(HealthController::tcpChannelProbe('127.0.0.1', $port)());
+        fclose($srv);
+        self::assertFalse(HealthController::tcpChannelProbe('127.0.0.1', $port)());
+    }
+
     public function testInvokeReturnsOkStatus(): void
     {
         $payload = (new HealthController())();

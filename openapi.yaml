@@ -5668,6 +5668,12 @@ components:
         timestamp:
           type: integer
           description: "Unix seconds."
+        channel_broker:
+          type: string
+          enum: [up, down]
+          description: |-
+            Whether the cross-process channel broker (loopback `channel_port`) accepts
+            connections. Informational: `down` never changes `status` or the HTTP code.
         maintenance:
           $ref: "#/components/schemas/MaintenanceHealth"
     MaintenanceHealth:

@@ -21,6 +21,7 @@ use Phlix\Hub\Hub\CookiePolicy;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Health\HealthController;
+use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Health\MaintenanceHeartbeat;
 use Phlix\Hub\Http\Controllers\AuthController;
 use Phlix\Hub\Http\Controllers\MeController;
@@ -63,8 +64,17 @@ final class HttpServicesProvider implements ServiceProviderInterface
             // reads like working code.
             HealthController::class => factory(static function (
                 MaintenanceHeartbeat $maintenance,
-            ): HealthController {
-                return new HealthController($maintenance);
+            ) use ($appConfig): HealthController {
+                // HUB-28: surface the channel broker's bind health.
+                $portRaw = $appConfig['channel_port'] ?? RelayProxyProtocol::DEFAULT_CHANNEL_PORT;
+                $port = is_int($portRaw)
+                    ? $portRaw
+                    : (int) (is_numeric($portRaw) ? $portRaw : RelayProxyProtocol::DEFAULT_CHANNEL_PORT);
+
+                return new HealthController(
+                    $maintenance,
+                    HealthController::tcpChannelProbe('127.0.0.1', $port),
+                );
             })->parameter('maintenance', get(MaintenanceHeartbeat::class)),
 
             // CP-011: the ONE auth-cookie policy instance. Singleton so the
