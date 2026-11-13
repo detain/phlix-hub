@@ -49,7 +49,7 @@ and `:8804`, `Phlix\Hub\Relay\InboundHandshakeGuard` closes a connection that
 completed TCP (and TLS, if configured) but never sent its HTTP upgrade request:
 after `relay.ws_handshake_timeout_seconds` (`HUB_RELAY_WS_HANDSHAKE_TIMEOUT_SECONDS`,
 default 30 s — healthy upgrades land <1 s and the worst legitimate case, a TCP
-retransmit storm, reaches only ≈ 9-11 s, while stall-class sockets have been
+retransmit storm, reaches only ≈ 9–11 s, while stall-class sockets have been
 observed held for MINUTES; `0` disables) one WARN line carries `reason: "handshake_timeout"`,
 the `listener`, `remote_ip` and the byte counts, and the socket is closed. No WS
 close frame is emitted — a pre-`101` close frame would be HTTP garbage on the
@@ -75,12 +75,12 @@ several frames.
 The leading 4-byte field is **not** a sequence or ack counter. The tunnel is a
 single reliable WS/TCP stream, so the field is used for multiplexing instead:
 
-* For client-scoped frames it is a **channel id**, one per concurrent client, so
+- For client-scoped frames it is a **channel id**, one per concurrent client, so
   many clients share one tunnel.
-* For `HTTP_REQUEST` / `HTTP_RESPONSE` / `HTTP_CANCEL` it is a **request id**
+- For `HTTP_REQUEST` / `HTTP_RESPONSE` / `HTTP_CANCEL` it is a **request id**
   allocated by the hub. These never collide with channel ids because they live on
   different frame types.
-* Tunnel-scoped frames (handshake, heartbeat, errors) use channel **0**.
+- Tunnel-scoped frames (handshake, heartbeat, errors) use channel **0**.
 
 ### Frame type catalog
 
@@ -145,8 +145,8 @@ TLS. This is the listen-side mirror of the server's `PHLIX_RELAY_REQUIRE_TLS`
 dial-side knob (phlix-server `config/relay.php`); the warn-only default is
 deliberate estate posture — flip both sides in one wave, never one alone.
 Configured material gets a pre-bind boot decision (audit §3.2,
-wildcard-rotation cure): a **missing** PEM still fails fast — boot aborts
-loudly naming the failing env var and both exits out; an exists-but-
+wildcard-rotation cure): a **missing** PEM still fails fast: boot aborts
+loudly, naming the failing env var and both ways out; an exists-but-
 **unreadable** PEM now degrades to a loud boot WARNING instead, because
 OpenSSL re-reads the PEMs per connection and one bad rotation must not stop
 the whole hub from booting its other surfaces. From there a
