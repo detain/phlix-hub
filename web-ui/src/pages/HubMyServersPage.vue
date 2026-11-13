@@ -7,11 +7,14 @@
  * claim time needs to know a quota exists and who controls it).
  *
  * M-HUB-04 law: the hint must NOT quote a refusal string the vendored
- * @phlix/ui bundle renders — that copy lives in the pinned tag (and today
- * the bundle labels a quota 409 with its generic already-claimed wording,
- * because its code table lacks `quota.exceeded`). Quoting server-side wire
- * text here promised a message members never saw. Describe the CAUSE
- * instead; that wording stays true before and after the ui mapping lands.
+ * @phlix/ui bundle renders — that copy lives in the pinned tag. As of the
+ * current pin the bundle's code table DOES carry `quota.exceeded` (generic
+ * "reached a quota limit for this account or server" wording, localized), so
+ * a quota 409 is no longer labelled with the already-claimed copy. The law
+ * still stands: describe the CAUSE here rather than echoing wire text, so the
+ * hint stays true whatever the pinned ui wording is. A future lane MAY
+ * localize the quota refusal hub-side (naming `server.max_servers_per_user`)
+ * if the generic ui copy proves too vague for claim-time refusals.
  */
 import { MyServersPage } from '@phlix/ui';
 import HubPageHint from '../components/HubPageHint.vue';
