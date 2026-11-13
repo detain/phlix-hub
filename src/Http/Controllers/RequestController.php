@@ -98,7 +98,7 @@ final class RequestController
             return (new Response())->status(400)->json([
                 'error' => 'Bad Request',
                 'code'  => 'invalid_tmdb_id',
-                'message' => 'tmdb_id must be a positive integer',
+                'message' => 'tmdb_id must be a positive integer.',
             ]);
         }
 
@@ -106,7 +106,7 @@ final class RequestController
             return (new Response())->status(400)->json([
                 'error' => 'Bad Request',
                 'code'  => 'missing_title',
-                'message' => 'title is required',
+                'message' => 'title is required.',
             ]);
         }
 

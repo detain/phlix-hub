@@ -381,4 +381,58 @@ final class PhlixMySQLConnectionTest extends TestCase
             'second coroutine must serialise AFTER the first commits, never interleave',
         );
     }
+
+    /**
+     * HUB-2: a "server has gone away" (2006) inside an open transaction must
+     * NOT be auto-retried (the reconnect would run the statement outside the
+     * lost transaction); it poisons the transaction, so a swallowed exception
+     * cannot commit, and the caller's rollback clears the poison.
+     */
+    public function testGoneAwayInsideTransactionIsNotRetriedAndPoisonsCommit(): void
+    {
+        $conn = TransactionLockConnection::create();
+        $this->assertTrue($conn->beginTrans());
+
+        $pdo = new class ('sqlite::memory:') extends \PDO {
+            public int $prepares = 0;
+
+            /**
+             * @param array<int, mixed> $options
+             */
+            #[\ReturnTypeWillChange]
+            public function prepare(string $query, array $options = [])
+            {
+                $this->prepares++;
+                $e = new \PDOException('MySQL server has gone away');
+                $e->errorInfo = ['HY000', 2006, 'MySQL server has gone away'];
+                throw $e;
+            }
+        };
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $ref = new ReflectionClass(PhlixMySQLConnection::class);
+        $pdoProp = $ref->getProperty('pdo');
+        $pdoProp->setAccessible(true);
+        $pdoProp->setValue($conn, $pdo);
+
+        $exec = $ref->getMethod('execute');
+        $exec->setAccessible(true);
+        try {
+            $exec->invoke($conn, 'UPDATE t SET a = 1', []);
+            $this->fail('expected PDOException');
+        } catch (\PDOException $e) {
+            $this->assertStringContainsString('not retried', $e->getMessage());
+        }
+
+        $this->assertSame(1, $pdo->prepares, 'no auto-retry inside a transaction');
+        $this->assertFalse($this->readProp($conn, 'txOpen'));
+        $this->assertTrue($this->readProp($conn, 'txPoisoned'));
+
+        try {
+            $conn->commitTrans();
+            $this->fail('commit must refuse a poisoned transaction');
+        } catch (\PDOException $e) {
+            $this->assertStringContainsString('refusing to commit', $e->getMessage());
+        }
+        $this->assertFalse($this->readProp($conn, 'txPoisoned'));
+    }
 }

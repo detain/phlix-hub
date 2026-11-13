@@ -183,7 +183,7 @@ final class ServerClaimController
         if ($claimId === '') {
             // Required part of the REQUEST missing → registry invalid_request.
             return (new Response())->error(400, 'invalid_request', 'Bad Request', [
-                'message' => 'claim id is required',
+                'message' => 'claim id is required.',
             ]);
         }
 
@@ -215,7 +215,7 @@ final class ServerClaimController
         if ($claimCode === '') {
             // Required part of the REQUEST missing → registry invalid_request.
             return (new Response())->error(400, 'invalid_request', 'Bad Request', [
-                'message' => 'claim_code is required',
+                'message' => 'claim_code is required.',
             ]);
         }
 
@@ -348,7 +348,7 @@ final class ServerClaimController
                 400,
                 'invalid_payload',
                 'Bad Request',
-                ['message' => 'serverName must be 1-255 bytes; version must be 1-32 bytes'],
+                ['message' => 'serverName must be 1-255 bytes; version must be 1-32 bytes.'],
             ),
             default => (new Response())->error(
                 500,

@@ -626,7 +626,7 @@ final class ErrorPromotionFramesTest extends TestCase
 
         self::assertGateFrame(
             400,
-            ['error' => 'Bad Request', 'code' => 'invalid_request', 'message' => 'claim id is required'],
+            ['error' => 'Bad Request', 'code' => 'invalid_request', 'message' => 'claim id is required.'],
             $controller->status(new Request(), ['claimId' => '']),
             'ServerClaimController status claim-id gate',
         );
@@ -639,7 +639,7 @@ final class ErrorPromotionFramesTest extends TestCase
 
         self::assertGateFrame(
             400,
-            ['error' => 'Bad Request', 'code' => 'invalid_request', 'message' => 'claim_code is required'],
+            ['error' => 'Bad Request', 'code' => 'invalid_request', 'message' => 'claim_code is required.'],
             $controller->claim($claimRequest),
             'ServerClaimController claim_code gate',
         );

@@ -40,7 +40,7 @@ final class HubProtocolMiddleware
                 400,
                 'hub.protocol_unsupported',
                 'HUB_PROTOCOL_UNSUPPORTED',
-                ['message' => 'Accept-Phlix-Protocol: v1 required'],
+                ['message' => 'Accept-Phlix-Protocol: v1 required.'],
             );
         }
         return null;

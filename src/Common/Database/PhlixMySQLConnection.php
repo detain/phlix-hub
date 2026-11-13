@@ -139,6 +139,23 @@ final class PhlixMySQLConnection extends Connection
     private bool $inTransaction = false;
 
     /**
+     * True from a successful {@see beginTrans()} until commit/rollback, in or
+     * out of a coroutine. Unlike {@see $inTransaction} (lock bookkeeping, set
+     * only under a coroutine) this is the transaction-liveness marker that
+     * {@see execute()} consults: a "server has gone away" reconnect inside an
+     * open transaction silently loses it (MySQL rolls back on disconnect), so
+     * auto-retrying would run the statement OUTSIDE the transaction.
+     */
+    private bool $txOpen = false;
+
+    /**
+     * Set when the connection dropped mid-transaction. The transaction is lost
+     * server-side, so {@see commitTrans()} refuses to report success; the
+     * caller's rollback (or any commit attempt) clears it.
+     */
+    private bool $txPoisoned = false;
+
+    /**
      * Force emulated + fully-buffered prepared statements.
      *
      * The parent connects with NATIVE prepares (`PDO::ATTR_EMULATE_PREPARES =
@@ -204,6 +221,19 @@ final class PhlixMySQLConnection extends Connection
             $this->success = $this->sQuery instanceof \PDOStatement && $this->sQuery->execute();
         } catch (\PDOException $e) {
             $errno = (is_array($e->errorInfo) && isset($e->errorInfo[1])) ? (int) $e->errorInfo[1] : 0;
+            if (($errno === 2006 || $errno === 2013) && $this->txOpen) {
+                // Gone away INSIDE a transaction: the server already rolled it
+                // back, so a reconnect+retry would execute outside it. Drop the
+                // dead socket, release the lock, poison the commit and fail.
+                $this->closeConnection();
+                $this->rollBackTrans();
+                $this->txPoisoned = true;
+                throw new \PDOException(
+                    'SQL:' . $this->lastSQL() . ' ' . $e->getMessage()
+                        . ' (connection lost inside a transaction; not retried)',
+                    (int) $e->getCode()
+                );
+            }
             if ($errno === 2006 || $errno === 2013) {
                 // "MySQL server has gone away" — drop the dead socket and retry once.
                 $this->closeConnection();
@@ -396,7 +426,10 @@ final class PhlixMySQLConnection extends Connection
     {
         $cid = $this->currentCoroutineId();
         if ($cid < 0) {
-            return (bool) parent::beginTrans();
+            $opened = (bool) parent::beginTrans();
+            $this->txOpen = $opened;
+            $this->txPoisoned = false;
+            return $opened;
         }
 
         // Reentrant begin (already inside this coroutine's transaction): do
@@ -418,6 +451,8 @@ final class PhlixMySQLConnection extends Connection
             throw $e;
         }
         $this->inTransaction = true;
+        $this->txOpen = $result;
+        $this->txPoisoned = false;
         return $result;
     }
 
@@ -437,13 +472,17 @@ final class PhlixMySQLConnection extends Connection
     public function commitTrans()
     {
         $cid = $this->currentCoroutineId();
-        if ($cid < 0) {
-            return (bool) parent::commitTrans();
-        }
         try {
+            if ($this->txPoisoned) {
+                throw new \PDOException('Transaction was lost when the connection dropped; refusing to commit.');
+            }
             return (bool) parent::commitTrans();
         } finally {
-            $this->endTransaction($cid);
+            $this->txOpen = false;
+            $this->txPoisoned = false;
+            if ($cid >= 0) {
+                $this->endTransaction($cid);
+            }
         }
     }
 
@@ -464,13 +503,15 @@ final class PhlixMySQLConnection extends Connection
     public function rollBackTrans()
     {
         $cid = $this->currentCoroutineId();
-        if ($cid < 0) {
-            return (bool) parent::rollBackTrans();
-        }
         try {
-            return (bool) parent::rollBackTrans();
+            // A dropped connection leaves no PDO handle to roll back.
+            return $this->pdo instanceof \PDO ? (bool) parent::rollBackTrans() : true;
         } finally {
-            $this->endTransaction($cid);
+            $this->txOpen = false;
+            $this->txPoisoned = false;
+            if ($cid >= 0) {
+                $this->endTransaction($cid);
+            }
         }
     }
 
