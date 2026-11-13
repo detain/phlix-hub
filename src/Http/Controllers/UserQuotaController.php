@@ -37,7 +37,10 @@ use Phlix\Hub\Http\Response;
  *  - `PUT /api/v1/admin/users/{id}/throttle` {@see self::setUserThrottle()} — set
  *    a user's sustained relay bandwidth THROTTLE (rate cap in bits/sec), chosen
  *    from a fixed set of levels (S41, phlix-docs docs/old/updates.md #50). Distinct from the monthly
- *    byte-cap quota above; NOT enforced yet (enforcement is S42/S43). The current
+ *    byte-cap quota above; ENFORCED on both relay transports — the HTTP-over-relay
+ *    proxy ({@see \Phlix\Hub\Http\Controllers\ServerProxyController::buildStreamingResponse()},
+ *    via TokenBucket + ConnectionResponseSink) and the WS relay
+ *    ({@see \Phlix\Hub\Relay\TunnelManager}). The current
  *    value is surfaced as `throttle_bps` on the bandwidth GET payloads.
  *
  * NOTE (per the HB-3.4 caveat): the concurrent-stream cap is enforced
@@ -196,7 +199,9 @@ final class UserQuotaController
      * for Unlimited); any other value is rejected with a 400. Distinct from the
      * monthly byte-cap quota — this endpoint never touches the quota columns.
      *
-     * NOT enforced yet: S41 persists the value only (enforcement is S42/S43).
+     * This endpoint persists the value; enforcement lives in the relay paths
+     * (ServerProxyController::buildStreamingResponse() throttle section and
+     * TunnelManager), which read it via RelaySessionManager::getUserThrottleBps().
      *
      * Mirrors {@see self::setUserQuota()} exactly: same admin gate, same
      * envelope, same audited mutation + 200 read-back.
