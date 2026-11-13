@@ -62,6 +62,7 @@ use Phlix\Hub\Http\Controllers\ServerListController;
 use Phlix\Hub\Http\Controllers\ServerManageController;
 use Phlix\Hub\Http\Controllers\Stats\MetricsController;
 use Phlix\Hub\Http\Controllers\SubdomainController;
+use Phlix\Hub\Http\Controllers\ThemesController;
 use Phlix\Hub\Http\Controllers\UserPasswordController;
 use Phlix\Hub\Http\Controllers\UserQuotaController;
 use Phlix\Hub\Http\Middleware\AdminMiddleware;
@@ -783,6 +784,7 @@ final class Application
         });
 
         $me = $this->resolveMeController();
+        $themes = new ThemesController();
         $serverList = $this->resolveServerListController();
         $serverManage = $this->resolveServerManageController();
         $serverDetail = $this->resolveServerDetailController();
@@ -819,6 +821,7 @@ final class Application
         $this->router->group('/api/v1', function (Router $r) use (
             $auth,
             $me,
+            $themes,
             $serverList,
             $serverManage,
             $serverDetail,
@@ -831,6 +834,10 @@ final class Application
             // `/auth/me` is the path the shared @phlix/ui SPA calls (matches
             // phlix-server); aliased to the same MeController as `/me`.
             $r->get('/auth/me', static fn (Request $req): Response => $me($req));
+            // HUB-S48 (owner Gate 8: REGISTER): the theme catalogue the shared
+            // @phlix/ui appearance picker fetches. Built-ins only — the hub has
+            // no theme-plugin loader; same wire shape as phlix-server's route.
+            $r->get('/themes', static fn (Request $req, array $params): Response => $themes->index($req, []));
             // CP-029 / D-1a (hub twin of server 413765b6): the session-family
             // surface. Gated by this group's AuthMiddleware like every other
             // `/api/v1` route — the list's `current` flag and the revoke's

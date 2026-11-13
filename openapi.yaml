@@ -128,6 +128,8 @@ tags:
     description: "User requests for missing media, and the admin queue that approves them."
   - name: "Bandwidth and Quota"
     description: "Per-user relay byte accounting, monthly quota, and throttle."
+  - name: "Theming"
+    description: "Theme catalogue for the shared SPA appearance picker (built-ins only on the hub)."
   - name: "Library Sharing"
     description: "Sharing a library from one hub user to another."
   - name: "Invite Links"
@@ -1543,6 +1545,36 @@ paths:
                 $ref: "#/components/schemas/Error"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/themes":
+    get:
+      operationId: "get_api_v1_themes"
+      tags: ["Theming"]
+      summary: "List themes"
+      description: |-
+        HUB-S48 (owner Gate 8: register). The theme catalogue the shared
+        `@phlix/ui` appearance picker fetches. The hub has no theme-plugin
+        loader, so the list is the three host built-ins (nocturne, daylight,
+        midnight), each in phlix-server's wire shape
+        (`id`, `name`, `dark`, `extends`, `tokens`, `source`, `builtIn`).
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  themes:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   "/api/v1/auth/sessions":
     get:
       operationId: "get_api_v1_auth_sessions"
