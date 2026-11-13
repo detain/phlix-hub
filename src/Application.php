@@ -297,6 +297,10 @@ final class Application
             ->json([
                 'error' => 'This hub is under maintenance. Try again shortly.',
                 'code'  => 'provider_unavailable',
+                // Disambiguation leg (HUB-49): the catalog copy for this code speaks of
+                // an authentication provider; the real cause rides in `detail`.
+                'detail' => 'Hub maintenance mode (hub.maintenance_mode) is on; '
+                    . 'API traffic resumes when an admin switches it off.',
             ]);
     }
 

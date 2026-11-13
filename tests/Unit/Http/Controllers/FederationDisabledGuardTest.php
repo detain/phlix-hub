@@ -89,6 +89,11 @@ final class FederationDisabledGuardTest extends TestCase
             self::assertSame(409, $response->statusCode, "{$method} must refuse while disabled");
             $body = self::arrayNode(json_decode((string) $response->body, true));
             self::assertSame('provider.not_configured', $body['code'], "{$method} wire code");
+            self::assertStringContainsString(
+                'federation.enabled',
+                self::stringNode($body['detail'] ?? null),
+                "{$method} detail disambiguates",
+            );
         }
     }
 

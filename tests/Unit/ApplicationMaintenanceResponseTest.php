@@ -22,10 +22,12 @@ final class ApplicationMaintenanceResponseTest extends TestCase
         $response = Application::maintenanceResponse();
 
         self::assertSame(503, $response->statusCode);
-        // The body the gate shipped before M-HUB-32, byte-identical: the cure
-        // is additive (one header), never a re-wording of the promise.
+        // error + code are byte-identical to what M-HUB-32 shipped; HUB-49 appends
+        // only the trailing `detail` key (maintenance vs auth-provider disambiguation).
         self::assertSame(
-            '{"error":"This hub is under maintenance. Try again shortly.","code":"provider_unavailable"}',
+            '{"error":"This hub is under maintenance. Try again shortly.","code":"provider_unavailable",'
+            . '"detail":"Hub maintenance mode (hub.maintenance_mode) is on; '
+            . 'API traffic resumes when an admin switches it off."}',
             $response->body,
         );
         self::assertSame('60', $response->headers['Retry-After']);

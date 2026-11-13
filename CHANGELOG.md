@@ -12,6 +12,13 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Fix [HUB-S49] — gate-aware error envelopes via `detail` (HUB-49) — 2026-11-13
+
+- Owner ruling: zero new wire codes. The federation-disabled 409 (`provider.not_configured`) and the
+  maintenance 503 (`provider_unavailable`) keep their codes, statuses and existing keys, and gain an
+  additive `detail` string naming the real cause (`federation.enabled` off / `hub.maintenance_mode`
+  on), since the catalog copy for both codes speaks of a sign-in provider. Tests pin both.
+
 ### Fix [HUB-S14] — portable upsert SQL: MySQL 8.0.19+ row alias and MariaDB 10.6+ `VALUES()` — 2026-11-13
 
 - New `Common\Database\UpsertSyntax`. Upserts are authored once in the row-alias form

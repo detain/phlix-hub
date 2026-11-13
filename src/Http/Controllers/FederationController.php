@@ -145,6 +145,11 @@ final class FederationController
                 'error' => 'Conflict',
                 'code' => 'provider.not_configured',
                 'message' => 'Federation is disabled on this hub.',
+                // Disambiguation leg (HUB-49): `provider.not_configured` is catalogued
+                // as a sign-in-provider message, so the cause rides here instead of a
+                // new wire code. Additive; code/status/message are unchanged.
+                'detail' => 'Federation is switched off (federation.enabled). '
+                    . 'Enable it in hub settings to manage peers and shares.',
             ]);
         }
 
