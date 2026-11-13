@@ -27,6 +27,7 @@ import {
     parseLibraries,
     buildSharePayload,
     shareRefusalSentence,
+    withTerminalPeriod,
     refusalCodeOf,
     SHARE_REFUSAL_SENTENCES,
 } from '../src/utils/shareCreate.ts';
@@ -122,8 +123,17 @@ describe('refusal sentences', () => {
     it('curate known codes and fall through to the wire sentence otherwise', () => {
         assert.equal(shareRefusalSentence('share_exists', 'ignored'),
             SHARE_REFUSAL_SENTENCES['share_exists']);
-        assert.equal(shareRefusalSentence('something.new', 'the hub said this'), 'the hub said this');
-        assert.equal(shareRefusalSentence(null, 'fallback wins'), 'fallback wins');
+        assert.equal(shareRefusalSentence('something.new', 'the hub said this'), 'the hub said this.');
+        assert.equal(shareRefusalSentence(null, 'fallback wins'), 'fallback wins.');
+    });
+    it('closes every refusal line with one terminal period (client twin of the no-period wire law)', () => {
+        assert.equal(withTerminalPeriod('This server has reached its collaborator limit'),
+            'This server has reached its collaborator limit.');
+        assert.equal(withTerminalPeriod('Already closed.'), 'Already closed.');
+        assert.equal(withTerminalPeriod('Really?'), 'Really?');
+        assert.equal(withTerminalPeriod(''), '');
+        assert.equal(shareRefusalSentence('quota.exceeded', 'x'),
+            SHARE_REFUSAL_SENTENCES['quota.exceeded'] + '.');
     });
     it('extracts the code out of an ApiError-shaped rejection, junk-safe', () => {
         assert.equal(refusalCodeOf({ body: { code: 'user_not_found' } }), 'user_not_found');

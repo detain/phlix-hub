@@ -721,7 +721,7 @@ final class RelayProxyManager
             $entry['request_id'],
             504,
             [],
-            Response::errorBody('gateway.timeout', 'The server did not respond in time.'),
+            Response::errorBody('gateway.timeout', 'The server did not respond over the relay in time'),
         );
     }
 

@@ -30,6 +30,7 @@ import {
     parseLibraries,
     buildSharePayload,
     shareRefusalSentence,
+    withTerminalPeriod,
     refusalCodeOf,
 } from '../utils/shareCreate';
 import type { ShareLibraryRow, ShareServerRow } from '../utils/shareCreate';
@@ -76,7 +77,7 @@ async function loadServers(): Promise<void> {
     try {
         servers.value = parseServers(await http.get<unknown>('/api/v1/me/servers'));
     } catch (e) {
-        refusal.value = errMessage(e, 'The hub couldn’t list your servers.');
+        refusal.value = withTerminalPeriod(errMessage(e, 'The hub couldn’t list your servers.'));
         serversPhase.value = 'failed';
         return;
     }
@@ -103,7 +104,7 @@ async function loadLibraries(): Promise<void> {
             await http.get<unknown>('/api/v1/me/libraries?server_id=' + encodeURIComponent(serverId)),
         );
     } catch (e) {
-        refusal.value = errMessage(e, 'The hub couldn’t list that server’s libraries.');
+        refusal.value = withTerminalPeriod(errMessage(e, 'The hub couldn’t list that server’s libraries.'));
         librariesPhase.value = 'failed';
         return;
     }

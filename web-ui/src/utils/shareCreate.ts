@@ -104,13 +104,21 @@ export const SHARE_REFUSAL_SENTENCES: Readonly<Record<string, string>> = Object.
     'not_server_owner': 'You do not own that server, so you cannot share from it.',
 });
 
+/**
+ * Client-side display normalizer for the wire's no-terminal-period law
+ * (`QuotaFrames` header): server `message` legs carry no trailing period, the
+ * banner shows whole sentences — so every refusal line is closed here, once,
+ * and sibling lines never differ by a period.
+ */
+export function withTerminalPeriod(sentence: string): string {
+    const trimmed = sentence.trimEnd();
+    return /[.!?\u2026]$/u.test(trimmed) || trimmed === '' ? trimmed : trimmed + '.';
+}
+
 /** Plain sentence for a share refusal — known code curated, else server's own. */
 export function shareRefusalSentence(code: string | null, fallback: string): string {
     const curated = code === null ? undefined : SHARE_REFUSAL_SENTENCES[code];
-    if (curated !== undefined) {
-        return curated;
-    }
-    return fallback;
+    return withTerminalPeriod(curated !== undefined ? curated : fallback);
 }
 
 /** The code inside an ApiError-shaped rejection body, when one is present. */

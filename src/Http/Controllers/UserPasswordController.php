@@ -95,7 +95,7 @@ final class UserPasswordController
         }
 
         return (new Response())->json([
-            'message' => 'Password updated successfully.',
+            'message' => 'Password updated successfully',
         ]);
     }
 

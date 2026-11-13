@@ -98,7 +98,7 @@ final class HubRestartController
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error'   => 'pid_file_not_found',
-                    'message' => 'Hub may not be running, or pid_file is misconfigured.',
+                    'message' => 'Hub may not be running, or the PID file is misconfigured',
                 ]);
             }
 
@@ -107,7 +107,7 @@ final class HubRestartController
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error'   => 'pid_file_read_failed',
-                    'message' => 'Hub may not be running, or pid_file is misconfigured.',
+                    'message' => 'Hub may not be running, or the PID file is misconfigured',
                 ]);
             }
 
@@ -116,7 +116,7 @@ final class HubRestartController
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error'   => 'invalid_pid',
-                    'message' => 'The pid_file contains an invalid value.',
+                    'message' => 'The PID file contains an invalid value',
                 ]);
             }
 
@@ -127,7 +127,7 @@ final class HubRestartController
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error'   => 'signal_send_failed',
-                    'message' => sprintf('Process %d is not running or is not signallable.', (int) $pid),
+                    'message' => sprintf('Process %d is not running or is not signallable', (int) $pid),
                 ]);
             }
 
@@ -144,7 +144,7 @@ final class HubRestartController
                     'error'   => 'pid_identity_mismatch',
                     'message' => sprintf(
                         'Process %d exists but is not this hub\'s Workerman master '
-                        . '(stale pid file with a recycled PID?). Refusing to signal it.',
+                        . '(the PID file may be stale). Refusing to signal it',
                         (int) $pid
                     ),
                 ]);

@@ -183,7 +183,7 @@ final class ServerClaimController
         if ($claimId === '') {
             // Required part of the REQUEST missing → registry invalid_request.
             return (new Response())->error(400, 'invalid_request', 'Bad Request', [
-                'message' => 'claim id is required.',
+                'message' => 'Claim ID is required',
             ]);
         }
 
@@ -208,14 +208,16 @@ final class ServerClaimController
             // in SCREAMING form; this emit-wave flips the site to the dotted
             // forward form and parks the legacy literal byte-identical in the
             // `error` TEXT field for clients that still string-match it.
-            return (new Response())->error(401, 'auth.unauthenticated', 'UNAUTHENTICATED');
+            return (new Response())->error(401, 'auth.unauthenticated', 'UNAUTHENTICATED', [
+                'message' => 'Authentication is required to claim a server',
+            ]);
         }
 
         $claimCode = self::stringField($request, 'claim_code');
         if ($claimCode === '') {
             // Required part of the REQUEST missing → registry invalid_request.
             return (new Response())->error(400, 'invalid_request', 'Bad Request', [
-                'message' => 'claim_code is required.',
+                'message' => 'Claim code is required',
             ]);
         }
 
@@ -331,7 +333,7 @@ final class ServerClaimController
                 // A refusal the caller can act on states its limits (review
                 // hub__copywriter), like the field-marker arm below — the
                 // numbers are the handler's constants, never a re-typed copy.
-                ['message' => 'hostnameCandidates exceed the pairing bounds (max '
+                ['message' => 'Hostname candidates exceed the pairing bounds (max '
                     . ClaimRequestHandler::MAX_HOSTNAME_CANDIDATES . ' candidates, '
                     . ClaimRequestHandler::MAX_HOSTNAME_LENGTH . ' bytes each)'],
             ),
@@ -348,7 +350,7 @@ final class ServerClaimController
                 400,
                 'invalid_payload',
                 'Bad Request',
-                ['message' => 'serverName must be 1-255 bytes; version must be 1-32 bytes.'],
+                ['message' => 'Server name must be 1-255 bytes; version must be 1-32 bytes'],
             ),
             default => (new Response())->error(
                 500,

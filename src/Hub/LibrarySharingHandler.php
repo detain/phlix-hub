@@ -79,7 +79,7 @@ class LibrarySharingHandler
         $collaboratorId = $collaborator['id'];
 
         if ($collaboratorId === $ownerId) {
-            throw new InvalidArgumentException('Cannot share library with yourself', 400);
+            throw new InvalidArgumentException('You cannot share a library with yourself', 400);
         }
 
         if (!$this->isServerOwnedByUser($serverId, $ownerId)) {
@@ -87,7 +87,7 @@ class LibrarySharingHandler
         }
 
         if (!in_array($permission, [LibraryShare::PERMISSION_READ, LibraryShare::PERMISSION_READWRITE], true)) {
-            throw new InvalidArgumentException('Invalid permission level', 400);
+            throw new InvalidArgumentException('Invalid permission value', 400);
         }
 
         // SH-052 (review hub__dba-code): the check-then-write window — tuple
@@ -356,7 +356,7 @@ class LibrarySharingHandler
     public function updateSharePermission(string $ownerId, string $shareId, string $permission): void
     {
         if (!in_array($permission, [LibraryShare::PERMISSION_READ, LibraryShare::PERMISSION_READWRITE], true)) {
-            throw new InvalidArgumentException('Invalid permission level', 400);
+            throw new InvalidArgumentException('Invalid permission value', 400);
         }
 
         $share = $this->findShareById($shareId);

@@ -167,7 +167,11 @@ final class ErrorPromotionFramesTest extends TestCase
         // The legacy literal MOVED from `code` to `error` text; `code` is the
         // dotted forward form. Whole-frame proof, not substring.
         self::assertSame(
-            ['error' => 'UNAUTHENTICATED', 'code' => 'auth.unauthenticated'],
+            [
+                'error' => 'UNAUTHENTICATED',
+                'code' => 'auth.unauthenticated',
+                'message' => 'Authentication is required to claim a server',
+            ],
             json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR),
         );
     }
@@ -365,12 +369,17 @@ final class ErrorPromotionFramesTest extends TestCase
         self::assertNotNull($response);
         self::assertSame(401, $response->statusCode);
         self::assertSame(
-            ['error' => 'ENROLLMENT_TOKEN_INVALID', 'code' => 'auth.invalid_token'],
+            [
+                'error' => 'ENROLLMENT_TOKEN_INVALID',
+                'code' => 'auth.invalid_token',
+                'message' => 'The enrollment token is invalid or expired',
+            ],
             json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR),
             'enrollment invalid frame drifted from the contracted shape',
         );
         self::assertSame(
-            '{"error":"ENROLLMENT_TOKEN_INVALID","code":"auth.invalid_token"}',
+            '{"error":"ENROLLMENT_TOKEN_INVALID","code":"auth.invalid_token",'
+            . '"message":"The enrollment token is invalid or expired"}',
             $response->body,
             'enrollment invalid body drifted from compact JSON_UNESCAPED_SLASHES serialization (M-HUB-09)',
         );
@@ -626,7 +635,7 @@ final class ErrorPromotionFramesTest extends TestCase
 
         self::assertGateFrame(
             400,
-            ['error' => 'Bad Request', 'code' => 'invalid_request', 'message' => 'claim id is required.'],
+            ['error' => 'Bad Request', 'code' => 'invalid_request', 'message' => 'Claim ID is required'],
             $controller->status(new Request(), ['claimId' => '']),
             'ServerClaimController status claim-id gate',
         );
@@ -639,7 +648,7 @@ final class ErrorPromotionFramesTest extends TestCase
 
         self::assertGateFrame(
             400,
-            ['error' => 'Bad Request', 'code' => 'invalid_request', 'message' => 'claim_code is required.'],
+            ['error' => 'Bad Request', 'code' => 'invalid_request', 'message' => 'Claim code is required'],
             $controller->claim($claimRequest),
             'ServerClaimController claim_code gate',
         );

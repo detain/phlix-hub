@@ -89,6 +89,8 @@ final class EnrollmentJwtMiddleware
      */
     private function invalidToken(): Response
     {
-        return (new Response())->error(401, 'auth.invalid_token', 'ENROLLMENT_TOKEN_INVALID');
+        return (new Response())->error(401, 'auth.invalid_token', 'ENROLLMENT_TOKEN_INVALID', [
+            'message' => 'The enrollment token is invalid or expired',
+        ]);
     }
 }

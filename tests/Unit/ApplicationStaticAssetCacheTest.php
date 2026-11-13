@@ -605,7 +605,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
 
     public function testHashedJsGzipWireLegCarriesContentEncodingAndVary(): void
     {
-        $path = '/assets/app/assets/PlayerPage-Ba8zltA4-C0pHCXFF.js';
+        $path = '/assets/app/assets/PlayerPage-Ba8zltA4-BpdZHCto.js';
         $file = $this->staticFileShape($path);
         $wire = (string) Application::buildStaticFastPathResponse('body', $path, $file, null, null, 'gzip, br');
 
@@ -623,7 +623,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
 
     public function testHashedJsWithoutGzipAcceptIsIdentityButStillVaries(): void
     {
-        $path = '/assets/app/assets/PlayerPage-Ba8zltA4-C0pHCXFF.js';
+        $path = '/assets/app/assets/PlayerPage-Ba8zltA4-BpdZHCto.js';
         $file = $this->staticFileShape($path);
         $wire = (string) Application::buildStaticFastPathResponse('body', $path, $file, null, null, null);
 

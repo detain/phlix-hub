@@ -71,7 +71,7 @@ final class ServerClaimControllerTest extends TestCase
         $response = $controller->claim($request);
 
         self::assertSame(400, $response->statusCode);
-        self::assertStringContainsString('claim_code is required', $response->body);
+        self::assertStringContainsString('Claim code is required', $response->body);
     }
 
     public function testNewClaimReturns400OnMalformedRequest(): void
@@ -271,7 +271,7 @@ final class ServerClaimControllerTest extends TestCase
         self::assertIsArray($frame);
         self::assertSame('invalid_payload', $frame['code']);
         self::assertSame('Bad Request', $frame['error']);
-        self::assertStringContainsString('hostnameCandidates', $frame['message']);
+        self::assertStringContainsString('Hostname candidates', $frame['message']);
         // Review hub__copywriter: the refusal must state its numbers — and
         // they are the handler's constants, interpolated, never re-typed.
         self::assertStringContainsString(
@@ -322,7 +322,7 @@ final class ServerClaimControllerTest extends TestCase
             self::assertIsArray($frame);
             self::assertSame('invalid_payload', $frame['code'], $marker);
             self::assertSame('Bad Request', $frame['error'], $marker);
-            self::assertStringContainsString('serverName must be 1-255 bytes', $frame['message'], $marker);
+            self::assertStringContainsString('Server name must be 1-255 bytes', $frame['message'], $marker);
             self::assertStringContainsString('version must be 1-32 bytes', $frame['message'], $marker);
         }
     }

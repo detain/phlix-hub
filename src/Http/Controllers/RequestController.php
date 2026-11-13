@@ -89,7 +89,7 @@ final class RequestController
             return (new Response())->status(400)->json([
                 'error' => 'Bad Request',
                 'code'  => 'invalid_type',
-                'message' => 'type must be "movie" or "series"',
+                'message' => 'Request type must be "movie" or "series"',
             ]);
         }
 
@@ -98,7 +98,7 @@ final class RequestController
             return (new Response())->status(400)->json([
                 'error' => 'Bad Request',
                 'code'  => 'invalid_tmdb_id',
-                'message' => 'tmdb_id must be a positive integer.',
+                'message' => 'TMDB ID must be a positive integer',
             ]);
         }
 
@@ -106,7 +106,7 @@ final class RequestController
             return (new Response())->status(400)->json([
                 'error' => 'Bad Request',
                 'code'  => 'missing_title',
-                'message' => 'title is required.',
+                'message' => 'Title is required',
             ]);
         }
 
@@ -160,7 +160,7 @@ final class RequestController
 
         return (new Response())->status(201)->json([
             'request' => $result,
-            'message' => 'Request created successfully.',
+            'message' => 'Request created successfully',
         ]);
     }
 
@@ -344,9 +344,9 @@ final class RequestController
             // the Radarr/Sonarr blame is finally true).
             return match ($outcome) {
                 RequestTransitionResult::NotPending => (new Response())->status(409)->json([
-                    'error'   => 'This request was already approved or denied.',
+                    'error'   => 'This request was already approved or denied',
                     'code'    => 'approve_failed',
-                    'message' => 'This request was already approved or denied.',
+                    'message' => 'This request was already approved or denied',
                 ]),
                 RequestTransitionResult::NotFound => (new Response())->status(404)->json([
                     'error' => 'Not Found',
@@ -355,7 +355,7 @@ final class RequestController
                 default => (new Response())->status(500)->json([
                     'error'   => 'Internal Server Error',
                     'code'    => 'approve_failed',
-                    'message' => 'Failed to approve. Check Radarr/Sonarr configuration.',
+                    'message' => 'Failed to approve the request. Check the Radarr/Sonarr configuration',
                 ]),
             };
         }
@@ -419,18 +419,18 @@ final class RequestController
             // default so a future side-effect limb cannot silently 409).
             return match ($outcome) {
                 RequestTransitionResult::NotPending => (new Response())->status(409)->json([
-                    'error'   => 'This request was already approved or denied.',
+                    'error'   => 'This request was already approved or denied',
                     'code'    => 'deny_failed',
-                    'message' => 'This request was already approved or denied.',
+                    'message' => 'This request was already approved or denied',
                 ]),
                 RequestTransitionResult::NotFound => (new Response())->status(404)->json([
                     'error' => 'Not Found',
                     'code'  => 'request_not_found',
                 ]),
                 default => (new Response())->status(500)->json([
-                    'error'   => 'Failed to deny the request. Try again.',
+                    'error'   => 'Failed to deny the request. Try again',
                     'code'    => 'deny_failed',
-                    'message' => 'Failed to deny the request. Try again.',
+                    'message' => 'Failed to deny the request. Try again',
                 ]),
             };
         }

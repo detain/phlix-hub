@@ -169,7 +169,7 @@ final class RequestControllerTest extends TestCase
         $body = $this->decodeBody($response->body);
         self::assertSame(
             ['error' => 'Internal Server Error', 'code' => 'approve_failed',
-             'message' => 'Failed to approve. Check Radarr/Sonarr configuration.',],
+             'message' => 'Failed to approve the request. Check the Radarr/Sonarr configuration',],
             $body,
             'the genuine-failure 500 frame is unchanged from the pre-SH-075 wire',
         );
@@ -187,7 +187,7 @@ final class RequestControllerTest extends TestCase
         $response = $this->controller->approveRequest($req, ['id' => 'r1']);
         self::assertSame(409, $response->statusCode);
         $body = $this->decodeBody($response->body);
-        self::assertSame('This request was already approved or denied.', $body['error']);
+        self::assertSame('This request was already approved or denied', $body['error']);
         self::assertSame('approve_failed', $body['code']);
     }
 
@@ -261,7 +261,7 @@ final class RequestControllerTest extends TestCase
             array_keys($body),
             'the conflict frame keeps the canonical key order',
         );
-        self::assertSame('This request was already approved or denied.', $body['error']);
+        self::assertSame('This request was already approved or denied', $body['error']);
         self::assertSame($body['error'], $body['message'], 'message mirrors error (prose-law precedent)');
         self::assertSame('approve_failed', $body['code'], 'registered code only — no new wire codes');
         self::assertStringNotContainsString('Radarr', (string) $body['error'], 'the *arr blame stays off this arm');
@@ -289,7 +289,7 @@ final class RequestControllerTest extends TestCase
             'deny_failed gains the human message leg the review demanded',
         );
         self::assertNotSame('Internal Server Error', $body['error'], 'the bare HTTP phrase must no longer ship');
-        self::assertSame('This request was already approved or denied.', $body['error']);
+        self::assertSame('This request was already approved or denied', $body['error']);
         self::assertSame('deny_failed', $body['code'], 'registered code only — no new wire codes');
         self::assertSame('approved', $state['status']);
     }
@@ -314,7 +314,7 @@ final class RequestControllerTest extends TestCase
         self::assertSame(500, $response->statusCode);
         $body = $this->decodeBody($response->body);
         self::assertSame('approve_failed', $body['code']);
-        self::assertSame('Failed to approve. Check Radarr/Sonarr configuration.', $body['message']);
+        self::assertSame('Failed to approve the request. Check the Radarr/Sonarr configuration', $body['message']);
         self::assertSame('pending', $state['status'], 'the claim must be released for retry');
     }
 

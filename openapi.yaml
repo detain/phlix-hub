@@ -6361,7 +6361,7 @@ components:
           type: string
           description: |-
             Enforced permission level. The create handler admits only "read" and "readwrite";
-            any other value is a 400 "invalid_request" ("Invalid permission level") before
+            any other value is a 400 "invalid_request" ("Invalid permission value") before
             anything persists. The 201 and listed links echo the STORED value, never a guess.
         library_id:
           type: [string, "null"]

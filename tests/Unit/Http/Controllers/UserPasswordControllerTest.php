@@ -157,6 +157,6 @@ final class UserPasswordControllerTest extends TestCase
 
         self::assertSame(200, $response->statusCode);
         $payload = self::arrayNode(json_decode($response->body, true));
-        self::assertSame(['message' => 'Password updated successfully.'], $payload);
+        self::assertSame(['message' => 'Password updated successfully'], $payload);
     }
 }

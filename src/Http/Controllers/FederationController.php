@@ -552,7 +552,7 @@ final class FederationController
                 'error' => 'Conflict',
                 'code' => 'leaf_hub_id_already_bound',
                 'reason' => 'leaf_hub_id already bound to a different value',
-                'message' => 'This peer is already bound to a different leaf hub id.',
+                'message' => 'This peer is already bound to a different leaf hub',
             ]);
         }
 
@@ -995,6 +995,7 @@ final class FederationController
             return (new Response())->status(404)->json([
                 'error' => 'Not Found',
                 'code' => 'offer_not_found',
+                'message' => 'Offer not found',
             ]);
         }
 
@@ -1003,7 +1004,7 @@ final class FederationController
             return (new Response())->status(409)->json([
                 'error' => 'Conflict',
                 'code' => 'offer_already_responded',
-                'message' => 'This offer has already been accepted or rejected.',
+                'message' => 'This offer has already been accepted or rejected',
             ]);
         }
 
@@ -1051,6 +1052,7 @@ final class FederationController
             return (new Response())->status(404)->json([
                 'error' => 'Not Found',
                 'code' => 'offer_not_found',
+                'message' => 'Offer not found',
             ]);
         }
 
@@ -1059,7 +1061,7 @@ final class FederationController
             return (new Response())->status(409)->json([
                 'error' => 'Conflict',
                 'code' => 'offer_already_responded',
-                'message' => 'This offer has already been accepted or rejected.',
+                'message' => 'This offer has already been accepted or rejected',
             ]);
         }
 

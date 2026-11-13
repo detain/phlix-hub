@@ -278,7 +278,7 @@ final class HubSettingsController
      * Response shape (success):
      * {
      *   "success": true,
-     *   "message": "Settings updated.",
+     *   "message": "Settings updated",
      *   "data": {
      *     "settings": { "<key>": <value>, ... },
      *     "overridden": ["<key>", ...]
@@ -398,7 +398,7 @@ final class HubSettingsController
 
         return (new Response())->json([
             'success' => true,
-            'message' => 'Settings updated.',
+            'message' => 'Settings updated',
             'data' => [
                 'settings' => $effective['values'],
                 'overridden' => $effective['overridden'],

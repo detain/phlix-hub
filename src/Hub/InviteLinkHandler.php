@@ -68,11 +68,11 @@ class InviteLinkHandler
         }
 
         if (!in_array($permission, [LibraryShare::PERMISSION_READ, LibraryShare::PERMISSION_READWRITE], true)) {
-            throw new InvalidArgumentException('Invalid permission level', 400);
+            throw new InvalidArgumentException('Invalid permission value', 400);
         }
 
         if ($maxUses < 1) {
-            throw new InvalidArgumentException('max_uses must be at least 1', 400);
+            throw new InvalidArgumentException('Maximum uses must be at least 1', 400);
         }
 
         $token = bin2hex(random_bytes(32));

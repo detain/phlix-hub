@@ -1017,7 +1017,9 @@ final class ServerProxyController
         $serverId = $params['id'] ?? '';
         $owner = $this->serverInfo->getOwnerAndStatus($serverId);
         if ($owner === null) {
-            return (new Response())->error(404, 'server.not_found', 'Not Found');
+            return (new Response())->error(404, 'server.not_found', 'Not Found', [
+                'message' => 'Server not found',
+            ]);
         }
 
         if ($owner['userId'] !== $userId) {
@@ -1032,7 +1034,9 @@ final class ServerProxyController
             // surface existence is never confirmed. Ordering law unchanged:
             // this refusal still runs BEFORE the scope gate and relay-liveness
             // checks, and nothing is forwarded.
-            return (new Response())->error(404, 'server.not_found', 'Not Found');
+            return (new Response())->error(404, 'server.not_found', 'Not Found', [
+                'message' => 'Server not found',
+            ]);
         }
 
         if (!$owner['relayActive']) {
@@ -1224,7 +1228,7 @@ final class ServerProxyController
 
         if ($reply === null) {
             return (new Response())->error(504, 'gateway.timeout', 'Gateway Timeout', [
-                'message' => 'The server did not respond over the relay in time.',
+                'message' => 'The server did not respond over the relay in time',
             ]);
         }
 

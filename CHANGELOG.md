@@ -34,6 +34,21 @@ date. Deviations already in the history below are recorded, not rewritten, in th
   HUB-S1 punctuation, HUB-S24 `Tunnel::MAX_PENDING_BYTES` docblock, HUB-S32 bind-host comment and
   HUB-S48 `/api/v1/themes` 429 verified already present at the tip.
 
+### Changed [HUB-S1] — one prose register across the hub's human legs (HUB-6, HUB-16, HUB-17, HUB-18) — 2026-11-13
+
+- **HUB-6:** the four human-leg gaps that rendered only a machine token now also carry an additive full-sentence
+  `message` (claim 401 `UNAUTHENTICATED`, enrollment-JWT 401 `ENROLLMENT_TOKEN_INVALID`, both `server.not_found`
+  404 legs of the server proxy — byte-identical to each other, the existence-oracle law —, and the two federation
+  `offer_not_found` 404s). The legacy `error` literals and every `code` are untouched (string-matching consumers keep working).
+- **HUB-16:** no terminal period on any message leg of the success/failure families (settings, request create/approve/
+  deny, password, admin-user CRUD, federation offer conflict); the approve-failure line now names its object; the 504
+  relay-timeout pair (`ServerProxyController` / `RelayProxyManager`) says the same sentence. Web-ui twin:
+  `withTerminalPeriod()` closes every share-card refusal line once (`shareCreate.ts`, `ShareLibraryCard.vue`); `/app` regenerated.
+- **HUB-17:** field tokens humanized in operator prose (Claim ID / Claim code, Hostname candidates, Server name, Request
+  type, TMDB ID, Title, Maximum uses, PID file); one spelling per identifier.
+- **HUB-18:** "You cannot share a library with yourself"; "Invalid permission value" across the sharing family.
+- No new wire codes; tests rotated per family.
+
 ### Chore [HUB-S46] — adopt `@phlix/ui` v1.0.2 + `/app` SPA regen (HUB-14, HUB-50) — 2026-11-13
 
 - Pin tarball `v1.0.0` -> `v1.0.2` (lock rotated). v1.0.2 ships the federation localization + refresh
