@@ -264,8 +264,8 @@ class ClaimRequestHandler
                 'claim_code_hash' => self::claimCodeHash(self::normalizeClaimCode($claimCode)),
                 'server_name' => $request->serverName,
                 'version' => $request->version,
-                'public_key_jwk' => json_encode($request->publicKeysJwk),
-                'hostname_candidates_json' => json_encode($request->hostnameCandidates),
+                'public_key_jwk' => json_encode($request->publicKeysJwk, JSON_THROW_ON_ERROR),
+                'hostname_candidates_json' => json_encode($request->hostnameCandidates, JSON_THROW_ON_ERROR),
                 'protocol_version' => $request->protocolVersion,
                 'expires_at' => $expiresAt,
                 'created_at' => $now,
@@ -776,6 +776,12 @@ class ClaimRequestHandler
      */
     private function validateJwkStructure(array $jwk): void
     {
+        // HUB-12: a non-finite member (e.g. {"use":1e999} decodes to INF)
+        // cannot be JSON-encoded; reject it as the existing wire code
+        // instead of letting json_encode fail downstream.
+        if (!self::jwkMembersEncodable($jwk)) {
+            throw new InvalidArgumentException('SERVER_KEY_INVALID');
+        }
         if (($jwk['kty'] ?? '') !== 'OKP') {
             throw new InvalidArgumentException('SERVER_KEY_INVALID');
         }
@@ -830,7 +836,15 @@ class ClaimRequestHandler
             $existingJwkRaw = $claimRow['public_key_jwk'] ?? null;
             /** @var array<string, mixed>|null $existingJwk */
             $existingJwk = is_string($existingJwkRaw) ? json_decode($existingJwkRaw, true) : null;
-            if (is_array($existingJwk) && $this->jwkFingerprint($existingJwk) === $fingerprint) {
+            if (!is_array($existingJwk)) {
+                continue;
+            }
+            try {
+                $existingFp = $this->jwkFingerprint($existingJwk);
+            } catch (\JsonException) {
+                continue; // unencodable stored JWK can never match
+            }
+            if ($existingFp === $fingerprint) {
                 return $claimRow;
             }
         }
@@ -841,11 +855,30 @@ class ClaimRequestHandler
      * Compute a fingerprint for a JWK (SHA-256 of canonical JSON).
      *
      * @param array<string, mixed> $jwk
+     *
+     * @throws \JsonException When the JWK cannot be encoded (never hashes '').
      */
     private function jwkFingerprint(array $jwk): string
     {
         ksort($jwk);
-        $canonical = json_encode($jwk);
-        return hash('sha256', $canonical !== false ? $canonical : '', true);
+        return hash('sha256', json_encode($jwk, JSON_THROW_ON_ERROR), true);
+    }
+
+    /**
+     * True when every (nested) member is JSON-encodable: no INF/NAN floats.
+     *
+     * @param array<mixed> $value
+     */
+    private static function jwkMembersEncodable(array $value): bool
+    {
+        foreach ($value as $member) {
+            if (is_float($member) && !is_finite($member)) {
+                return false;
+            }
+            if (is_array($member) && !self::jwkMembersEncodable($member)) {
+                return false;
+            }
+        }
+        return true;
     }
 }
