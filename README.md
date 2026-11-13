@@ -786,12 +786,15 @@ Notes:
 
 - The migration runner issues `CREATE TABLE` / `ALTER TABLE`, so `CREATE`, `ALTER`, and `INDEX`
   are required in addition to the CRUD grants.
+- `REFERENCES` is required because several migrations declare `FOREIGN KEY` constraints
+  (e.g. 055's `auth_refresh_grants` → `auth_token_sessions`); it is not a CRUD grant.
 - `DROP` is NOT required — an earlier version of this note claimed `049_invite_token_hash_unique.sql`
   needed it for its `ALTER TABLE … DROP INDEX` rebuild path. That claim was falsified by
   execution on MySQL 8.0.46 (the version the CI service and the `mysql:8.0` deploy family
   run): a user holding exactly the grants above — `SHOW GRANTS` captured, no `DROP` anywhere —
-  completed both a standalone `ALTER TABLE … DROP INDEX` (rc 0) and the full 37-migration
-  fresh-install chain including 049's composite `MODIFY` + `ADD UNIQUE` + drop of
+  completed both a standalone `ALTER TABLE … DROP INDEX` (rc 0) and the full fresh-install
+  chain (executed on 2026-11-11 when the chain was 37 migrations, 001–049 with gaps; later
+  migrations 050–058 postdate that proof) including 049's composite `MODIFY` + `ADD UNIQUE` + drop of
   010's `idx_token_hash`; `SHOW INDEX` confirmed the plain index gone and
   `uk_invite_links_token_hash` in its place. Index drops ride the `ALTER` privilege.
 - If the Hub runs on a **different host** than MySQL, create the user for that host (or `'%'`)
@@ -912,8 +915,9 @@ Run the migrator as **root** — the env file is mode 600 root-owned, so an
 unprivileged re-execution of the `grep | xargs` form would silently expand to an
 empty environment and the runner would fall back to `config/database.php`
 defaults instead of your step-2 password (the installer itself runs as root end
-to end, so its own migrator calls at `scripts/install.sh:1449` (update) and
-`:1865` (first install) inherit the real environment):
+to end, so its own migrator calls in `scripts/install.sh` (the update path's
+"Running pending migrations" step and the first-install "Database migrations" step)
+inherit the real environment):
 
 ```bash
 sudo bash -c 'set -a; . /etc/phlix-hub.env; set +a; php /opt/phlix-hub/scripts/run-migrations.php'
@@ -929,7 +933,7 @@ it after a successful apply is a no-op.
 > changed content, logs a **WARNING** (via `error_log()`, visible in the deploy output / CLI
 > stderr), **safely re-applies** the file, and refreshes its stored checksum — instead of silently
 > skipping it forever on filename alone. Header/comment-only edits do **not** trigger a re-apply
-> (comments are stripped before hashing). Migrations that already existed before the checksum column
+> (whole-line comments are stripped before hashing; an inline `-- …` after a statement still counts). Migrations that already existed before the checksum column
 > was introduced are backfilled without re-running, so upgrading never mass-re-applies your existing
 > schema. Because a re-applied file executes again, keep migrations re-run-safe (`CREATE TABLE IF NOT
 > EXISTS`, additive/idempotent DDL) — the same contract that already governs writing migrations.
@@ -1468,7 +1472,7 @@ at boot per worker).
 Migrations live in [`migrations/`](migrations) and are applied in filename order.
 The numbering is historical, not contiguous — 013–026 were never used — and the
 ledger is keyed by filename, so the gap is harmless.
-The schema below is the complete inventory: the 35 tables the migrations create,
+The schema below is the complete inventory: the 37 tables the migrations create,
 grouped by subsystem, plus the `migrations` tracking table the runner creates
 for itself.
 
@@ -1494,6 +1498,8 @@ A deployment running a non-default sql_mode must re-verify both paths.
 | `oauth_consent_requests` | ~10-minute, single-use consent requests, consumed by the consent POST |
 | `oauth_authorization_codes` | ~60-second, single-use authorization codes, consumed by the token endpoint |
 | `oauth_tokens` | Access/refresh grants (1 hour / 30 days) — revocable, rotated on refresh |
+| `auth_token_sessions` | Session-family revocation store for the hub's JWT auth path (migration 055) — one row per device session, enabling per-device sign-out |
+| `auth_refresh_grants` | Refresh-token reuse-detection ledger (migrations 055/056) — one row per minted refresh grant with its own `expires_at`, cascade-deleted with its session |
 | **Servers and libraries** | |
 | `servers` | Claimed media servers and their operational state (status, JWKS, hostname candidates) |
 | `server_claims` | Pending/paired claim codes minted during pairing |

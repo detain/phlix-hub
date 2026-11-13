@@ -25,8 +25,9 @@ use Workerman\MySQL\Connection;
  * runs.
  *
  * Each `.sql` file may contain multiple statements separated by `;`.
- * Single-line `--` comments and blank lines are stripped before
- * splitting. The tracking table is the sole idempotency mechanism;
+ * Comments (`--`, `#` and C-style block) are stripped by a quote-aware
+ * scanner before splitting; the checksum, by contrast, drops only
+ * whole-line comments. The tracking table is the sole idempotency mechanism;
  * migrations themselves use plain MySQL 8 / MariaDB-portable DDL
  * (e.g. `CREATE TABLE IF NOT EXISTS` for tables, plain `ALTER` for
  * column/index changes — MariaDB's `ADD COLUMN IF NOT EXISTS` is
