@@ -498,6 +498,10 @@ final class PhlixMySQLConnection extends Connection
      *
      * Outside a coroutine the parent runs directly (no lock to release).
      *
+     * @psalm-suppress RedundantConditionGivenDocblockType
+     *   Parent types `$pdo` as `\PDO`; the guard is for a dropped connection
+     *   (PHPStan sees the untyped property) — same rationale as connect().
+     *
      * @return bool The parent's PDO::rollBack() result (true when no tx open).
      */
     public function rollBackTrans()

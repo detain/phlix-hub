@@ -66,6 +66,7 @@ final class HttpServicesProvider implements ServiceProviderInterface
                 MaintenanceHeartbeat $maintenance,
             ) use ($appConfig): HealthController {
                 // HUB-28: surface the channel broker's bind health.
+                /** @var mixed $portRaw */
                 $portRaw = $appConfig['channel_port'] ?? RelayProxyProtocol::DEFAULT_CHANNEL_PORT;
                 $port = is_int($portRaw)
                     ? $portRaw

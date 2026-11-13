@@ -295,9 +295,16 @@ final class PooledMySQLConnection extends Connection
                 try {
                     $rolledBack = $released->rollBackTrans() !== false;
                 } catch (\Throwable $e) {
-                    LoggerFactory::get(LogChannels::DATABASE)->warning(
-                        'PooledMySQLConnection: rollback on release threw; retiring connection: ' . $e->getMessage(),
-                    );
+                    // Logging is best-effort: an uninitialised/unwritable logger
+                    // must never abort the defer before the slot is released.
+                    try {
+                        LoggerFactory::get(LogChannels::DATABASE)->warning(
+                            'PooledMySQLConnection: rollback on release threw; retiring connection: '
+                            . $e->getMessage(),
+                        );
+                    } catch (\Throwable) {
+                        // Fall through to retire the connection.
+                    }
                 }
                 if (!$rolledBack) {
                     try {

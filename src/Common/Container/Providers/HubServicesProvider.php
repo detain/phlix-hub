@@ -1817,10 +1817,10 @@ final class HubServicesProvider implements ServiceProviderInterface
                 : false);
 
             // Listen host (HUB_FEDERATION_BIND); default 0.0.0.0 = historical literal.
-            $federationBindHost = is_array($appConfig)
-                && is_string($appConfig['federation_bind_host'] ?? null)
-                && $appConfig['federation_bind_host'] !== ''
-                ? $appConfig['federation_bind_host']
+            /** @var mixed $federationBindRaw */
+            $federationBindRaw = is_array($appConfig) ? ($appConfig['federation_bind_host'] ?? null) : null;
+            $federationBindHost = is_string($federationBindRaw) && $federationBindRaw !== ''
+                ? $federationBindRaw
                 : '0.0.0.0';
 
             $federationWorker = new FederationWorker(

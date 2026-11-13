@@ -871,6 +871,7 @@ class ClaimRequestHandler
      */
     private static function jwkMembersEncodable(array $value): bool
     {
+        /** @var mixed $member */
         foreach ($value as $member) {
             if (is_float($member) && !is_finite($member)) {
                 return false;

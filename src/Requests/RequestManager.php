@@ -701,10 +701,11 @@ class RequestManager
     {
         try {
             $series = $sonarrClient->getSeries();
+            /** @var mixed $path */
             $path = $series[0]['path'] ?? null;
             if (is_string($path) && $path !== '') {
                 $parent = dirname($path);
-                if ($parent !== '.' && $parent !== '') {
+                if ($parent !== '.') {
                     return $parent;
                 }
             }

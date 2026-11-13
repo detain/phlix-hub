@@ -2810,6 +2810,9 @@ final class Application
         $wsBindHost = is_string($wsBindHostRaw) && $wsBindHostRaw !== ''
             ? $wsBindHostRaw
             : '0.0.0.0';
+        /** @var mixed $relayBindRaw */
+        $relayBindRaw = $this->config['relay_bind_host'] ?? null;
+        $relayBindHost = is_string($relayBindRaw) && $relayBindRaw !== '' ? $relayBindRaw : '0.0.0.0';
         $relayWorker = new RelayWorker(
             $this->container,
             $relayPort,
@@ -2822,9 +2825,7 @@ final class Application
             $relayRequireTls,
             $wsHandshakeTimeoutSeconds,
             // Listen-host knob (HUB_RELAY_BIND); default 0.0.0.0 = historical literal.
-            is_string($this->config['relay_bind_host'] ?? null) && $this->config['relay_bind_host'] !== ''
-                ? $this->config['relay_bind_host']
-                : '0.0.0.0',
+            $relayBindHost,
         );
         // R14-01/R16-01: the relay worker's own onWorkerStart is set inside
         // RelayWorker::start() (a file outside this lane), so prepend the
@@ -2976,11 +2977,14 @@ final class Application
                 return;
             }
             $mysqli->options(MYSQLI_OPT_CONNECT_TIMEOUT, 2);
-            $dbHost = getenv('HUB_DB_HOST') ?: '127.0.0.1';
+            $hostEnv = getenv('HUB_DB_HOST');
+            $nameEnv = getenv('HUB_DB_NAME');
+            $portEnv = getenv('HUB_DB_PORT');
+            $dbHost = $hostEnv !== false && $hostEnv !== '' && $hostEnv !== '0' ? $hostEnv : '127.0.0.1';
             $dbUser = $userEnv !== false ? $userEnv : 'phlix_hub';
             $dbPass = $passEnv !== false ? $passEnv : 'phlix_hub';
-            $dbName = getenv('HUB_DB_NAME') ?: 'phlix_hub';
-            $dbPort = (int) (getenv('HUB_DB_PORT') ?: 3306);
+            $dbName = $nameEnv !== false && $nameEnv !== '' && $nameEnv !== '0' ? $nameEnv : 'phlix_hub';
+            $dbPort = $portEnv !== false && (int) $portEnv !== 0 ? (int) $portEnv : 3306;
             if (!@$mysqli->real_connect($dbHost, $dbUser, $dbPass, $dbName, $dbPort)) {
                 return;
             }
