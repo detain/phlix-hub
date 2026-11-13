@@ -129,7 +129,9 @@ final class SharedUiControllerCspTest extends TestCase
         self::assertStringContainsString("script-src 'self' 'nonce-", $expected);
         self::assertStringContainsString("style-src 'self' 'unsafe-inline'", $expected);
         self::assertStringContainsString("img-src 'self' data: blob:", $expected);
-        self::assertStringContainsString("connect-src 'self' ws: wss:", $expected);
+        self::assertStringContainsString("connect-src 'self';", $expected);
+        self::assertStringNotContainsString('ws:', $expected);
+        self::assertStringNotContainsString('wss:', $expected);
         self::assertStringContainsString("media-src 'self' blob:", $expected);
         self::assertStringContainsString("worker-src 'self' blob:", $expected);
         self::assertStringContainsString("frame-ancestors 'none'", $expected);
@@ -138,6 +140,29 @@ final class SharedUiControllerCspTest extends TestCase
         self::assertStringNotContainsString('image.tmdb.org', $expected);
         // script-src must NOT carry 'unsafe-inline' (only style-src may).
         self::assertStringNotContainsString("script-src 'self' 'unsafe-inline'", $expected);
+    }
+
+    public function testConnectSrcCarriesValidatedWsUrlOrigin(): void
+    {
+        putenv('HUB_WS_URL=wss://hub.example.com:8804');
+        try {
+            self::assertStringContainsString(
+                "connect-src 'self' wss://hub.example.com:8804;",
+                SharedUiController::contentSecurityPolicy('n')
+            );
+        } finally {
+            putenv('HUB_WS_URL');
+        }
+    }
+
+    public function testRejectedWsUrlIsNotAddedToConnectSrc(): void
+    {
+        putenv('HUB_WS_URL=wss://evil.example.com/path');
+        try {
+            self::assertStringContainsString("connect-src 'self';", SharedUiController::contentSecurityPolicy('n'));
+        } finally {
+            putenv('HUB_WS_URL');
+        }
     }
 
     /**

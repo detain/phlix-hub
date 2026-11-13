@@ -32,6 +32,14 @@ final class ViteAssets
     private readonly string $manifestPath;
 
     /**
+     * Process-lifetime memo of the parsed entry URL, keyed by manifest path and
+     * validated by mtime+size so a rebuilt manifest self-heals on the next call.
+     *
+     * @var array<string, array{mtime: int, size: int, url: string}>
+     */
+    private static array $entryMemo = [];
+
+    /**
      * @param string $publicRoot Absolute path to the hub's public/ directory.
      */
     public function __construct(private readonly string $publicRoot)
@@ -64,6 +72,14 @@ final class ViteAssets
             );
         }
 
+        clearstatcache(true, $this->manifestPath);
+        $mtime = (int) filemtime($this->manifestPath);
+        $size = (int) filesize($this->manifestPath);
+        $memo = self::$entryMemo[$this->manifestPath] ?? null;
+        if ($memo !== null && $memo['mtime'] === $mtime && $memo['size'] === $size) {
+            return $memo['url'];
+        }
+
         $content = file_get_contents($this->manifestPath);
         if ($content === false) {
             throw new RuntimeException("Could not read Vite manifest at {$this->manifestPath}.");
@@ -76,7 +92,9 @@ final class ViteAssets
             if (($entry['isEntry'] ?? false) === true && isset($entry['file'])) {
                 /** @var string $file */
                 $file = $entry['file'];
-                return self::URL_BASE . ltrim($file, '/');
+                $url = self::URL_BASE . ltrim($file, '/');
+                self::$entryMemo[$this->manifestPath] = ['mtime' => $mtime, 'size' => $size, 'url' => $url];
+                return $url;
             }
         }
 

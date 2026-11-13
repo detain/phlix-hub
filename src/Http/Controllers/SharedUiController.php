@@ -145,7 +145,7 @@ final class SharedUiController
             // legacy same-origin socket derivation (current shipped behavior). The
             // ui-side consumer lands in a sibling lane; see contentSecurityPolicy()
             // for the socket ports the bundle dials.
-            'wsUrl' => self::configuredSocketBaseUrl(),
+            'wsUrl' => self::configuredSocketBaseUrl(true),
             'wsPath' => self::configuredSocketBasePath(),
         ];
 
@@ -249,17 +249,14 @@ final class SharedUiController
      *    pulls NOTHING from the TMDB image CDN (unlike the media server), so the
      *    server's `image.tmdb.org` / `tmdb.org` hosts are deliberately ABSENT.
      *  - `font-src 'self'` — the woff2 faces ship under `/assets/app/`.
-     *  - `connect-src 'self' ws: wss:` — REST/fetch/XHR stays same-origin; the
-     *    SPA additionally opens WebSockets on non-default ports (`:8804` hub
-     *    syncplay relay, `:8097` backing-server direct syncplay — verified in the
-     *    bundle). CSP cannot express "any port on the current host", and baking
-     *    the client's port constants into this header would couple two
-     *    independently-versioned artifacts and break cross-origin `hubBaseUrl`
-     *    relay setups, so the socket schemes are wildcarded. The abuse connect-src
-     *    most defends against (a script exfiltrating via fetch/WS) is already
-     *    foreclosed by the `script-src` nonce — no foreign script executes to
-     *    dial a hostile origin. Tightening to exact `ws://<host>:<port>` sources
-     *    would need a structured, closed-value config key, never a free-form box.
+     *  - `connect-src 'self'` plus the validated `HUB_WS_URL` origin (when set) —
+     *    REST/fetch/XHR stays same-origin, and `'self'` covers same-origin
+     *    ws/wss under CSP3. A socket on a different port or host (e.g. the `:8804`
+     *    syncplay relay) is admitted ONLY by pinning its origin in `HUB_WS_URL`,
+     *    whose value is regex-validated by {@see self::configuredSocketBaseUrl()}
+     *    (closed grammar: ws(s) scheme, host, optional port, no path). The old
+     *    `ws: wss:` scheme wildcards are gone. The `script-src` nonce law is
+     *    untouched.
      *  - `media-src 'self' blob:` / `worker-src 'self' blob:` — hls.js drives an
      *    MSE `blob:` object URL and a `blob:`-sourced transmux Worker (both
      *    present in the bundle's `hls-*` chunk); dropping these rejects playback
@@ -289,10 +286,16 @@ final class SharedUiController
             $scriptSrc .= " 'nonce-" . $scriptNonce . "'";
         }
 
+        $connectSrc = "'self'";
+        $wsOrigin = self::configuredSocketBaseUrl();
+        if ($wsOrigin !== null) {
+            $connectSrc .= ' ' . $wsOrigin;
+        }
+
         return "default-src 'self'; script-src " . $scriptSrc . "; "
             . "style-src 'self' 'unsafe-inline'; "
             . "img-src 'self' data: blob:; "
-            . "font-src 'self'; connect-src 'self' ws: wss:; "
+            . "font-src 'self'; connect-src " . $connectSrc . "; "
             . "media-src 'self' blob:; worker-src 'self' blob:; "
             . "frame-ancestors 'none'; base-uri 'self'";
     }
@@ -312,9 +315,13 @@ final class SharedUiController
      * Rejected (→ null): any non-ws(s) scheme, embedded path/query/userinfo,
      * a bare `//host`, or an out-of-range port.
      *
+     * @param bool $logRejected When true, a set-but-rejected value emits a one-line
+     *                          notice on the HTTP log channel (the shell passes true
+     *                          once per request; CSP derivation stays silent).
+     *
      * @return string|null The validated origin, or null when unset/invalid.
      */
-    public static function configuredSocketBaseUrl(): ?string
+    public static function configuredSocketBaseUrl(bool $logRejected = false): ?string
     {
         $raw = getenv('HUB_WS_URL');
         if ($raw === false) {
@@ -336,6 +343,13 @@ final class SharedUiController
             if ((int) $port >= 1 && (int) $port <= 65535) {
                 return $candidate;
             }
+        }
+
+        if ($logRejected) {
+            LoggerFactory::get(LogChannels::HTTP)->notice(
+                'SharedUiController ignored HUB_WS_URL: not a valid ws(s)://host[:port] origin; '
+                . 'falling back to same-origin socket derivation'
+            );
         }
 
         return null;
