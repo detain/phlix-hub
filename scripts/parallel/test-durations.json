@@ -179,6 +179,7 @@
         "tests/Unit/Http/ViteAssetsEntryUrlTest.php": 0.002,
         "tests/Unit/Hub/AuditLogRepositoryTest.php": 0.005,
         "tests/Unit/Hub/ClaimAuditDeAmplificationTest.php": 0.004,
+        "tests/Unit/Hub/ClaimJwkEncodeHardeningTest.php": 0.01,
         "tests/Unit/Hub/ClaimRequestHandlerTest.php": 0.07,
         "tests/Unit/Hub/ClaimServerCapTest.php": 0.007,
         "tests/Unit/Hub/ClientRelayTokenServiceTest.php": 0.007,

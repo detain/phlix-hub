@@ -12,6 +12,13 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Fixed [HUB-S26] — claim JWK encode hardening (HUB-12) — 2026-11-12
+
+- `ClaimRequestHandler` encodes claim JWKs with `JSON_THROW_ON_ERROR`, rejects non-finite
+  JWK members (e.g. `{"use":1e999}`) as the existing `SERVER_KEY_INVALID` 400, and
+  `jwkFingerprint` throws instead of hashing an empty string; pinned by
+  `ClaimJwkEncodeHardeningTest`.
+
 ### Fixed [HUB-S25] — update-marker fetcher verifies TLS (HUB-11) — 2026-11-12
 
 - `AsyncVersionMarkerFetcher` now builds its `workerman/http-client` with a strict ssl
