@@ -298,10 +298,10 @@ final class CookiePolicy
      *  - the §2.5 design-ADD belt first: a present `Sec-Fetch-Site:
      *    cross-site` refuses outright — an honest UA reporting a cross-site
      *    context is refused even behind a forged same-host Origin, the one
-     *    hole the header law alone cannot see (the server has not grown the
-     *    belt yet; the divergence is one-directional — the hub is STRICTER
-     *    here, never looser, and the register carries the server-side twin
-     *    row);
+     *    hole the header law alone cannot see (re-checked HUB-S51 against
+     *    phlix-server `Auth\CookiePolicy::stateChangingRequestOriginAllowed()`:
+     *    the server has since grown the same belt, arm order identical, so
+     *    the two laws now agree arm for arm);
      *  - no Origin AND no Referer → refuse (fail-closed; browsers always
      *    send at least one on a same-site state-changing request, and
      *    cookie-lineage requests only ever come from browsers);
@@ -319,7 +319,11 @@ final class CookiePolicy
      * the guard) differs the same way — collapsing the two axes would
      * silently loosen the guard, which is exactly what M-SERVER-76 caught
      * once already. The empty-string Origin keeps the server's accept
-     * quirk (the skip names only `'null'`); it is pinned, not polished.
+     * quirk (the skip names only `'null'`); it is pinned, not polished. The
+     * quirk stays DISCLOSED, not fixed: a present-but-empty Origin with a
+     * Referer that names the Host is accepted by both repos (the server
+     * twin's arm (6) carries the identical skip). Any tightening is a
+     * both-repos change in one step, never a hub-solo edit.
      *
      * @param string|null $originHeader   Raw `Origin` header value or null.
      * @param string|null $refererHeader  Raw `Referer` header value or null.

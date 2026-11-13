@@ -1572,6 +1572,18 @@ quota-family law already written into `src/Http/QuotaFrames.php`):
 Consumer duty: clients match on `code`, never on prose — prose legs are free to
 be reworded, which is exactly why the whole-frame test pins exist on both sides.
 
+### Standing laws and owner plate
+
+Record-only rows (HUB-S51) — none of these change behavior; they name a law or an open
+owner decision so the next contributor does not rediscover it.
+
+| Row | Status | Statement |
+|---|---|---|
+| WS-credential law | standing law | Any WebSocket auth that accepts a **cookie or a query-string credential** must carry an `Origin` check in the same commit that adds it. A browser attaches cookies to a cross-site upgrade on its own, so without the check the socket is an ambient-authority hole. Bearer-in-header and the pairing handshakes are not affected. The existing `CookiePolicy::stateChangingRequestOriginAllowed()` SSOT is the law to reuse. |
+| Empty-`Origin` quirk | disclosed, pinned | `CookiePolicy::stateChangingRequestOriginAllowed()` skips the Origin leg for a present-but-empty `Origin` (only the literal `null` is refused), identically to phlix-server's twin; the Referer leg still has to name the Host. Tightening is a both-repos step, never hub-solo. |
+| TLS-mandate flip | owner-held | Whether the hub's plaintext listeners (`8800`, `8802`) stop being a supported default and TLS becomes mandatory is an owner decision, not yet taken. Until it is, the plaintext notes in the port table stay accurate and no installer default changes. |
+| Typed-exception adoption | observation | Estate convention is moving toward typed exceptions over bare `\RuntimeException` / string-matched failures. Recorded as an estate-level observation only: no solo hub refactor, adoption happens where a step already touches the code. |
+
 ### Health & discovery
 
 | Method | Path | Notes |
