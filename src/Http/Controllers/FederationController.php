@@ -476,6 +476,10 @@ final class FederationController
         $leafHubId = $leafHubIdRaw;
         $this->hubRepo->createPeer($peerId, $nameRaw, $urlRaw, $publicKeyRaw, $leafHubId);
 
+        // POST==GET parity: echo the STORED created_at (re-SELECT), not a
+        // request-time date() that can drift from the DB-stamped value.
+        $storedPeer = $this->hubRepo->getPeerById($peerId);
+
         return (new Response())->status(201)->json([
             'id' => $peerId,
             'name' => $nameRaw,
@@ -485,7 +489,7 @@ final class FederationController
             'relay_enabled' => false,
             'admin_delegation_enabled' => false,
             'status' => 'pending',
-            'created_at' => date('Y-m-d H:i:s'),
+            'created_at' => $storedPeer['created_at'] ?? null,
         ]);
     }
 
@@ -859,6 +863,8 @@ final class FederationController
 
         $this->audit->logLibraryShareCrossHub($peerIdRaw, $libraryIdRaw, $permissionRaw, 'created');
 
+        $storedShare = $this->libraryShares->getOutgoingShareById($shareId);
+
         return (new Response())->status(201)->json([
             'id' => $shareId,
             'library_id' => $libraryIdRaw,
@@ -868,7 +874,7 @@ final class FederationController
             // createOutgoingShare stamps 'active' — hello-time pushes only
             // query active rows, so 'pending' would never converge.
             'status' => 'active',
-            'shared_at' => date('Y-m-d H:i:s'),
+            'shared_at' => $storedShare['shared_at'] ?? null,
         ]);
     }
 
@@ -1176,11 +1182,13 @@ final class FederationController
 
         $this->audit->logAdminDelegation($peerIdRaw, $userIdRaw, 'grant');
 
+        $storedDelegation = $this->adminDel->getDelegationById($delegationId);
+
         return (new Response())->status(201)->json([
             'id' => $delegationId,
             'peer_id' => $peerIdRaw,
             'user_id' => $userIdRaw,
-            'granted_at' => date('Y-m-d H:i:s'),
+            'granted_at' => $storedDelegation['granted_at'] ?? null,
         ]);
     }
 

@@ -243,6 +243,27 @@ final class FederationControllerTest extends TestCase
         self::assertSame(0, self::arrayNode($peers[1])['shared_library_count']);
     }
 
+    public function testCreatePeerEchoesStoredCreatedAt(): void
+    {
+        $this->hubRepo->method('getPeerByUrl')->willReturn(null);
+        $this->hubRepo->method('getPeerByPublicKey')->willReturn(null);
+        $this->hubRepo->method('getPeerById')->willReturn(['created_at' => '2001-02-03 04:05:06']);
+
+        $request = new Request();
+        $request->path = '/api/v1/me/federation/peers';
+        $request->method = 'POST';
+        $request->userId = 'admin-1';
+        $request->body = [
+            'url' => 'https://echo-peer.example.com',
+            'public_key' => 'echo-peer-key',
+            'name' => 'Echo Peer',
+        ];
+
+        $body = self::arrayNode(json_decode($this->controller->createPeer($request)->body, true));
+
+        self::assertSame('2001-02-03 04:05:06', $body['created_at']);
+    }
+
     public function testCreatePeerReturns201OnSuccess(): void
     {
         $this->hubRepo->method('getPeerByUrl')->willReturn(null);
