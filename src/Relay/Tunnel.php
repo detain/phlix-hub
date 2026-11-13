@@ -235,6 +235,15 @@ final class Tunnel implements TunnelInterface
     private const MAX_CLIENT_QUEUE = 256;
 
     /**
+     * Aggregate BYTE cap across the three backpressure queues combined
+     * (high-priority + body + client). The frame-COUNT caps alone allow
+     * 3 x 256 x 10 MiB (InboundPackageCap) of residency; this 32 MiB bound is
+     * checked at enqueue beside the count caps so a byte-heavy backlog fires
+     * the same `backpressure_overflow` close well inside the 256M worker limit.
+     */
+    public const MAX_PENDING_BYTES = 33554432;
+
+    /**
      * Drain-timer interval (seconds) for a throttled client's rate-limit backlog
      * (S42, phlix-docs docs/old/updates.md #50). When the token bucket runs dry, queued server→client
      * frames are released on this cadence as the bucket refills. 50 ms (20 ticks/s)
@@ -756,7 +765,10 @@ final class Tunnel implements TunnelInterface
      */
     private function enqueueHighPriorityFrame(RelayFrame $frame): void
     {
-        if (count($this->pendingHighPriorityFrames) >= self::MAX_HIGH_PRIORITY_QUEUE) {
+        if (
+            count($this->pendingHighPriorityFrames) >= self::MAX_HIGH_PRIORITY_QUEUE
+            || $this->pendingBytes() + strlen($frame->payload) > self::MAX_PENDING_BYTES
+        ) {
             $this->logger->error('Relay: high-priority queue full under backpressure, closing tunnel', [
                 'server_id' => $this->serverId,
                 'tunnel_id' => $this->tunnelId,
@@ -839,7 +851,10 @@ final class Tunnel implements TunnelInterface
      */
     private function enqueueBodyFrame(RelayFrame $frame): void
     {
-        if ($this->bodyQueueTotal() >= self::MAX_BODY_QUEUE) {
+        if (
+            $this->bodyQueueTotal() >= self::MAX_BODY_QUEUE
+            || $this->pendingBytes() + strlen($frame->payload) > self::MAX_PENDING_BYTES
+        ) {
             $this->logger->error('Relay: body queue full under backpressure, closing tunnel', [
                 'server_id' => $this->serverId,
                 'tunnel_id' => $this->tunnelId,
@@ -849,6 +864,31 @@ final class Tunnel implements TunnelInterface
             return;
         }
         $this->pendingBodyFrames[$frame->channelId()][] = $frame;
+    }
+
+    /**
+     * Aggregate queued BYTES across the high-priority, body and client queues,
+     * checked against {@see MAX_PENDING_BYTES} at every enqueue.
+     *
+     * @return int
+     */
+    private function pendingBytes(): int
+    {
+        $bytes = 0;
+        foreach ($this->pendingHighPriorityFrames as $frame) {
+            $bytes += strlen($frame->payload);
+        }
+        foreach ($this->pendingBodyFrames as $frames) {
+            foreach ($frames as $frame) {
+                $bytes += strlen($frame->payload);
+            }
+        }
+        foreach ($this->pendingClientFrames as $encodedFrames) {
+            foreach ($encodedFrames as $encoded) {
+                $bytes += strlen($encoded);
+            }
+        }
+        return $bytes;
     }
 
     /**
@@ -1125,7 +1165,10 @@ final class Tunnel implements TunnelInterface
     private function enqueueThrottledFrame(ClientConnection $client, string $encoded): bool
     {
         $channelId = $client->channelId;
-        if (count($this->pendingClientFrames[$channelId] ?? []) >= self::MAX_CLIENT_QUEUE) {
+        if (
+            count($this->pendingClientFrames[$channelId] ?? []) >= self::MAX_CLIENT_QUEUE
+            || $this->pendingBytes() + strlen($encoded) > self::MAX_PENDING_BYTES
+        ) {
             $this->logger->warning('Relay: throttled client queue full, closing channel', [
                 'server_id' => $this->serverId,
                 'tunnel_id' => $this->tunnelId,
@@ -1300,7 +1343,10 @@ final class Tunnel implements TunnelInterface
     private function enqueueClientFrame(ClientConnection $client, string $encoded): void
     {
         $channelId = $client->channelId;
-        if (count($this->pendingClientFrames[$channelId] ?? []) >= self::MAX_CLIENT_QUEUE) {
+        if (
+            count($this->pendingClientFrames[$channelId] ?? []) >= self::MAX_CLIENT_QUEUE
+            || $this->pendingBytes() + strlen($encoded) > self::MAX_PENDING_BYTES
+        ) {
             $this->logger->error('Relay: client queue full under backpressure, closing tunnel', [
                 'server_id' => $this->serverId,
                 'tunnel_id' => $this->tunnelId,

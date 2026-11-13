@@ -1642,6 +1642,107 @@ class TunnelTest extends TestCase
         $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
     }
 
+    /**
+     * Register $n always-full clients on $tunnel and return them.
+     *
+     * @return list<ClientConnection>
+     */
+    private function congestedClients(Tunnel $tunnel, int $n): array
+    {
+        $clients = [];
+        for ($i = 0; $i < $n; $i++) {
+            $ws = $this->createMock(TcpConnection::class);
+            $ws->method('send')->willReturn(false);
+            $client = new ClientConnection($ws, 'server-123', 'client-' . $i, $this->clientLogger, '');
+            $tunnel->registerClient($client);
+            $clients[] = $client;
+        }
+        return $clients;
+    }
+
+    /**
+     * Byte-aggregate cap (HUB-31), client arm: wire frames cap at 64 KiB so the
+     * per-channel COUNT cap (256) never trips across several channels, yet the
+     * aggregate exceeds MAX_PENDING_BYTES and closes the tunnel.
+     */
+    public function testClientQueueByteCapClosesTunnel(): void
+    {
+        $tunnel = $this->activeTunnel();
+        $this->serverWs->method('send')->willReturn(true);
+        $this->serverWs->method('pauseRecv');
+        $this->serverWs->method('resumeRecv');
+        $clients = $this->congestedClients($tunnel, 3);
+
+        $this->sessionManager
+            ->expects($this->once())
+            ->method('closeSession')
+            ->with('session-456', 'backpressure_overflow');
+
+        $chunk = str_repeat('x', 65000);
+        foreach ($clients as $client) {
+            for ($i = 0; $i < 200 && $tunnel->status !== Tunnel::STATUS_CLOSED; $i++) {
+                $frame = new RelayFrame(RelayFrameType::DATA, $client->channelId, $chunk);
+                $tunnel->sendToClient($client->channelId, $frame);
+            }
+        }
+
+        $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
+    }
+
+    /**
+     * Byte cap, body arm: a client backlog near the cap plus one more body frame
+     * (count 1 << MAX_BODY_QUEUE) overflows by bytes and closes the tunnel.
+     */
+    public function testBodyQueueByteCapClosesTunnel(): void
+    {
+        $tunnel = $this->activeTunnel();
+        $this->serverWs->method('send')->willReturn(false);
+        $this->serverWs->method('pauseRecv');
+        $this->serverWs->method('resumeRecv');
+        $clients = $this->congestedClients($tunnel, 2);
+
+        $this->sessionManager
+            ->expects($this->once())
+            ->method('closeSession')
+            ->with('session-456', 'backpressure_overflow');
+
+        $chunk = str_repeat('x', 65000);
+        foreach ($clients as $client) {
+            for ($i = 0; $i < 250; $i++) { // ~16 MB each, ~32.5 MB total < cap
+                $frame = new RelayFrame(RelayFrameType::DATA, $client->channelId, $chunk);
+                $tunnel->sendToClient($client->channelId, $frame);
+            }
+        }
+        $this->assertSame(Tunnel::STATUS_ACTIVE, $tunnel->status, 'backlog still under the cap');
+
+        $body = RelayHttpRequestCodec::encodeBody(str_repeat('y', 60000));
+        for ($i = 0; $i < 40 && $tunnel->status !== Tunnel::STATUS_CLOSED; $i++) {
+            $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, 0, $body));
+        }
+
+        $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
+    }
+
+    /**
+     * Byte cap, non-overflow arm: a modest backlog under the cap does not close.
+     */
+    public function testBodyQueueUnderByteCapStaysOpen(): void
+    {
+        $tunnel = $this->activeTunnel();
+        $this->serverWs->method('send')->willReturn(false);
+        $this->serverWs->method('pauseRecv');
+        $this->serverWs->method('resumeRecv');
+
+        $this->sessionManager->expects($this->never())->method('closeSession');
+
+        $body = RelayHttpRequestCodec::encodeBody(str_repeat('x', 60000));
+        for ($i = 0; $i < 100; $i++) {
+            $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, 0, $body));
+        }
+
+        $this->assertSame(Tunnel::STATUS_ACTIVE, $tunnel->status);
+    }
+
     // ---------------------------------------------------------------------
     // FIX-3 — type-based classification (no json_decode) + within-request order.
     // ---------------------------------------------------------------------
