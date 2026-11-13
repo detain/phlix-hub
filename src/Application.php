@@ -2883,13 +2883,12 @@ final class Application
                 return;
             }
             $mysqli->options(MYSQLI_OPT_CONNECT_TIMEOUT, 2);
-            if (!@$mysqli->real_connect(
-                getenv('HUB_DB_HOST') ?: '127.0.0.1',
-                $userEnv !== false ? $userEnv : 'phlix_hub',
-                $passEnv !== false ? $passEnv : 'phlix_hub',
-                getenv('HUB_DB_NAME') ?: 'phlix_hub',
-                (int) (getenv('HUB_DB_PORT') ?: 3306),
-            )) {
+            $dbHost = getenv('HUB_DB_HOST') ?: '127.0.0.1';
+            $dbUser = $userEnv !== false ? $userEnv : 'phlix_hub';
+            $dbPass = $passEnv !== false ? $passEnv : 'phlix_hub';
+            $dbName = getenv('HUB_DB_NAME') ?: 'phlix_hub';
+            $dbPort = (int) (getenv('HUB_DB_PORT') ?: 3306);
+            if (!@$mysqli->real_connect($dbHost, $dbUser, $dbPass, $dbName, $dbPort)) {
                 return;
             }
             $res = $mysqli->query("SHOW VARIABLES LIKE 'max_connections'");
