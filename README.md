@@ -16,7 +16,8 @@ Sign in once, reach any of your servers from anywhere — no port forwarding, no
 ## Table of contents
 
 <!-- Mechanical law: every H2 and H3 heading, in document order (GitHub slug rules).
-     Add a heading, add its line here. Depth is uniform: H2 top level, H3 nested two spaces. -->
+     Add a heading, add its line here. Depth is uniform: H2 top level, H3 nested two spaces.
+     The "Table of contents" heading itself is excluded (a TOC does not list itself). -->
 
 - [What is the Hub?](#what-is-the-hub)
   - [Do I actually need a hub?](#do-i-actually-need-a-hub)
@@ -184,7 +185,7 @@ This README is the operator/API reference; those pages are the illustrated path.
 ## Terms used in this document
 
 Plain definitions for the vocabulary this README leans on — the jargon wall a
-reader hit otherwise. "Claim code" is the worked example: it is defined in the
+reader would otherwise hit. "Claim code" is the worked example: it is defined in the
 glossary below, and the pairing walkthrough spells out its format where the
 flow uses it.
 
@@ -577,7 +578,7 @@ projects' frontends and backends, with HAProxy picking the right cert per SNI ho
 `/etc/haproxy/phlix-managed/<project>.cfg.fragment` with `fe_http`, `fe_https`, and `backends`
 sections. A shared rebuilder then assembles the final `haproxy.cfg` from every fragment it
 finds. The `frontend fe_https` bind shape is capability-measured at rebuild time
-(audit §3.1 cure): on HAProxy >= 2.9 — every host on the supported matrix (Ubuntu 24.04+,
+(the dated HAProxy audit's §3.1 cure, recorded in `CHANGELOG.md`): on HAProxy >= 2.9 — every host on the supported matrix (Ubuntu 24.04+,
 where the distro ships 2.9.x) — each annotated TLS fragment binds its certbot paths
 directly (`crt /etc/letsencrypt/live/<domain>/fullchain.pem key-file .../privkey.pem`),
 so a reload always picks up the current bytes at stable symlink paths and a rotation done
@@ -606,7 +607,7 @@ directly. Open it on the firewall but don't put it behind the HAProxy 80/443 fro
 | --- | --- | --- | --- |
 | `8800` | HTTP API + SPA + `/health` | routed at `/` via 80/443 | ufw-opened (plaintext REST + portal — bearer credentials ride it in the clear; front it with your own TLS or keep it loopback) |
 | `8802` | server tunnels | direct — ufw-opened (pairing law: never proxied; **plaintext** unless `HUB_RELAY_TLS` is on — the installer seeds `HUB_RELAY_TLS=true` (wss) only on TLS-domain installs, where the Let's Encrypt deploy hook also keeps the rotated key readable by the hub; on a plaintext-install `HELLO` carries each server's durable enrollment JWT — per surface, the most secret to lose) | ufw-opened (same credential note) |
-| `8803` | client mount (declared unavailable) | routed at `/client/` (the listener itself still binds every interface — the installer does not seed `HUB_WS_BIND=127.0.0.1` and does not ufw-open `8803`, so keep it behind an active ufw/cloud firewall or pin `HUB_WS_BIND` yourself) | loopback only — point your proxy at it |
+| `8803` | client mount (declared unavailable) | routed at `/client/` (the listener itself still binds every interface — the installer does not seed `HUB_WS_BIND=127.0.0.1` and does not ufw-open `8803`, so keep it behind an active ufw/cloud firewall or pin `HUB_WS_BIND` yourself) | not ufw-opened (binds all interfaces unless `HUB_WS_BIND` pinned) — point your proxy at it |
 | `8804` | SyncPlay watch-party clients | routed at `/syncplay/` | ufw-opened (plaintext WS — close it once your proxy routes it) |
 | `8805` | federation MASTER ingress (peer dials) | routed at `/relay/federation/` | ufw-opened (same plaintext caveat) |
 | `2206` | cross-process channel broker | loopback only | loopback only |
@@ -658,7 +659,7 @@ your proxy at those — replicate the same path prefixes the managed config uses
 `/syncplay/`, `/relay/federation/`) and see §8 for the WebSocket pass-through requirements.
 
 Everything else is already namespaced (env files, systemd units, install dirs, service users,
-MySQL DBs, backend ports, certbot artefacts) so there are no other co-install conflicts.
+MySQL DBs, backend ports, certbot artifacts) so there are no other co-install conflicts.
 
 ## Quick start (development)
 
@@ -884,7 +885,7 @@ straight before step 7 starts the daemon:
   **default to binding all interfaces**. `:8802` and `:8805` hard-code it
   (`websocket://0.0.0.0:<port>` in `RelayWorker.php:352`,
   `FederationWorker.php:336`); `:8803` and `:8804` honor `HUB_WS_BIND`
-  since SH-064 (`WsTlsContext::listenString()` at `ClientRelayWorker.php:328`,
+  (`WsTlsContext::listenString()` at `ClientRelayWorker.php:328`,
   `SyncPlayRelayWorker.php:622`) — a proxy-fronted install can pin those two
   to loopback, which is their intended shape since both ride the shared
   frontend's `/client/` and `/syncplay/` routes. `HUB_HOST` restricts
@@ -892,7 +893,7 @@ straight before step 7 starts the daemon:
   every relay listener on the public interface unless you firewall it or
   pin the two that take the knob.
 - The installer-managed path opens `ufw` rules per-port only **when ufw is
-  active** (see the ports table under *Install modes*); the manual path runs no
+  active** (see the ports table under *Running alongside phlix-server*); the manual path runs no
   firewall at all. If `sudo ufw status` says `inactive`, you have no host
   filtering whatsoever — either enable it with an explicit policy, or open the
   ports on your cloud security group. Decide per port: `8804` only needs to be
@@ -1305,17 +1306,17 @@ the `PHLIX_HUB_RATELIMIT_*` envs below, so when it is set the env defaults are N
 | `HUB_RELAY_TLS` | `false` | Terminates TLS on the `:8802` server-tunnel listener (`wss://`) — what you must enable to pair servers over untrusted networks. Needs `HUB_RELAY_TLS_CERT` / `HUB_RELAY_TLS_KEY` (both default `null`) |
 | `HUB_RELAY_TLS_CERT` / `HUB_RELAY_TLS_KEY` | `null` | PEM paths for the `:8802` TLS context above. A missing path aborts boot (fail-fast); an unreadable one warns loudly and is guarded per connection (`TlsMaterialWatch`) — managed installs keep the key group-readable via the `phlix-tls` / mode `640` perms legs |
 | `HUB_RELAY_REQUIRE_TLS` | `false` | Fail-closed `:8802` bind mandate — the listen-side mirror of the server's `PHLIX_RELAY_REQUIRE_TLS` (R17-01): `true` makes the relay worker REFUSE to boot when TLS is off, instead of binding a cleartext listener that carries enrollment JWTs. `false` = warn-only — a plaintext bind logs one loud `SECURITY` advisory on the relay channel at boot |
-| `HUB_FEDERATION_TLS` | `false` | Terminates TLS natively on the `:8805` hub-to-hub federation listener (`wss://`) — for masters reached WITHOUT a TLS-terminating upstream proxy. Needs `HUB_FEDERATION_TLS_CERT` / `HUB_FEDERATION_TLS_KEY` (both default `null`). A plaintext bind logs one loud `SECURITY` advisory on the relay channel at boot (M22) |
+| `HUB_FEDERATION_TLS` | `false` | Terminates TLS natively on the `:8805` hub-to-hub federation listener (`wss://`) — for masters reached WITHOUT a TLS-terminating upstream proxy. Needs `HUB_FEDERATION_TLS_CERT` / `HUB_FEDERATION_TLS_KEY` (both default `null`). A plaintext bind logs one loud `SECURITY` advisory on the relay channel at boot |
 | `HUB_FEDERATION_TLS_CERT` / `HUB_FEDERATION_TLS_KEY` | `null` | PEM paths for the `:8805` TLS context above |
 | `HUB_FEDERATION_REQUIRE_TLS` | `false` | Fail-closed `:8805` bind mandate, the federation sibling of `HUB_RELAY_REQUIRE_TLS` above: `true` makes `FederationWorker::start()` throw before constructing the listener when TLS is off — no cleartext federation socket is ever bound (federation inbound stays down, the hub serves the rest). `false` = warn-only. Keep unset on managed installs, where HAProxy fronts `:8805` and terminates TLS upstream |
-| `HUB_CLIENT_RELAY_TLS` | `false` | Terminates TLS natively on the `:8803` client-mount listener (`wss://`). Needs `HUB_CLIENT_RELAY_TLS_CERT` / `HUB_CLIENT_RELAY_TLS_KEY` (both default `null`). A plaintext bind logs one loud `SECURITY` advisory on the relay channel at boot (SH-064, same posture as M22 above) — on managed installs the shared frontend's `/client/` route is the supported shape, so leave this off there |
+| `HUB_CLIENT_RELAY_TLS` | `false` | Terminates TLS natively on the `:8803` client-mount listener (`wss://`). Needs `HUB_CLIENT_RELAY_TLS_CERT` / `HUB_CLIENT_RELAY_TLS_KEY` (both default `null`). A plaintext bind logs one loud `SECURITY` advisory on the relay channel at boot (same posture as the `HUB_FEDERATION_TLS` advisory above) — on managed installs the shared frontend's `/client/` route is the supported shape, so leave this off there |
 | `HUB_CLIENT_RELAY_TLS_CERT` / `HUB_CLIENT_RELAY_TLS_KEY` | `null` | PEM paths for the `:8803` TLS context above. A missing path aborts boot (fail-fast); an unreadable one warns loudly and is guarded per connection (`TlsMaterialWatch`) |
 | `HUB_CLIENT_RELAY_REQUIRE_TLS` | `false` | Fail-closed `:8803` bind mandate (SH-064): `true` makes `ClientRelayWorker::start()` throw before constructing the listener when TLS is off. Unlike the federation worker — whose refusal the boot supervisor catches and skips — this listener has no supervisor catch: the hub process refuses to boot at all (fail-closed; the mandate means "never run me with a credential-bearing cleartext listener up"). `false` = warn-only |
 | `HUB_SYNCPLAY_TLS` | `false` | Terminates TLS natively on the `:8804` SyncPlay watch-party listener (`wss://`), the sibling posture of `HUB_CLIENT_RELAY_TLS` above. Needs `HUB_SYNCPLAY_TLS_CERT` / `HUB_SYNCPLAY_TLS_KEY` (both default `null`); plaintext bind logs one loud `SECURITY` advisory at boot. The managed `/syncplay/` route stays the supported browser path; this knob is for direct-dial topologies |
 | `HUB_SYNCPLAY_TLS_CERT` / `HUB_SYNCPLAY_TLS_KEY` | `null` | PEM paths for the `:8804` TLS context above. Missing path aborts boot (fail-fast); unreadable warns loudly, guarded per connection (`TlsMaterialWatch`) |
 | `HUB_SYNCPLAY_REQUIRE_TLS` | `false` | Fail-closed `:8804` bind mandate (SH-064): `true` refuses the plaintext bind before the socket is constructed — the hub process refuses to boot (same supervisorless fail-closed shape as `:8803` above), so group tokens are never carried in the clear. `false` = warn-only |
 | `HUB_WS_BIND` | `0.0.0.0` | Bind address for the `:8803` and `:8804` listeners ONLY (SH-064) — pin them to `127.0.0.1` on proxy-fronted installs, where HAProxy's `/client/` and `/syncplay/` routes are the real entrypoints. `:8802` and `:8805` keep their hard-coded all-interface binds (their dialing is the direct-dial law); `:8800` is governed by `HUB_HOST`. Bare IPv6 literals are bracketed for the transport automatically |
-| `HUB_COOKIE_INSECURE` | unset | Drops `Secure` from cookies set through `Response::cookie()`, and is the env twin of the stored `auth.cookie.insecure` override: since CP-011 the hub DOES set session cookies on browser-class issuance paths (gated by `auth.cookie.enabled`, §2.4 scheme law), and this opt-in is how a plain-HTTP deployment makes them usable — never a silent Secure downgrade (CD-3a). The CP-012 CSRF Origin guard applies to cookie-authenticated state-changing requests regardless of this flag |
+| `HUB_COOKIE_INSECURE` | unset | Drops `Secure` from cookies set through `Response::cookie()`, and is the env twin of the stored `auth.cookie.insecure` override: since the CP-011 cookie-session contract the hub DOES set session cookies on browser-class issuance paths (gated by `auth.cookie.enabled`, §2.4 scheme law of that contract), and this opt-in is how a plain-HTTP deployment makes them usable — never a silent Secure downgrade (CD-3a). The CP-012 CSRF Origin guard applies to cookie-authenticated state-changing requests regardless of this flag |
 | `XDEBUG_MODE` | `off` | Xdebug mode inside the container (`docker/php.ini` §[xdebug] block; formerly also cited as an installer-generated bare-metal ini — that path was REMOVED 2026-11-05: after the swoole coroutine-teardown GPF evidence the installer no longer installs php-xdebug or writes any xdebug ini, and `--update` DISARMS an enablement an older recipe left (`phlix_disarm_xdebug`; HOST-5 Q6/Q8, owner ruling)). **Never set `debug` or `trace` in production**: `start_with_request = trigger` means any request carrying the trigger value arms step-debugging/tracing, and traces land in `/tmp/xdebug` — pre-created inside the container's shared world-writable `/tmp` (`docker-entrypoint.sh` boot mkdir; `xdebug.trace_output_dir` in the same `docker/php.ini` block). On today's bare metal the installer ships no xdebug at all, so the trace directory is a container-surface concern |
 | `XDEBUG_TRIGGER` | `devdebug` | Trigger value for the mode above (`docker/php.ini` §[xdebug] block). Treat it as a secret if you ever enable a debug/trace mode on a reachable host; the former `.env.example` carried it as plain text and was deleted because nothing in this repo loads `.env` files (no dotenv in the lock) |
 | `PHLIX_CORS_ALLOW_ORIGINS` | unset — **deny-all** | Cross-origin allowlist for the hub's REST HTTP surface (`src/Http/CorsPolicy.php`, read once at router construction — boot-scoped, changes need a hub restart): comma-separated **exact lowercase origins** (`PHLIX_CORS_ALLOW_ORIGINS=https://hub.example.com,app://-`); a malformed entry — wildcard, uppercase, path, whitespace — fails LOUD at boot instead of silently denying at runtime. Allowlisted origins earn the `OPTIONS` 204 preflight and an `Access-Control-Allow-Origin` echo on actual replies; `Access-Control-Allow-Credentials` is never emitted (hub REST is bearer-auth, and a cross-origin cookie ride is exactly what this posture refuses). A disallowed-origin preflight is byte-identical to an unknown-path 404 — a probe cannot map the route table. `app://-` is the origin the desktop (Electron Windows client) hub-mode renderer presents — add it when the hub serves packaged desktop clients. Honest scope limit (the position law, M-HUB-09 r2/r3): `OPTIONS` on AUTHED routes runs the auth chain before any CORS grant, so this knob opens cross-origin reach for the **public** control endpoints (health, auth, server-claims trio); authed desktop hub-mode REST deliberately stays beyond browser-CORS reach there — its live cross-origin work rides the CORS-exempt relay WebSockets (`:8802`–`:8804`). The same-origin `/app` portal needs nothing: same-origin fetches never preflight. Full policy text in `openapi.yaml` §"Cross-origin (CORS)" |
@@ -1546,7 +1547,7 @@ with the router by `OpenApiSpecMatchesRouterTest`); [`src/Application.php`](src/
 is where routes are registered, not where they should be read from. Protected
 routes require authentication via `AuthMiddleware`: a `Bearer` access token takes
 absolute precedence; browser clients may instead carry the HttpOnly
-`phlix_hub_token` cookie (CP-011 dual-emit), and every cookie-lineage
+`phlix_hub_token` cookie (cookie-session dual-emit, CP-011), and every cookie-lineage
 state-changing request must pass the CP-012 CSRF Origin guard
 (`403 csrf.invalid_origin` otherwise). The legacy SSR page paths 302-redirect
 to `/app` unconditionally.
@@ -1711,7 +1712,7 @@ come; nothing in this repo ships them today.
 
 Operators: for remote browsers to dial `:8804` directly it must be reachable —
 see the port table under *Running alongside phlix-server* and
-`docs/websockets.md` (§`:8804`) for the TLS/mixed-content caveat that decides
+the `:8804` section of `docs/websockets.md` for the TLS/mixed-content caveat that decides
 whether opening it helps or only exposes.
 
 ## Connecting a media server
@@ -1863,7 +1864,7 @@ then the receiving user sees it under *incoming offers* and answers `accept` or
 **Reading the link state.** `GET /api/v1/me/federation/peers` shows each peer's
 status; `connected` only ever appears after a successful `hub_hello_ack` ceremony —
 a row stuck at `pending`/`disconnected` with a healthy process means the dial was
-refused or dropped, and `docs/websockets.md` §:8805 documents the refusal reasons the
+refused or dropped, and the *`:8805` — hub federation* section of `docs/websockets.md` documents the refusal reasons the
 audit log carries.
 
 ## Portal admin basics
@@ -1886,7 +1887,7 @@ entry merely reflects that.
 | **Shared With Me** (`/app/shared-with-me`) | Libraries other members have granted you. |
 | **Invite Links** (`/app/invite-links`) | Create invite links — an opaque token, hashed at rest, granting a library share. The public `/invite/:token` link lands on the acceptance page, where the recipient signs in (or signs up when signups are open) and redeems: the accept call is authenticated (anonymous → 401 `auth.required`), so an invite grants the share but never creates the account. |
 | **Watch Party** (`/app/watch-party`) | Host or join a watch party for synchronized viewing on your selected server. |
-| **Requests** (`/app/requests`) | Jellyseerr-style request queue: ask for movies/series; admins approve. |
+| **Requests** (`/app/requests`) | Jellyseerr-class request queue: ask for movies/series; admins approve. |
 | **Security** (`/app/settings/security`) | Your own password change, plus the **Sessions** tab: lists your signed-in devices (backed by `GET /api/v1/auth/sessions`), revokes one device (`DELETE /api/v1/auth/sessions/{id}`), or revokes all the others (the page issues one DELETE per other session — there is no bulk endpoint). The current device's row is read-only: it carries no revoke control, so use Sign out to end it. |
 | **MCP tokens** (`/app/mcp-tokens`) | Personal access tokens for MCP/API access — every user manages their own. |
 
@@ -1912,7 +1913,7 @@ unlinked — they have no data to show; pair or re-select under My Servers first
 Admin → Settings edits the hub settings store: live rows that override
 config-file defaults, served by `GET/PUT /api/v1/admin/settings`. Most take
 effect on the next request; the two marked **restart** only re-read at worker
-boot. The store can never touch secrets, TLS paths, or listener ports — those
+boot — restart from the admin console's Restart button (`POST /api/v1/admin/restart`, a graceful reload) or `systemctl reload phlix-hub`. The store can never touch secrets, TLS paths, or listener ports — those
 are denied by design and belong in the [env reference](#configuration-reference).
 
 | Toggle (store key) | Effect | Live? |
@@ -2143,10 +2144,13 @@ phlix-hub/
 │   ├── Alexa/           # Skill envelope, signature/certificate-chain verification, media gateway
 │   ├── Auth/            # JWT, users, auth manager
 │   ├── Common/          # Container, database pool, logging, rate limiting, trusted-proxy resolver
-│   ├── Console/         # bin/phlix commands (migrate, smoke:jwt, oauth:client:*)
+│   ├── Console/         # bin/phlix commands (migrate, smoke:jwt, oauth:client:*, user:*)
 │   ├── Http/            # Router, request/response, controllers, middleware, response sink
 │   ├── Hub/             # Claims, heartbeats, sharing, DNS, TLS, relay sessions, update checks
 │   ├── Federation/      # Hub-to-hub federation peer/share/session services (the :8805 worker itself lives under Relay/)
+│   ├── MaintenanceWorker.php # Dedicated worker for the DB-only reapers/pruners
+│   ├── ServerReaper.php  # Offline-server reaper + heartbeat/audit/federation-session retention sweeps
+│   ├── Version.php       # Hub version constant
 │   ├── Mcp/             # MCP protocol, tool registry + tools, PAT service, scopes
 │   ├── OAuth/           # Authorization server: clients, codes, PKCE, tokens, consent, scopes
 │   ├── Relay/           # Reverse-tunnel relay workers (incl. the :8805 FederationWorker listener), frame codec, tunnels, throttle token bucket
