@@ -458,6 +458,18 @@ final class FederationWorker
         }
 
         try {
+            $channelHost = $this->channelHost;
+            $channelPort = $this->channelPort;
+            // Vendor property is typed with the undefined legacy `callback` pseudo-type.
+            /** @psalm-suppress InvalidPropertyAssignmentValue */
+            // @phpstan-ignore assign.propertyType
+            ChannelClient::$onConnect = static function () use ($logger, $channelHost, $channelPort): void {
+                $logger->info('Federation master push: worker joined channel broker', [
+                    'channel_host' => $channelHost,
+                    'channel_port' => $channelPort,
+                    'joined' => true,
+                ]);
+            };
             ChannelClient::connect($this->channelHost, $this->channelPort);
 
             /** @var mixed $dispatcher */
@@ -489,9 +501,13 @@ final class FederationWorker
                 },
             );
 
-            $logger->info('Federation master push: worker joined channel broker', [
+            // Boot-time truth: only the subscription is REGISTERED here; the
+            // broker TCP link is async. "Joined" is logged from the vendor
+            // onConnect callback, when the broker link is actually up.
+            $logger->info('Federation master push: registering channel subscription', [
                 'channel_host' => $this->channelHost,
                 'channel_port' => $this->channelPort,
+                'joined' => false,
             ]);
         } catch (Throwable $e) {
             $logger->error('Federation master push: channel init failed', [
@@ -828,7 +844,7 @@ final class FederationWorker
     /**
      * Resolve the federation connect limiter from the container.
      *
-     * Mirrors {@see \Phlix\Hub\SyncPlay\RelayWorker::resolveRelayConnectLimiter()}
+     * Mirrors {@see \Phlix\Hub\Relay\RelayWorker::resolveRelayConnectLimiter()}
      * and {@see ClientRelayWorker}: any failure (no container entry, broken
      * definition) yields null and the guard fails OPEN — the federation
      * surface must stay reachable when the limiter itself is misconfigured;
