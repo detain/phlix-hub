@@ -443,6 +443,27 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         return ['real' => $real, 'mtime' => $mtime, 'size' => $size];
     }
 
+    public function testFaviconIsServedByTheStaticFastPathWithIconContentType(): void
+    {
+        $real = dirname(__DIR__, 2) . '/public/favicon.ico';
+        $this->assertFileExists($real);
+        $this->assertFalse(Application::isDeniedStaticPath($real));
+        $this->assertFalse(Application::isStaticHtmlDenial($real));
+        $size = filesize($real);
+        $mtime = filemtime($real);
+        $this->assertIsInt($size);
+        $this->assertIsInt($mtime);
+        $wire = (string) Application::buildStaticFastPathResponse(
+            'body',
+            '/favicon.ico',
+            ['real' => (string) realpath($real), 'mtime' => $mtime, 'size' => $size],
+            null,
+            null,
+        );
+        $this->assertStringContainsString('HTTP/1.1 200 OK', $wire);
+        $this->assertStringContainsString("Content-Type: image/x-icon\r\n", $wire);
+    }
+
     public function testHeadStaticReplyIsBodylessWithAuthoritativeContentLength(): void
     {
         $file = $this->staticFileShape(self::NON_HASHED_ASSET);
