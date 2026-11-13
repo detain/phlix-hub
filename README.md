@@ -158,7 +158,7 @@ This README is the operator/API reference; those pages are the illustrated path.
 - **Web UI & admin console** — the hub's front door is a Vue SPA (the shared `@phlix/ui` design
   system) served at `/app` (`/` redirects to `/app/servers`). Every signed-in user gets **My Servers**,
   **Server Detail**, **Search**, **Shares**, **Shared With Me**, **Watch Party**, **Invite Links**,
-  **Requests**, **Security** (own password change), **MCP tokens** (own API credentials), and the
+  **Requests**, **Security** (own password change plus the Sessions tab: list, revoke one, revoke others), **MCP tokens** (own API credentials), and the
   media-browsing surfaces (music, books, audiobooks, photos) for the selected server; there is a
   public **invite-acceptance** page at `/app/invite/:token` (the target of the public
   `GET /invite/{token}` link). **Federation**, **Federation Shares**, and the `requiresAdmin`
@@ -793,8 +793,8 @@ Notes:
   execution on MySQL 8.0.46 (the version the CI service and the `mysql:8.0` deploy family
   run): a user holding exactly the grants above — `SHOW GRANTS` captured, no `DROP` anywhere —
   completed both a standalone `ALTER TABLE … DROP INDEX` (rc 0) and the full fresh-install
-  chain (executed on 2026-11-11 when the chain was 37 migrations, 001–049 with gaps; later
-  migrations 050–058 postdate that proof) including 049's composite `MODIFY` + `ADD UNIQUE` + drop of
+  chain (executed on 2026-11-11 when the chain was 37 migrations, 001–051 with gaps; later
+  migrations 052–058 postdate that proof) including 049's composite `MODIFY` + `ADD UNIQUE` + drop of
   010's `idx_token_hash`; `SHOW INDEX` confirmed the plain index gone and
   `uk_invite_links_token_hash` in its place. Index drops ride the `ALTER` privilege.
 - If the Hub runs on a **different host** than MySQL, create the user for that host (or `'%'`)
@@ -1581,6 +1581,8 @@ be reworded, which is exactly why the whole-frame test pins exist on both sides.
 | `POST` | `/api/v1/auth/login` | Obtain access + refresh tokens |
 | `POST` | `/api/v1/auth/refresh` | Exchange a refresh token |
 | `POST` | `/api/v1/auth/logout` | Invalidate session |
+| `GET` | `/api/v1/auth/sessions` | List your active device sessions, newest-used first (protected); the row that minted the calling token is flagged `current` |
+| `DELETE` | `/api/v1/auth/sessions/{id}` | Revoke one of your device sessions (protected); foreign and unknown ids both answer 404, an already-revoked own session is an idempotent 204 |
 | `GET` | `/api/v1/me`, `/api/v1/auth/me` | Current user, incl. `is_admin` (protected) |
 
 ### Servers
@@ -1763,6 +1765,16 @@ to open); a native `wss://` on `:8805` itself exists only when the
 `HUB_FEDERATION_TLS*` set is configured (see `docs/websockets.md`,
 *`:8805` — hub federation*).
 
+**Before you start — get a session token.** Every `$…_JWT` below is the `access_token` from a login. Mint one (it lasts `HUB_JWT_ACCESS_TTL`, 3600 s = 1 hour by default — re-run the login or call `/api/v1/auth/refresh` when calls start answering 401):
+
+```bash
+HUB_JWT=$(curl -s -X POST -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "..."}' \
+  https://YOUR-HUB/api/v1/auth/login | jq -r .access_token)
+```
+
+Use that value as `$HUB_JWT`, `$MASTER_JWT` or `$LEAF_JWT` below, from the matching hub.
+
 **Step 1 — each admin reads their own identity.** Two endpoints, both trivial:
 
 ```bash
@@ -1797,13 +1809,13 @@ before any connection is honored. So on the master:
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $MASTER_JWT" -H "Content-Type: application/json" \
-  -d '{"url": "https://LEAF-HUB:8805", "public_key": "<LEAF_PUBLIC_KEY>", "name": "Annabell hub", "leaf_hub_id": "<LEAF_HUB_ID>"}' \
+  -d '{"url": "https://leaf.example.com", "public_key": "<LEAF_PUBLIC_KEY>", "name": "Annabell hub", "leaf_hub_id": "<LEAF_HUB_ID>"}' \
   https://MASTER-HUB/api/v1/me/federation/peers
 ```
 
 `url` records how a hub says it is reachable for federation — which for a
 master-side row like this one is the leaf's advertised identity, never a dial
-target (the master does not dial out). Prefer the managed shape: the public
+target (the master does not dial out). Prefer the managed shape (the example above; for a native-TLS listener use `wss://leaf.example.com:8805`): the public
 `https://` frontend URL whose `/relay/federation/` route carries peer traffic.
 A `:8805` in the URL means the NATIVE federation listener — speak `wss://`
 there only when that hub has configured `HUB_FEDERATION_TLS*`; a bare
@@ -1870,7 +1882,7 @@ entry merely reflects that.
 | **Invite Links** (`/app/invite-links`) | Create invite links — an opaque token, hashed at rest, granting a library share. The public `/invite/:token` link lands on the acceptance page, where the recipient signs in (or signs up when signups are open) and redeems: the accept call is authenticated (anonymous → 401 `auth.required`), so an invite grants the share but never creates the account. |
 | **Watch Party** (`/app/watch-party`) | Host or join a watch party for synchronized viewing on your selected server. |
 | **Requests** (`/app/requests`) | Jellyseerr-style request queue: ask for movies/series; admins approve. |
-| **Security** (`/app/settings/security`) | Your own password change. Session revocation is not offered — sign-in tokens expire on their own (the page says so too). |
+| **Security** (`/app/settings/security`) | Your own password change, plus the **Sessions** tab: lists your signed-in devices (backed by `GET /api/v1/auth/sessions`), revokes one device (`DELETE /api/v1/auth/sessions/{id}`), or revokes all the others (the page issues one DELETE per other session — there is no bulk endpoint). The current device's row is read-only: it carries no revoke control, so use Sign out to end it. |
 | **MCP tokens** (`/app/mcp-tokens`) | Personal access tokens for MCP/API access — every user manages their own. |
 
 The media-browsing surfaces (music `/app/music/*`, books `/app/books/*`,
