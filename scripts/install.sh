@@ -2488,7 +2488,8 @@ HOOK_PERMS
     } > /etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh
     chmod +x /etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh
 
-    # Configure the relay worker TLS settings (wss:// on port 8802).
+    # Configure the relay worker TLS settings (wss:// on port 8802). TLS-domain
+    # installs only: the no-TLS branch leaves :8802 plaintext (ws://).
     # The RelayWorker reads HUB_RELAY_TLS, HUB_RELAY_TLS_CERT, HUB_RELAY_TLS_KEY
     # from the env file (config/server.php → Application::boot()).
     phlix_ensure_env_key "$ENV_FILE" HUB_RELAY_TLS "true" \

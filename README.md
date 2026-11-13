@@ -303,7 +303,7 @@ Supporting pieces:
   runtime will not be active` warning at boot. `scripts/install.sh` compiles both from source;
   the manual package list below deliberately omits them (apt has no php-swoole on the supported
   releases) — build them or use `ghcr.io/detain/phlix-base`, which carries PHP 8.3 + Swoole + php-uv.
-- **MySQL 8.0+** (or MariaDB 10.6+)
+- **MySQL 8.0+** (or MariaDB 10.6+ — not exercised by CI; MySQL is the tested engine)
 - **Composer 2**
 - A POSIX host (Linux recommended; Workerman uses `pcntl`/`posix` for process management)
 
@@ -605,8 +605,8 @@ directly. Open it on the firewall but don't put it behind the HAProxy 80/443 fro
 | Port | Surface | Managed HAProxy path | `--no-proxy` path |
 | --- | --- | --- | --- |
 | `8800` | HTTP API + SPA + `/health` | routed at `/` via 80/443 | ufw-opened (plaintext REST + portal — bearer credentials ride it in the clear; front it with your own TLS or keep it loopback) |
-| `8802` | server tunnels | direct — ufw-opened (pairing law: never proxied; note it is **plaintext**, and `HELLO` carries each server's durable enrollment JWT — per surface, the most secret to lose) | ufw-opened (same credential note) |
-| `8803` | client mount (declared unavailable) | routed at `/client/` | loopback only — point your proxy at it |
+| `8802` | server tunnels | direct — ufw-opened (pairing law: never proxied; **plaintext** unless `HUB_RELAY_TLS` is on — the installer seeds `HUB_RELAY_TLS=true` (wss) only on TLS-domain installs, where the Let's Encrypt deploy hook also keeps the rotated key readable by the hub; on a plaintext-install `HELLO` carries each server's durable enrollment JWT — per surface, the most secret to lose) | ufw-opened (same credential note) |
+| `8803` | client mount (declared unavailable) | routed at `/client/` (the listener itself still binds every interface — the installer does not seed `HUB_WS_BIND=127.0.0.1` and does not ufw-open `8803`, so keep it behind an active ufw/cloud firewall or pin `HUB_WS_BIND` yourself) | loopback only — point your proxy at it |
 | `8804` | SyncPlay watch-party clients | routed at `/syncplay/` | ufw-opened (plaintext WS — close it once your proxy routes it) |
 | `8805` | federation MASTER ingress (peer dials) | routed at `/relay/federation/` | ufw-opened (same plaintext caveat) |
 | `2206` | cross-process channel broker | loopback only | loopback only |
@@ -979,8 +979,8 @@ Environment="HOME=/opt/phlix-hub/var"
 # Restart-race gate (2026-07-10 incident): the OLD master can hold its listen
 # sockets for seconds-to-minutes after SIGTERM; without this wait the new
 # master throws "Address already in use" and crash-loops. Waits up to 90 s for
-# :8802/:8803/:8804/:8805/:2206 (the config/server.php defaults) to be free.
-# If you move HUB_RELAY_PORT, HUB_CLIENT_RELAY_PORT, HUB_SYNCPLAY_PORT,
+# :8800/:8802/:8803/:8804/:8805/:2206 — six ports (the config/server.php defaults) — to be free.
+# If you move HUB_PORT, HUB_RELAY_PORT, HUB_CLIENT_RELAY_PORT, HUB_SYNCPLAY_PORT,
 # HUB_FEDERATION_PORT or HUB_CHANNEL_PORT, update the gate's values to match.
 ExecStartPre=/usr/bin/env bash /opt/phlix-hub/scripts/wait-for-free-ports.sh -t 90 8800 8802 8803 8804 8805 2206
 ExecStart=/usr/bin/php /opt/phlix-hub/start.php start
@@ -1146,7 +1146,9 @@ A `Dockerfile` is provided. The image builds on the shared base
 (`ghcr.io/detain/phlix-base`: PHP 8.3 + Swoole + php-uv) and runs the Workerman daemon
 (`start.php`) as PID 1 — **no nginx, no php-fpm, no supervisord**. The entrypoint
 (`docker/docker-entrypoint.sh`) applies pending migrations at boot, then `exec`s the daemon;
-the image `EXPOSE`s `8800 8802 8803 8804 8805` and its healthcheck probes `/health`.
+the image `EXPOSE`s `8800 8802 8803 8804 8805` and its healthcheck probes `/health` on `HUB_PORT`.
+Give the daemon its graceful-stop window: `docker stop -t 25 phlix-hub` (compose: `stop_grace_period: 25s`) —
+the `docker run` below bakes the same value in via `--stop-timeout 25`.
 
 ```bash
 docker build -t phlix-hub .
@@ -1157,6 +1159,9 @@ export HUB_DB_PASSWORD='…matching a real MySQL user…'
 
 docker run -d --name phlix-hub \
   -p 8800:8800 -p 8802:8802 -p 8803:8803 -p 8804:8804 -p 8805:8805 \
+  --add-host=host.docker.internal:host-gateway \
+  --log-opt max-size=64m --log-opt max-file=4 \
+  --stop-timeout 25 \
   -e HUB_DB_HOST=host.docker.internal \
   -e HUB_DB_USER=phlix_hub \
   -e HUB_DB_PASSWORD="${HUB_DB_PASSWORD:?export HUB_DB_PASSWORD before running}" \
@@ -1255,7 +1260,7 @@ development fallbacks.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `HUB_HOST` | `0.0.0.0` | HTTP bind address |
-| `HUB_PORT` | `8800` | HTTP listen port |
+| `HUB_PORT` | `8800` | HTTP listen port (the container HEALTHCHECK follows it) |
 | `HUB_WORKERS` | `2` | Number of HTTP worker processes |
 | `HUB_WORKERMAN_LOG` | `.logs/workerman.log` | Workerman's own log file |
 | `HUB_ALEXA_APPLICATION_ID` | `null` | SH-050. The skill identity `POST /alexa/skill` pins every verified request to: the Amazon-signed envelope must carry EXACTLY this `applicationId` (copy it from the Skills Console's "Skill Endpoint Information"). The cert-chain signature proves a request came from Amazon; this proves it was addressed to THIS skill — any Echo developer can point any skill at any endpoint. Unset on a dev/test boot (incl PHPUnit) leaves the identity arm inactive; unset on any other boot the gate **rejects every request** (400, the existing verification-error envelope — the contracts registry gains no new code): a half-configured signature check is not a gate |
@@ -1294,7 +1299,7 @@ the `PHLIX_HUB_RATELIMIT_*` envs below, so when it is set the env defaults are N
 
 | Variable | Default | What it does / unblocks |
 |----------|---------|-------------------------|
-| `HUB_SIGNUPS_ENABLED` | `true` | `false`/`0`/`no`/`off` closes self-service registration: `POST /api/v1/auth/{register,signup}` answers **403** `auth.signups_disabled` before any hashing work. Live twin: `auth.signups_disabled` |
+| `HUB_SIGNUPS_ENABLED` | `true` | `false`/`0`/`no`/`off` closes self-service registration: `POST /api/v1/auth/{register,signup}` answers **403** `auth.signups_disabled` before any hashing work. Live twin: `auth.signups_disabled` (a hub-settings row, when present, is read per signup and overrides this boot-time flag) |
 | `HUB_FEDERATION_ENABLED` | `true` | `false` stops new federation dials, drops inbound DATA frames pre-verification, and rejects controller mutators with **409** `provider.not_configured`. The `:8805` listener stays bound until restart (pre-fork socket). Live twin: `federation.enabled` |
 | `HUB_MAINTENANCE_MODE` | `false` | `true` answers **503** `provider_unavailable` for API traffic. Exempt by design: `/health`, `/api/v1/auth/*`, hub-settings + admin-settings GET/PUT (the off-switch), `/api/v1/admin/restart`; the SPA shell and hashed assets still serve. Live twin: `hub.maintenance_mode` |
 | `HUB_RELAY_TLS` | `false` | Terminates TLS on the `:8802` server-tunnel listener (`wss://`) — what you must enable to pair servers over untrusted networks. Needs `HUB_RELAY_TLS_CERT` / `HUB_RELAY_TLS_KEY` (both default `null`) |
