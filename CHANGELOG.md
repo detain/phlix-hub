@@ -12,6 +12,15 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Chore [HUB-S52] — closeout: `/app` SPA bundle freshness regen — 2026-11-12
+
+- Pin stays `@phlix/ui` v0.99.28 (latest tag; no newer ui tag landed). Fresh `npm@11 ci`, `/app`
+  rebuilt deterministic x2 (mutual per-file md5 identical, 198 files). Only
+  `index-CbxDfQ7M.js.map` changed (embedded HubMyServersPage docblock from HUB-S50); all JS/CSS
+  chunk bytes unchanged.
+- Folded minor (HUB-S51): Docs — README/docblock record/owner-plate rows landed 2026-11-12
+  (CookiePolicy twin re-check, WS-credential law, TLS-mandate, typed-exception rows); record-only.
+
 ### Chore [HUB-S46] — re-vendor `@phlix/ui` #v0.99.28 + `/app` SPA regen — 2026-11-12
 
 - Pin tarball `v0.99.27` -> `v0.99.28` (tag obj 29b6a8c5, peel dfe8fc65). package.json 1+/1-;
