@@ -135,7 +135,7 @@ final class ClientMountController
             // byte-identical in `error` TEXT (see SubdomainController's class
             // docblock); inline literal for wire-law visibility.
             return (new Response())->error(400, 'missing_server_id', 'MISSING_SERVER_ID', [
-                'message' => 'Server ID is required',
+                'message' => 'Server ID is required.',
             ]);
         }
 

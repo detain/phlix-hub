@@ -65,7 +65,7 @@ final class ServerClaimQuotaMessageTest extends TestCase
     private const ALREADY_CLAIMED_FRAME = [
         'error' => 'CLAIM_CODE_ALREADY_CLAIMED',
         'code' => 'claim.code_already_claimed',
-        'message' => 'Claim code has already been used',
+        'message' => 'Claim code has already been used.',
     ];
 
     private function claimResponseThrowing(string $reason): Response

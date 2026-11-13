@@ -67,31 +67,31 @@ final class ErrorPromotionFramesTest extends TestCase
     private const FRAME_MISSING = [
         'error' => 'MISSING_SERVER_ID',
         'code' => 'missing_server_id',
-        'message' => 'Server ID is required',
+        'message' => 'Server ID is required.',
     ];
 
     private const FRAME_HEADER = [
         'error' => 'UNAUTHORIZED',
         'code' => 'auth.required',
-        'message' => 'Missing or invalid Authorization header',
+        'message' => 'Missing or invalid Authorization header.',
     ];
 
     private const FRAME_FORMAT = [
         'error' => 'UNAUTHORIZED',
         'code' => 'auth.required',
-        'message' => 'Invalid token format',
+        'message' => 'Invalid token format.',
     ];
 
     private const FRAME_EXPIRED = [
         'error' => 'UNAUTHORIZED',
         'code' => 'auth.enrollment_expired',
-        'message' => 'Invalid or expired enrollment token',
+        'message' => 'Invalid or expired enrollment token.',
     ];
 
     private const FRAME_MISMATCH = [
         'error' => 'UNAUTHORIZED',
         'code' => 'auth.server_mismatch',
-        'message' => 'Server ID mismatch',
+        'message' => 'Server ID mismatch.',
     ];
 
     // ------------------------------------------------------------------
@@ -104,21 +104,21 @@ final class ErrorPromotionFramesTest extends TestCase
     public static function claimMapErrorProvider(): array
     {
         return [
-            'code not found'   => [404, 'claim.code_not_found', 'CLAIM_CODE_NOT_FOUND', 'Claim code not found'],
-            'code expired'     => [410, 'claim.code_expired', 'CLAIM_CODE_EXPIRED', 'Claim code has expired'],
+            'code not found'   => [404, 'claim.code_not_found', 'CLAIM_CODE_NOT_FOUND', 'Claim code not found.'],
+            'code expired'     => [410, 'claim.code_expired', 'CLAIM_CODE_EXPIRED', 'Claim code has expired.'],
             'already claimed'  => [
                 409, 'claim.code_already_claimed', 'CLAIM_CODE_ALREADY_CLAIMED',
-                'Claim code has already been used',
+                'Claim code has already been used.',
             ],
             'protocol'         => [
                 400, 'hub.protocol_unsupported', 'HUB_PROTOCOL_UNSUPPORTED',
-                'Accept-Phlix-Protocol: v1 required',
+                'Accept-Phlix-Protocol: v1 required.',
             ],
             'key invalid'      => [
                 400, 'server.key_invalid', 'SERVER_KEY_INVALID',
-                'Server key is malformed or not Ed25519',
+                'Server key is malformed or not Ed25519.',
             ],
-            'default 500'      => [500, 'hub.internal_error', 'HUB_INTERNAL_ERROR', 'An unexpected error occurred'],
+            'default 500'      => [500, 'hub.internal_error', 'HUB_INTERNAL_ERROR', 'An unexpected error occurred.'],
         ];
     }
 
@@ -196,7 +196,7 @@ final class ErrorPromotionFramesTest extends TestCase
 
         self::assertSame(404, $response->statusCode);
         self::assertSame(
-            ['error' => 'SERVER_NOT_FOUND', 'code' => 'server.not_found', 'message' => 'Server not found'],
+            ['error' => 'SERVER_NOT_FOUND', 'code' => 'server.not_found', 'message' => 'Server not found.'],
             json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR),
         );
     }
@@ -209,10 +209,10 @@ final class ErrorPromotionFramesTest extends TestCase
         return [
             'enrollment expired' => [
                 401, 'auth.enrollment_expired', 'ENROLLMENT_TOKEN_EXPIRED',
-                'Enrollment token has expired',
+                'Enrollment token has expired.',
             ],
-            'server not found'   => [404, 'server.not_found', 'SERVER_NOT_FOUND', 'Server not found'],
-            'default 500'        => [500, 'hub.internal_error', 'HUB_INTERNAL_ERROR', 'An unexpected error occurred'],
+            'server not found'   => [404, 'server.not_found', 'SERVER_NOT_FOUND', 'Server not found.'],
+            'default 500'        => [500, 'hub.internal_error', 'HUB_INTERNAL_ERROR', 'An unexpected error occurred.'],
         ];
     }
 
@@ -266,7 +266,7 @@ final class ErrorPromotionFramesTest extends TestCase
 
         self::assertSame(403, $response->statusCode);
         self::assertSame(
-            ['error' => 'AUTHORIZATION_FAILED', 'code' => 'auth.server_mismatch', 'message' => 'Server ID mismatch'],
+            ['error' => 'AUTHORIZATION_FAILED', 'code' => 'auth.server_mismatch', 'message' => 'Server ID mismatch.'],
             json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR),
         );
     }
@@ -595,7 +595,7 @@ final class ErrorPromotionFramesTest extends TestCase
 
         self::assertGateFrame(
             400,
-            ['error' => 'MISSING_SERVER_ID', 'code' => 'missing_server_id', 'message' => 'Server ID is required'],
+            ['error' => 'MISSING_SERVER_ID', 'code' => 'missing_server_id', 'message' => 'Server ID is required.'],
             $controller->handle(new Request(), ['server_id' => '']),
             'ClientMountController MISSING_SERVER_ID',
         );

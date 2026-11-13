@@ -944,7 +944,7 @@ final class AdminUserRoutesTest extends TestCase
 
         self::assertSame(200, $res->statusCode);
         $payload = $this->decode($res);
-        self::assertSame('No recognized fields to update', $payload['message'] ?? null);
+        self::assertSame('No recognized fields to update.', $payload['message'] ?? null);
         self::assertFalse($this->queriedFragment('UPDATE users SET'), 'no-op must not touch the row');
     }
 }

@@ -75,7 +75,7 @@ final class SubdomainController
 
         if ($serverIdFromPath === '') {
             return (new Response())->error(400, 'missing_server_id', 'MISSING_SERVER_ID', [
-                'message' => 'Server ID is required',
+                'message' => 'Server ID is required.',
             ]);
         }
 
@@ -90,7 +90,7 @@ final class SubdomainController
         $authHeader = $request->getHeader('Authorization') ?? '';
         if (!str_starts_with($authHeader, 'Bearer ')) {
             return (new Response())->error(401, 'auth.required', 'UNAUTHORIZED', [
-                'message' => 'Missing or invalid Authorization header',
+                'message' => 'Missing or invalid Authorization header.',
             ]);
         }
 
@@ -100,20 +100,20 @@ final class SubdomainController
             $kid = JwtHeader::kid($enrollmentJwt);
             if ($kid === null) {
                 return (new Response())->error(401, 'auth.required', 'UNAUTHORIZED', [
-                    'message' => 'Invalid token format',
+                    'message' => 'Invalid token format.',
                 ]);
             }
 
             $payload = $this->jwtService->validateEnrollmentJwt($enrollmentJwt, $kid);
             if ($payload === null) {
                 return (new Response())->error(401, 'auth.enrollment_expired', 'UNAUTHORIZED', [
-                    'message' => 'Invalid or expired enrollment token',
+                    'message' => 'Invalid or expired enrollment token.',
                 ]);
             }
 
             if (($payload['server_id'] ?? '') !== $serverIdFromPath) {
                 return (new Response())->error(401, 'auth.server_mismatch', 'UNAUTHORIZED', [
-                    'message' => 'Server ID mismatch',
+                    'message' => 'Server ID mismatch.',
                 ]);
             }
         } catch (\InvalidArgumentException $e) {
@@ -171,7 +171,7 @@ final class SubdomainController
 
         if ($serverIdFromPath === '') {
             return (new Response())->error(400, 'missing_server_id', 'MISSING_SERVER_ID', [
-                'message' => 'Server ID is required',
+                'message' => 'Server ID is required.',
             ]);
         }
 
@@ -207,7 +207,7 @@ final class SubdomainController
 
         if ($serverIdFromPath === '') {
             return (new Response())->error(400, 'missing_server_id', 'MISSING_SERVER_ID', [
-                'message' => 'Server ID is required',
+                'message' => 'Server ID is required.',
             ]);
         }
 
@@ -217,7 +217,7 @@ final class SubdomainController
         $authHeader = $request->getHeader('Authorization') ?? '';
         if (!str_starts_with($authHeader, 'Bearer ')) {
             return (new Response())->error(401, 'auth.required', 'UNAUTHORIZED', [
-                'message' => 'Missing or invalid Authorization header',
+                'message' => 'Missing or invalid Authorization header.',
             ]);
         }
 
@@ -227,20 +227,20 @@ final class SubdomainController
             $kid = JwtHeader::kid($enrollmentJwt);
             if ($kid === null) {
                 return (new Response())->error(401, 'auth.required', 'UNAUTHORIZED', [
-                    'message' => 'Invalid token format',
+                    'message' => 'Invalid token format.',
                 ]);
             }
 
             $payload = $this->jwtService->validateEnrollmentJwt($enrollmentJwt, $kid);
             if ($payload === null) {
                 return (new Response())->error(401, 'auth.enrollment_expired', 'UNAUTHORIZED', [
-                    'message' => 'Invalid or expired enrollment token',
+                    'message' => 'Invalid or expired enrollment token.',
                 ]);
             }
 
             if (($payload['server_id'] ?? '') !== $serverIdFromPath) {
                 return (new Response())->error(401, 'auth.server_mismatch', 'UNAUTHORIZED', [
-                    'message' => 'Server ID mismatch',
+                    'message' => 'Server ID mismatch.',
                 ]);
             }
         } catch (\InvalidArgumentException $e) {

@@ -130,7 +130,7 @@ final class ServerClaimController
                 400,
                 'hub.protocol_unsupported',
                 'HUB_PROTOCOL_UNSUPPORTED',
-                ['message' => 'Accept-Phlix-Protocol: v1 required'],
+                ['message' => 'Accept-Phlix-Protocol: v1 required.'],
             );
         }
 
@@ -267,19 +267,19 @@ final class ServerClaimController
                 404,
                 'claim.code_not_found',
                 'CLAIM_CODE_NOT_FOUND',
-                ['message' => 'Claim code not found'],
+                ['message' => 'Claim code not found.'],
             ),
             'CLAIM_CODE_EXPIRED' => (new Response())->error(
                 410,
                 'claim.code_expired',
                 'CLAIM_CODE_EXPIRED',
-                ['message' => 'Claim code has expired'],
+                ['message' => 'Claim code has expired.'],
             ),
             'CLAIM_CODE_ALREADY_CLAIMED' => (new Response())->error(
                 409,
                 'claim.code_already_claimed',
                 'CLAIM_CODE_ALREADY_CLAIMED',
-                ['message' => 'Claim code has already been used'],
+                ['message' => 'Claim code has already been used.'],
             ),
             // M-HUB-04 wire law (kept) + M-HUB-35 completion: this frame is
             // honest END TO END — the registered `quota.exceeded` code, the
@@ -310,13 +310,13 @@ final class ServerClaimController
                 400,
                 'hub.protocol_unsupported',
                 'HUB_PROTOCOL_UNSUPPORTED',
-                ['message' => 'Accept-Phlix-Protocol: v1 required'],
+                ['message' => 'Accept-Phlix-Protocol: v1 required.'],
             ),
             'SERVER_KEY_INVALID' => (new Response())->error(
                 400,
                 'server.key_invalid',
                 'SERVER_KEY_INVALID',
-                ['message' => 'Server key is malformed or not Ed25519'],
+                ['message' => 'Server key is malformed or not Ed25519.'],
             ),
             // M-HUB-13 (hostname-array bound): the payload's
             // hostnameCandidates exceed the count/length bounds justified on
@@ -354,7 +354,7 @@ final class ServerClaimController
                 500,
                 'hub.internal_error',
                 'HUB_INTERNAL_ERROR',
-                ['message' => 'An unexpected error occurred'],
+                ['message' => 'An unexpected error occurred.'],
             ),
         };
     }

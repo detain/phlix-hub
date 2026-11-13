@@ -174,7 +174,7 @@ final class AdminUserController
 
         return (new Response())->status(201)->json([
             'user_id' => $userId,
-            'message' => 'User created successfully',
+            'message' => 'User created successfully.',
         ]);
     }
 
@@ -254,14 +254,14 @@ final class AdminUserController
                 ['fields' => array_keys($data)],
             );
 
-            return (new Response())->json(['message' => 'User updated successfully']);
+            return (new Response())->json(['message' => 'User updated successfully.']);
         }
 
         // SH-078: a PUT that recognized no fields said "updated" anyway. The
         // 200 stays (the request is valid and the row is untouched — nothing
         // failed), but the message now says what actually happened. Copy obeys
         // the hub terminal-period law (SH-083).
-        return (new Response())->json(['message' => 'No recognized fields to update']);
+        return (new Response())->json(['message' => 'No recognized fields to update.']);
     }
 
     /**
@@ -293,7 +293,7 @@ final class AdminUserController
         $this->users->delete($id);
         $this->audit->logAdminAction($request->userId ?? '', 'user.delete', $id);
 
-        return (new Response())->json(['message' => 'User deleted successfully']);
+        return (new Response())->json(['message' => 'User deleted successfully.']);
     }
 
     /**
@@ -325,7 +325,7 @@ final class AdminUserController
         $this->users->setAdmin($id, $isAdmin);
         $this->audit->logAdminAction($actingId, 'user.set_admin', $id, ['is_admin' => $isAdmin]);
 
-        return (new Response())->json(['message' => 'User admin status updated successfully']);
+        return (new Response())->json(['message' => 'User admin status updated successfully.']);
     }
 
     /**

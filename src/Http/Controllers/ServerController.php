@@ -63,7 +63,7 @@ final class ServerController
                 400,
                 'hub.protocol_unsupported',
                 'HUB_PROTOCOL_UNSUPPORTED',
-                ['message' => 'Accept-Phlix-Protocol: v1 required'],
+                ['message' => 'Accept-Phlix-Protocol: v1 required.'],
             );
         }
 
@@ -75,7 +75,7 @@ final class ServerController
                 403,
                 'auth.server_mismatch',
                 'AUTHORIZATION_FAILED',
-                ['message' => 'Server ID mismatch'],
+                ['message' => 'Server ID mismatch.'],
             );
         }
 
@@ -139,7 +139,7 @@ final class ServerController
                 400,
                 'hub.protocol_unsupported',
                 'HUB_PROTOCOL_UNSUPPORTED',
-                ['message' => 'Accept-Phlix-Protocol: v1 required'],
+                ['message' => 'Accept-Phlix-Protocol: v1 required.'],
             );
         }
 
@@ -151,7 +151,7 @@ final class ServerController
                 403,
                 'auth.server_mismatch',
                 'AUTHORIZATION_FAILED',
-                ['message' => 'Server ID mismatch'],
+                ['message' => 'Server ID mismatch.'],
             );
         }
 
@@ -186,7 +186,7 @@ final class ServerController
                 403,
                 'auth.server_mismatch',
                 'AUTHORIZATION_FAILED',
-                ['message' => 'Server ID mismatch'],
+                ['message' => 'Server ID mismatch.'],
             );
         }
 
@@ -196,7 +196,7 @@ final class ServerController
                 404,
                 'server.not_found',
                 'SERVER_NOT_FOUND',
-                ['message' => 'Server not found'],
+                ['message' => 'Server not found.'],
             );
         }
 
@@ -221,7 +221,7 @@ final class ServerController
                 403,
                 'auth.server_mismatch',
                 'AUTHORIZATION_FAILED',
-                ['message' => 'Server ID mismatch'],
+                ['message' => 'Server ID mismatch.'],
             );
         }
 
@@ -247,19 +247,19 @@ final class ServerController
                 401,
                 'auth.enrollment_expired',
                 'ENROLLMENT_TOKEN_EXPIRED',
-                ['message' => 'Enrollment token has expired'],
+                ['message' => 'Enrollment token has expired.'],
             ),
             'SERVER_NOT_FOUND' => (new Response())->error(
                 404,
                 'server.not_found',
                 'SERVER_NOT_FOUND',
-                ['message' => 'Server not found'],
+                ['message' => 'Server not found.'],
             ),
             default => (new Response())->error(
                 500,
                 'hub.internal_error',
                 'HUB_INTERNAL_ERROR',
-                ['message' => 'An unexpected error occurred'],
+                ['message' => 'An unexpected error occurred.'],
             ),
         };
     }

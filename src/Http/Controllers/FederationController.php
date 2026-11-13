@@ -144,7 +144,7 @@ final class FederationController
             return (new Response())->status(409)->json([
                 'error' => 'Conflict',
                 'code' => 'provider.not_configured',
-                'message' => 'Federation is disabled on this hub',
+                'message' => 'Federation is disabled on this hub.',
             ]);
         }
 
@@ -459,7 +459,7 @@ final class FederationController
             return (new Response())->status(409)->json([
                 'error' => 'Conflict',
                 'code' => 'peer_url_exists',
-                'message' => 'A peer with this URL already exists',
+                'message' => 'A peer with this URL already exists.',
             ]);
         }
 
@@ -468,7 +468,7 @@ final class FederationController
             return (new Response())->status(409)->json([
                 'error' => 'Conflict',
                 'code' => 'peer_key_exists',
-                'message' => 'A peer with this public key already exists',
+                'message' => 'A peer with this public key already exists.',
             ]);
         }
 
@@ -547,7 +547,7 @@ final class FederationController
                 'error' => 'Conflict',
                 'code' => 'leaf_hub_id_already_bound',
                 'reason' => 'leaf_hub_id already bound to a different value',
-                'message' => 'This peer is already bound to a different leaf hub id',
+                'message' => 'This peer is already bound to a different leaf hub id.',
             ]);
         }
 
@@ -998,7 +998,7 @@ final class FederationController
             return (new Response())->status(409)->json([
                 'error' => 'Conflict',
                 'code' => 'offer_already_responded',
-                'message' => 'This offer has already been accepted or rejected',
+                'message' => 'This offer has already been accepted or rejected.',
             ]);
         }
 
@@ -1054,7 +1054,7 @@ final class FederationController
             return (new Response())->status(409)->json([
                 'error' => 'Conflict',
                 'code' => 'offer_already_responded',
-                'message' => 'This offer has already been accepted or rejected',
+                'message' => 'This offer has already been accepted or rejected.',
             ]);
         }
 
@@ -1096,7 +1096,7 @@ final class FederationController
             return (new Response())->status(403)->json([
                 'error' => 'Forbidden',
                 'code' => 'master_only',
-                'message' => 'Admin delegations are only available on the master hub',
+                'message' => 'Admin delegations are only available on the master hub.',
             ]);
         }
 
@@ -1147,7 +1147,7 @@ final class FederationController
             return (new Response())->status(403)->json([
                 'error' => 'Forbidden',
                 'code' => 'master_only',
-                'message' => 'Admin delegations are only available on the master hub',
+                'message' => 'Admin delegations are only available on the master hub.',
             ]);
         }
 

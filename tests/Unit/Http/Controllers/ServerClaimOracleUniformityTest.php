@@ -101,15 +101,15 @@ final class ServerClaimOracleUniformityTest extends TestCase
         $pinned = [
             'CLAIM_CODE_NOT_FOUND' => [
                 'status' => 404, 'code' => 'claim.code_not_found',
-                'error' => 'CLAIM_CODE_NOT_FOUND', 'message' => 'Claim code not found',
+                'error' => 'CLAIM_CODE_NOT_FOUND', 'message' => 'Claim code not found.',
             ],
             'CLAIM_CODE_EXPIRED' => [
                 'status' => 410, 'code' => 'claim.code_expired',
-                'error' => 'CLAIM_CODE_EXPIRED', 'message' => 'Claim code has expired',
+                'error' => 'CLAIM_CODE_EXPIRED', 'message' => 'Claim code has expired.',
             ],
             'CLAIM_CODE_ALREADY_CLAIMED' => [
                 'status' => 409, 'code' => 'claim.code_already_claimed',
-                'error' => 'CLAIM_CODE_ALREADY_CLAIMED', 'message' => 'Claim code has already been used',
+                'error' => 'CLAIM_CODE_ALREADY_CLAIMED', 'message' => 'Claim code has already been used.',
             ],
         ];
 
