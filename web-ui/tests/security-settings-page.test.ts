@@ -149,7 +149,7 @@ describe('validatePasswordForm — client pre-flight', () => {
     it('catches confirmation mismatch only after length passes', () => {
         assert.equal(
             validatePasswordForm(form({ confirmPassword: 'different-secret' })),
-            'The new passwords do not match.',
+            'The new passwords don’t match.',
         );
     });
 });
@@ -158,7 +158,7 @@ describe('passwordErrorSentence — failure vocabulary', () => {
     it('maps every frame the endpoint answers with to owner-facing prose', () => {
         assert.equal(
             passwordErrorSentence('auth.invalid_credentials', 'Current password is incorrect', 'fb'),
-            'That current password is not correct.',
+            'That current password isn’t correct.',
         );
         assert.equal(
             passwordErrorSentence('rate_limited', 'Too Many Requests', 'fb'),
@@ -364,12 +364,23 @@ describe('[HUB-51] password-form a11y roles — wire-of-component', () => {
     it('a refusal renders in a role="alert" region carrying the describedby id', () => {
         assert.match(
             PAGE_SOURCE,
-            /<p v-if="refusal" :id="REFUSAL_ID" class="sec__status sec__status--error" role="alert">\s*\{\{ refusal \}\}/,
+            /<p :id="REFUSAL_ID" class="sec__status sec__status--error" role="alert">\s*\{\{ refusal \}\}/,
         );
+        // HUB-S8: persistent container (no v-if), so the alert is mounted before its text arrives.
+        assert.ok(!/<p v-if="refusal"/.test(PAGE_SOURCE), 'the alert region must stay mounted when empty');
     });
 
     it('success renders in its own role="status" region', () => {
-        assert.match(PAGE_SOURCE, /<p v-if="success" class="sec__status" role="status">\s*\{\{ success \}\}/);
+        assert.match(PAGE_SOURCE, /<p class="sec__status" role="status">\s*\{\{ success \}\}/);
+        assert.ok(!/<p v-if="success"/.test(PAGE_SOURCE), 'the status region must stay mounted when empty');
+    });
+
+    it('[HUB-S8] both outcomes are announced by clear-then-set across a timeout, so a repeat re-announces', () => {
+        assert.match(PAGE_CODE, /function announce\(target[^)]*\): void \{[\s\S]*?target\.value = '';[\s\S]*?setTimeout\([\s\S]*?target\.value = text;/);
+        assert.match(PAGE_CODE, /announce\(refusal, sentence\)/);
+        assert.match(PAGE_CODE, /announce\(success, /);
+        assert.ok(!/refusal\.value = sentence/.test(PAGE_CODE), 'a refusal set directly would not re-announce a repeat');
+        assert.match(PAGE_CODE, /onBeforeUnmount\([\s\S]*?clearTimeout/);
     });
 
     it('no single region announces both outcomes (the old shared role="status" split)', () => {

@@ -18,7 +18,7 @@
  * drains the shared per-IP login budget). The passkey section states the
  * truth plainly instead of rendering a dead form.
  */
-import { ref, watch } from 'vue';
+import { onBeforeUnmount, ref, watch } from 'vue';
 import { ApiClient, ApiError, errMessage } from '@phlix/ui';
 import {
     checkPasswordForm,
@@ -40,8 +40,8 @@ const submitting = ref(false);
  * (polite). One shared role="status" used to carry both, so a wrong current
  * password was announced as calmly as a success.
  */
-const refusal = ref<string | null>(null);
-const success = ref<string | null>(null);
+const refusal = ref<string | null>('');
+const success = ref<string | null>('');
 /**
  * The input the refusal is about (aria-invalid + aria-describedby → the
  * alert), or null for a form-level refusal that no single input caused.
@@ -65,9 +65,50 @@ function invalidAttrs(field: PasswordField): Record<string, string> {
         : {};
 }
 
+/*
+ * Live-region announcements (HUB-S8). The two <p role> regions below are
+ * PERSISTENT containers (always mounted, text bound inside), because a region
+ * that mounts with its text already in it is not announced by some screen
+ * readers. And an identical repeat sentence changes nothing in the DOM, so it
+ * would not be re-announced: announce() clears the region, then sets the text
+ * after a short timeout (longer than a microtask, so the clear and the set are
+ * two separate DOM mutations the assistive tech observes).
+ */
+const ANNOUNCE_GAP_MS = 60;
+let announceToken = 0;
+const announceTimers = new Set<ReturnType<typeof setTimeout>>();
+
+function announce(target: { value: string | null }, text: string): void {
+    const token = ++announceToken;
+    target.value = '';
+    const timer = setTimeout(() => {
+        announceTimers.delete(timer);
+        // A newer announcement or a submit that cleared the regions wins.
+        if (token === announceToken) {
+            target.value = text;
+        }
+    }, ANNOUNCE_GAP_MS);
+    announceTimers.add(timer);
+}
+
+/** Withdraw both messages now and cancel any announcement still pending. */
+function clearAnnouncements(): void {
+    announceToken++;
+    refusal.value = '';
+    success.value = '';
+}
+
+onBeforeUnmount(() => {
+    announceToken++;
+    for (const timer of announceTimers) {
+        clearTimeout(timer);
+    }
+    announceTimers.clear();
+});
+
 function refuse(sentence: string, field: PasswordField | null): void {
-    success.value = null;
-    refusal.value = sentence;
+    success.value = '';
+    announce(refusal, sentence);
     invalidField.value = field;
 }
 
@@ -107,8 +148,7 @@ async function submit(): Promise<void> {
     }
 
     submitting.value = true;
-    refusal.value = null;
-    success.value = null;
+    clearAnnouncements();
     invalidField.value = null;
     try {
         const data = await http.post<{ message?: string }>('/api/v1/me/password', {
@@ -123,7 +163,7 @@ async function submit(): Promise<void> {
         // one sentence cannot read two ways depending on which branch fired.
         const apiMessage =
             typeof data.message === 'string' ? data.message : 'Password updated successfully';
-        success.value = apiMessage.endsWith('.') ? apiMessage : `${apiMessage}.`;
+        announce(success, apiMessage.endsWith('.') ? apiMessage : `${apiMessage}.`);
     } catch (e) {
         const { code, text } = frameOf(e);
         refuse(
@@ -191,10 +231,10 @@ async function submit(): Promise<void> {
                 />
             </label>
 
-            <p v-if="refusal" :id="REFUSAL_ID" class="sec__status sec__status--error" role="alert">
+            <p :id="REFUSAL_ID" class="sec__status sec__status--error" role="alert">
                 {{ refusal }}
             </p>
-            <p v-if="success" class="sec__status" role="status">
+            <p class="sec__status" role="status">
                 {{ success }}
             </p>
 
@@ -244,6 +284,8 @@ async function submit(): Promise<void> {
 }
 .sec__status { margin: 0; font-size: 0.85rem; }
 .sec__status--error { color: #cf4444; }
+/* Persistent live regions stay mounted when empty; cancel the grid gap they would add. */
+.sec__status:empty { margin-top: -0.7rem; }
 .sec__actions { display: flex; justify-content: flex-end; }
 .sec__button {
     padding: 0.45rem 0.9rem;

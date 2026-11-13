@@ -151,6 +151,14 @@ export function maintenanceNoticeCopy(audience: MaintenanceAudience): Maintenanc
  * bleeds through). `[hidden]` must win over the flex display, hence the
  * `:not([hidden])` guard. While shown, the body reserves the banner's height
  * at the bottom so it never permanently covers the end of the page.
+ *
+ * Fixed-bottom neighbours: body padding cannot clear `position: fixed`
+ * elements, so the vendored @phlix/ui `.music-bar` (bottom 0, z-index 40)
+ * would sit UNDER the banner. The banner publishes its live height as
+ * `--maintenance-notice-h` on `:root` (re-measured by a ResizeObserver on
+ * resize/rotate/wrap, cleared on hide) and the rule below lifts the music bar
+ * by it. The selector is doubled (`.music-bar.music-bar`) to out-rank the
+ * scoped `.music-bar[data-v-*]` rule the page SFC ships, without `!important`.
  */
 export const MAINTENANCE_NOTICE_CSS = `
 #${MAINTENANCE_NOTICE_ID}:not([hidden]) {
@@ -171,6 +179,9 @@ export const MAINTENANCE_NOTICE_CSS = `
     font-size: var(--text-sm, 0.875rem);
     line-height: 1.4;
     box-shadow: var(--shadow-3, 0 8px 24px #0006);
+}
+:root .music-bar.music-bar {
+    bottom: var(--maintenance-notice-h, 0px);
 }
 #${MAINTENANCE_NOTICE_ID} strong {
     color: var(--color-warning, #e8a33d);
@@ -237,16 +248,37 @@ export function installMaintenanceNotice(options: MaintenanceNoticeOptions = {})
         rendered = who;
     };
 
+    // Reserve the banner's live height: body padding for in-flow content, and
+    // the --maintenance-notice-h var for fixed-bottom elements (music bar).
+    // Measured on activation AND whenever the banner resizes (flex-wrap on
+    // rotate/resize/copy change), via a ResizeObserver held only while shown.
+    let observer: ResizeObserver | null = null;
+    const reserve = (): void => {
+        const h = `${banner.offsetHeight}px`;
+        document.body.style.paddingBottom = h;
+        document.documentElement.style.setProperty('--maintenance-notice-h', h);
+    };
+    const release = (): void => {
+        observer?.disconnect();
+        observer = null;
+        document.body.style.paddingBottom = '';
+        document.documentElement.style.removeProperty('--maintenance-notice-h');
+    };
+
     globalThis.fetch = withMaintenanceSignal(
         globalThis.fetch as unknown as FetchLike,
         (signal) => {
             if (signal === 'active') {
                 render(audience());
                 banner.hidden = false;
-                document.body.style.paddingBottom = `${banner.offsetHeight}px`;
+                reserve();
+                if (observer === null && typeof ResizeObserver !== 'undefined') {
+                    observer = new ResizeObserver(reserve);
+                    observer.observe(banner);
+                }
             } else {
                 banner.hidden = true;
-                document.body.style.paddingBottom = '';
+                release();
             }
         },
     ) as unknown as typeof globalThis.fetch;

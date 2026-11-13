@@ -30,6 +30,7 @@ import {
     MAINTENANCE_NOTICE_CSS,
     MAINTENANCE_NOTICE_ID,
     MAINTENANCE_SETTINGS_PATH,
+    installMaintenanceNotice,
     maintenanceNoticeCopy,
     maintenanceSignal,
     withMaintenanceSignal,
@@ -184,5 +185,66 @@ describe('maintenance notice presentation (HUB-13 / HUB-88)', () => {
         assert.ok(css.includes('background-color: var(--surface,'), 'banner must be opaque over page content');
         // --surface-1 is defined by no @phlix/ui theme: its dark fallback would win in Daylight (dark text on a near-black bar).
         assert.ok(!css.includes('--surface-1'), 'banner must use a theme-defined surface token');
+    });
+    it('lifts the fixed music bar by the published banner height (HUB-S4)', () => {
+        const css = MAINTENANCE_NOTICE_CSS;
+        assert.ok(css.includes(':root .music-bar.music-bar'), 'music-bar offset rule missing');
+        assert.match(css, /bottom:\s*var\(--maintenance-notice-h,\s*0px\);/);
+    });
+
+    it('re-measures the banner on resize via a ResizeObserver, and clears on hide (HUB-S4)', async () => {
+        const g = globalThis as Record<string, unknown>;
+        const saved = { document: g.document, fetch: g.fetch, RO: g.ResizeObserver };
+        const bodyStyle: Record<string, string> = { paddingBottom: '' };
+        const rootProps = new Map<string, string>();
+        let height = 40;
+        let roCb: (() => void) | null = null;
+        let roDisconnected = 0;
+        const banner: Record<string, unknown> = {
+            hidden: true,
+            setAttribute() {},
+            replaceChildren() {},
+            get offsetHeight() { return height; },
+        };
+        const fakeEl = () => ({ append() {}, appendChild() {}, set textContent(_v: string) {} });
+        g.document = {
+            getElementById: () => null,
+            createElement: (tag: string) => (tag === 'div' ? banner : fakeEl()),
+            head: { appendChild() {} },
+            body: { style: bodyStyle, appendChild() {} },
+            documentElement: {
+                style: {
+                    setProperty: (k: string, v: string) => rootProps.set(k, v),
+                    removeProperty: (k: string) => rootProps.delete(k),
+                },
+            },
+        };
+        g.ResizeObserver = class {
+            constructor(cb: () => void) { roCb = cb; }
+            observe() {}
+            disconnect() { roDisconnected++; }
+        };
+        let status = 503;
+        g.fetch = async () => ({ status, clone: () => ({ json: async () => ({ code: MAINTENANCE_FRAME_CODE }) }) });
+        try {
+            installMaintenanceNotice();
+            await (g.fetch as FetchLike)('/api/v1/x');
+            assert.equal(bodyStyle.paddingBottom, '40px');
+            assert.equal(rootProps.get('--maintenance-notice-h'), '40px');
+            height = 88; // flex-wrapped banner grew
+            assert.ok(roCb !== null, 'observer must be armed while shown');
+            (roCb as () => void)();
+            assert.equal(bodyStyle.paddingBottom, '88px', 'stale padding after resize');
+            assert.equal(rootProps.get('--maintenance-notice-h'), '88px');
+            status = 200;
+            await (g.fetch as FetchLike)('/api/v1/x');
+            assert.equal(bodyStyle.paddingBottom, '');
+            assert.equal(rootProps.has('--maintenance-notice-h'), false);
+            assert.equal(roDisconnected, 1);
+        } finally {
+            g.document = saved.document;
+            g.fetch = saved.fetch;
+            g.ResizeObserver = saved.RO;
+        }
     });
 });

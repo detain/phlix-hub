@@ -72,7 +72,7 @@ export function checkPasswordForm(form: PasswordForm): PasswordComplaint | null 
         };
     }
     if (form.newPassword !== form.confirmPassword) {
-        return { field: 'confirmPassword', sentence: 'The new passwords do not match.' };
+        return { field: 'confirmPassword', sentence: 'The new passwords don’t match.' };
     }
     return null;
 }
@@ -126,7 +126,7 @@ export const SERVER_WAIT_SENTENCE_PREFIX = 'Too many attempts — ';
  * resolve through the pass-through fallback.
  */
 export const PASSWORD_ERROR_SENTENCES: Record<string, string> = {
-    'auth.invalid_credentials': 'That current password is not correct.',
+    'auth.invalid_credentials': 'That current password isn’t correct.',
     'auth.missing_credentials': 'Both the current and the new password are required.',
     'auth.required': 'Your session expired — sign in again before changing the password.',
     'rate_limited': `Too many recent attempts from this network. Wait up to ${LOGIN_LOCKOUT_WINDOW_SECONDS / 60} minutes and try again.`,

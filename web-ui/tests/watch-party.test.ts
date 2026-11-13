@@ -650,6 +650,10 @@ describe('house copy policy (HUB-S3)', () => {
         assert.ok(seam.includes('relay.example.com:9443'));
         assert.equal(seam.includes('8804'), false, 'a seam dial never blames port 8804');
         assert.match(PAGE_SOURCE, /relayUnreachableSentence\(relayUrl\)/);
+        // A pre-upgrade refusal (onerror + 1006 before open) renders here too:
+        // the copy must say "refused", not only "relay is down".
+        assert.match(seam, /unreachable or refused the connection/);
+        assert.match(seam, /accepting connections/);
     });
 
     it('time register is shared with shareLiveness (min / h / days)', () => {

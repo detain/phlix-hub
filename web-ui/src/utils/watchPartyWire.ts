@@ -528,9 +528,13 @@ export const RELAY_CLOSE_TRY_AGAIN_LATER = 1013;
  *
  * Replaces the old token-expiry explanation: the token is checked once, at
  * the handshake, and this page fetches a fresh one on every connect — so its
- * lifetime was never why an open party dropped. Browsers often report a
- * handshake refusal as a bare 1006 (docs "Carrier caveat"), which lands in
- * the generic arm.
+ * lifetime was never why an open party dropped. With the bearer subprotocol a
+ * PRE-UPGRADE refusal (1011, pre-upgrade 4401/1013) never reaches this
+ * function with its code: the browser reports it as `onerror` + 1006 BEFORE
+ * `open` (docs "Carrier caveat"), and the page renders it through
+ * {@see relayUnreachableSentence} ("unreachable or refused the connection"),
+ * not the generic arm. The 4401/1011/1013 arms here cover only closes that
+ * arrive after the upgrade.
  */
 export function relayCloseSentence(code: number, wasInParty: boolean): string {
     switch (code) {
@@ -554,7 +558,10 @@ export function relayCloseSentence(code: number, wasInParty: boolean): string {
  * REALLY dialed. The "relay on port 8804 is unreachable" clause is the
  * README troubleshooting heading's verbatim quote, so it is kept — but only
  * for a dial that actually went to :8804; behind the operator `__PHLIX__`
- * seam the dial goes elsewhere and saying "port 8804" would misdirect.
+ * seam the dial goes elsewhere and saying "port 8804" would misdirect. The
+ * copy covers a pre-upgrade REFUSAL too: with the bearer subprotocol the
+ * browser surfaces that as `onerror` + 1006 before open, indistinguishable
+ * from a dead relay, so the sentence must not claim the relay is down.
  */
 export function relayUnreachableSentence(relayUrl: string): string {
     let where = 'relay';
@@ -566,8 +573,8 @@ export function relayUnreachableSentence(relayUrl: string): string {
     } catch {
         // Unparsable dial: keep the neutral noun rather than invent a place.
     }
-    return `The hub’s watch-party ${where} is unreachable from this browser. `
-        + 'If you run this hub, check that the relay is running and reachable from the internet; '
+    return `The hub’s watch-party ${where} is unreachable or refused the connection from this browser. `
+        + 'If you run this hub, check that the relay is running, accepting connections and reachable from the internet; '
         + 'otherwise ask your hub admin — the page cannot open the connection on its own.';
 }
 

@@ -73,12 +73,12 @@ export function shareLiveness(share: HubIncomingShare): ShareLiveness {
  */
 export function shareOpenBlockReason(share: HubIncomingShare): string | null {
     if (!share.access_urls?.length) {
-        return 'This server has not advertised a web address to the hub yet.';
+        return 'This server hasn’t advertised a web address to the hub yet.';
     }
     if (shareLiveness(share) === 'unreachable') {
         // Hub vantage: the cause is a likelihood, never a verdict — the hub
         // cannot tell a powered-off server from one its NAT hides.
-        return 'The hub cannot currently reach this server — it may be offline, or its owner’s '
+        return 'The hub can’t currently reach this server — it may be offline, or its owner’s '
             + 'network (NAT) may be blocking connections. Try again later.';
     }
     return null;

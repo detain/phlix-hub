@@ -13,9 +13,12 @@
  *
  * Scope of the pins (the HUB-S5 sweep): HubSharedWithMePage.vue,
  * HubSecuritySettingsPage.vue, ShareLibraryCard.vue, maintenanceNotice.ts
- * (UI leg) and ServerProxyController.php (API leg). Sentence tables owned by
- * other modules (shareLiveness, passwordForm, shareCreate, watchPartyWire)
- * keep their own test-pinned copy and are outside these pins.
+ * (UI leg) and ServerProxyController.php (API leg). The two sentence tables
+ * those pages render directly — shareLiveness.ts (the Open-block reason that
+ * HubSharedWithMePage shows first) and passwordForm.ts (the pre-flight and
+ * server-failure sentences HubSecuritySettingsPage shows) — are pinned too,
+ * so a page cannot mix registers through its table. Tables owned by other
+ * modules (shareCreate, watchPartyWire) keep their own test-pinned copy.
  *
  * Mutation teeth: re-expanding any swept negation ("could not", "cannot",
  * "does not", …) in a pinned UI source, a straight apostrophe in UI prose,
@@ -41,6 +44,8 @@ const UI_SOURCES: Record<string, string> = {
     'HubSharedWithMePage.vue': READ('../src/pages/HubSharedWithMePage.vue'),
     'HubSecuritySettingsPage.vue': READ('../src/pages/HubSecuritySettingsPage.vue'),
     'ShareLibraryCard.vue': READ('../src/components/ShareLibraryCard.vue'),
+    'shareLiveness.ts': READ('../src/utils/shareLiveness.ts'),
+    'passwordForm.ts': READ('../src/utils/passwordForm.ts'),
 };
 const CONTROLLER_SOURCE = READ('../../src/Http/Controllers/ServerProxyController.php');
 

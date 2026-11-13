@@ -81,7 +81,7 @@ describe('shareOpenBlockReason — the dead button can never ship silently', () 
     it('blocks unreachable servers and names the hub vantage + NAT truth', () => {
         const reason = shareOpenBlockReason(share({ server_liveness: 'unreachable' }));
         assert.ok(reason);
-        assert.match(reason, /hub cannot currently reach/i);
+        assert.match(reason, /hub can’t currently reach/i);
         assert.match(reason, /NAT/);
         assert.match(reason, /offline/);
     });
