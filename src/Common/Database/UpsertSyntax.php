@@ -25,6 +25,13 @@ namespace Phlix\Hub\Common\Database;
  *
  * Only the exact `AS new_row` alias and `new_row.<ident>` tokens are rewritten.
  *
+ * SINGLE-ENGINE ASSUMPTION: the detected flavor is process-global static state
+ * (one hub process talks to ONE database engine; every pooled connection and
+ * the migration runner see the same server). A deployment that mixed engines
+ * behind one process — e.g. a pool with a MySQL primary and a MariaDB replica
+ * used for writes — would run whichever flavor the LAST connect() detected, and
+ * is unsupported. Point all hub connections at one engine.
+ *
  * @since HUB-S14
  */
 final class UpsertSyntax

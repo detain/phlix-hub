@@ -12,6 +12,44 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Fix [HUB-MINORS] — accumulated review minors: copy, live regions, banner offset, portability, tests — 2026-11-13
+
+- Watch party (HUB-S3): the relay-unreachable sentence now reads "unreachable or refused the
+  connection" and no longer claims the relay is down — with the bearer subprotocol a pre-upgrade
+  refusal (1011 / pre-upgrade 4401 / 1013) reaches the browser as `onerror` + 1006 before open, so
+  the copy must cover both. The `relayCloseSentence` docblock now says so; test pins updated.
+- Maintenance banner (HUB-S4): the bottom-pinned banner now lifts the fixed `@phlix/ui` `.music-bar`
+  by its live height (`--maintenance-notice-h`), and re-measures its body padding on resize/rotate/wrap
+  with a `ResizeObserver` held only while the banner is shown.
+- Copy register (HUB-S5): `shareLiveness.ts` and `passwordForm.ts` sentences are contracted
+  ("can’t", "hasn’t", "don’t", "isn’t"), and both modules are now inside the `copy-register` pin scope.
+- Security settings (HUB-S8): the refusal/success live regions are persistent containers (mounted
+  before their text) and each message is announced by clear-then-set across a short timeout, so an
+  identical repeated refusal is re-announced.
+- Static assets (HUB-S40): the 304-without-`Vary` / shared-ETag concerns are unreachable by
+  construction (only hashed assets are gzipped and they carry no validators); a pin test now fails if
+  that ever changes.
+- Federation (HUB-S28): the `created_at` / `shared_at` / `granted_at` 201 echoes fall back to a
+  `date()` string if the re-SELECT misses, so the field is never `null`; echo tests added.
+- Installer (HUB-S21, HUB-S17): the logrotate drop-in sweeps orphaned `*.log.N[.gz]` copies older
+  than 60 days, making the log disk bound strict; the `max_connections` drop-in now finds the
+  MariaDB/RHEL config layouts (`mariadb.conf.d`, `/etc/my.cnf.d`, `conf.d`), warns when none exists,
+  only rewrites/restarts when its content changes, and `--uninstall` removes it.
+- Boot ceiling check (HUB-S17): `Application` splits the DB-ceiling check into a pure demand
+  calculation and an ERROR reporter, now unit-tested.
+- Database (HUB-S14): a failed `SELECT VERSION()` flavor probe is logged as a warning instead of
+  swallowed; the single-engine assumption behind the process-global upsert flavor is documented.
+- Relay (HUB-S24): `Tunnel::pendingBytes()` is an O(1) running counter instead of a rescan of every
+  queue on each enqueue; the counter is verified against a from-scratch recount.
+- `ViteAssets::getEntryJsUrl()` drops PHP's stat cache before its existence check (HUB-S18 sibling).
+- README (HUB-S44): residual `SH-064` / `R17-01` / `SH-050` / `R12-02` provenance markers removed from
+  the configuration prose.
+- Tests: external-mutation stat-cache probes that go red without `clearstatcache` (HUB-S18); manifest
+  memo self-heal and the `HUB_WS_URL` reject notice (HUB-S38); `getSonarrRootFolder` string-path (HUB-S47);
+  coroutine-path poison-release smoke (HUB-S12); per-flavor upsert rewrite for `HeartbeatHandler` and
+  `MetricsFlushService` (HUB-S14); non-default bind host reaching `listenString` and behavioural
+  `:8805` handshake-deadline cases (HUB-S32).
+
 ### Fix [HUB-S32] — federation listener hardening: `:8805` handshake guard (HUB-43/44/45) — 2026-11-13
 
 - `FederationWorker` (:8805) now composes `InboundHandshakeGuard` over its `InboundPackageCap` accept
@@ -110,12 +148,25 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 - Federation 201 responses now echo the stored timestamps (HUB-S28 / HUB-47).
 
+### Fixed [HUB-S27] — settings JSON encode failures throw (HUB-S27) — 2026-11-12
+
+- `HubSettingsRepository` throws on a JSON encode failure instead of persisting an empty string, and the
+  `json` setting-type admission in `HubSettingsController` validates encodability up front, so an
+  unencodable value is refused at the boundary (`HubSettingsBoundsAndMetaTest`).
+
 ### Fixed [HUB-S26] — claim JWK encode hardening (HUB-12) — 2026-11-12
 
 - `ClaimRequestHandler` encodes claim JWKs with `JSON_THROW_ON_ERROR`, rejects non-finite
   JWK members (e.g. `{"use":1e999}`) as the existing `SERVER_KEY_INVALID` 400, and
   `jwkFingerprint` throws instead of hashing an empty string; pinned by
   `ClaimJwkEncodeHardeningTest`.
+
+### Chore [HUB-S47] — `phlix-shared` ^0.55.1 pin bump and Sonarr root-folder path — 2026-11-12
+
+- `detain/phlix-shared` bumped to `^0.55.1` (plain-language `helpText` reword). Behavioural
+  adaptation: `RequestManager::getSonarrRootFolder()` now returns the root folder as a PATH string
+  (parent directory of the first series, `/tv` fallback) because `SonarrClient::addSeries()` takes a
+  path, never an index; pinned by `RequestManagerTest::testSonarrRootFolderIsAPathString`.
 
 ### Fixed [HUB-S25] — update-marker fetcher verifies TLS (HUB-11) — 2026-11-12
 

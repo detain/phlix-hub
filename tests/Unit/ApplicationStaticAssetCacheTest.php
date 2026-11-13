@@ -603,9 +603,21 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         $this->assertFalse(Application::acceptsGzip(null));
     }
 
+    /**
+     * URL path of the committed hashed PlayerPage chunk, resolved from disk so
+     * an SPA regen (which renames every chunk) never needs a test edit.
+     */
+    private function hashedPlayerChunkPath(): string
+    {
+        $found = glob(dirname(__DIR__, 2) . '/public/assets/app/assets/PlayerPage-*.js');
+        $this->assertNotEmpty($found, 'the committed SPA bundle must carry a hashed PlayerPage chunk');
+
+        return '/assets/app/assets/' . basename((string) $found[0]);
+    }
+
     public function testHashedJsGzipWireLegCarriesContentEncodingAndVary(): void
     {
-        $path = '/assets/app/assets/PlayerPage-Ba8zltA4-BpdZHCto.js';
+        $path = $this->hashedPlayerChunkPath();
         $file = $this->staticFileShape($path);
         $wire = (string) Application::buildStaticFastPathResponse('body', $path, $file, null, null, 'gzip, br');
 
@@ -623,7 +635,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
 
     public function testHashedJsWithoutGzipAcceptIsIdentityButStillVaries(): void
     {
-        $path = '/assets/app/assets/PlayerPage-Ba8zltA4-BpdZHCto.js';
+        $path = $this->hashedPlayerChunkPath();
         $file = $this->staticFileShape($path);
         $wire = (string) Application::buildStaticFastPathResponse('body', $path, $file, null, null, null);
 
@@ -647,6 +659,43 @@ final class ApplicationStaticAssetCacheTest extends TestCase
             null,
             'gzip',
         );
+        $this->assertStringNotContainsString('Content-Encoding', $wire);
+    }
+
+    /**
+     * HUB-S40 invariant. The two variant-correctness hazards raised against
+     * the gzip tier (a 304 that omits `Vary: Accept-Encoding`, and one strong
+     * ETag shared by the identity and gzip bodies) are unreachable BY
+     * CONSTRUCTION: only hashed-immutable assets are compressed, and a hashed
+     * asset carries NO validators (no ETag, no Last-Modified) and can never
+     * answer 304; the non-hashed tier that does carry an ETag is identity-only.
+     * Should either property ever change, this test fails and forces the
+     * per-encoding ETag / Vary-on-304 work to be done with it.
+     */
+    public function testCompressedTierCarriesNoValidatorsAndNeverAnswers304(): void
+    {
+        $path = $this->hashedPlayerChunkPath();
+        $file = $this->staticFileShape($path);
+
+        foreach (['*', '"anything"', 'W/"anything"'] as $inm) {
+            $since = 'Mon, 01 Jan 2035 00:00:00 GMT';
+            $wire = (string) Application::buildStaticFastPathResponse('body', $path, $file, $inm, $since, 'gzip');
+            $this->assertStringStartsWith('HTTP/1.1 200', $wire, "hashed asset must ignore If-None-Match {$inm}");
+            $this->assertStringNotContainsString('ETag:', $wire);
+            $this->assertStringNotContainsString('Last-Modified:', $wire);
+        }
+
+        // The validator-bearing (non-hashed) tier is never content-encoded.
+        $nonHashed = $this->staticFileShape(self::NON_HASHED_ASSET);
+        $wire = (string) Application::buildStaticFastPathResponse(
+            'body',
+            self::NON_HASHED_ASSET,
+            $nonHashed,
+            null,
+            null,
+            'gzip',
+        );
+        $this->assertStringContainsString('ETag:', $wire);
         $this->assertStringNotContainsString('Content-Encoding', $wire);
     }
 

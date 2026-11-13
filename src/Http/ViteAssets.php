@@ -65,6 +65,10 @@ final class ViteAssets
      */
     public function getEntryJsUrl(): string
     {
+        // Drop PHP's per-process stat cache FIRST: a resident worker must not see
+        // a stale positive for a manifest removed (or a stale mtime/size for one
+        // rebuilt) behind its back, by file_exists() or by the memo check below.
+        clearstatcache(true, $this->manifestPath);
         if (! file_exists($this->manifestPath)) {
             throw new RuntimeException(
                 "Vite manifest not found at {$this->manifestPath}. "
@@ -72,7 +76,6 @@ final class ViteAssets
             );
         }
 
-        clearstatcache(true, $this->manifestPath);
         $mtime = (int) filemtime($this->manifestPath);
         $size = (int) filesize($this->manifestPath);
         $memo = self::$entryMemo[$this->manifestPath] ?? null;

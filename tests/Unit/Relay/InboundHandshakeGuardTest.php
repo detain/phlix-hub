@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Relay;
 
 use Phlix\Hub\Relay\ClientRelayWorker;
+use Phlix\Hub\Relay\FederationWorker;
 use Phlix\Hub\Relay\InboundHandshakeGuard;
 use Phlix\Hub\Relay\InboundPackageCap;
 use Phlix\Hub\Relay\RelayWorker;
@@ -400,6 +401,59 @@ final class InboundHandshakeGuardTest extends TestCase
         // refused connection gets NO handshake_timeout line on top of the
         // worker's own refusal.
         $this->loop->fire(0);
+        $this->assertStringNotContainsString('handshake_timeout', $this->capturedLoggerOutput());
+    }
+
+    /**
+     * HUB-S32 behavioural pin for :8805 (replaces source-grep-only coverage):
+     * the REAL FederationWorker::start() onConnect arms the deadline at its
+     * configured bound, closes a silent socket with handshake_timeout at the
+     * federation listener label, and the upgrade hook cancels before refusing.
+     */
+    public function testFederationWorkerOnConnectArmsAndFiresTheDeadline(): void
+    {
+        $federation = new FederationWorker($this->makeThrowingContainer(), port: 39105, handshakeTimeoutSeconds: 7.0);
+        $worker = $federation->start();
+        $this->assertIsCallable($worker->onConnect);
+
+        $connection = $this->makeSilentConnection();
+        $connection->expects($this->once())->method('close');
+        ($worker->onConnect)($connection);
+
+        $this->assertSame([7.0], $this->loop->delays, 'the :8805 deadline must arm at the configured bound');
+        $this->assertSame(1, InboundHandshakeGuard::armedCount());
+
+        $this->loop->fire(0);
+
+        $log = $this->capturedLoggerOutput();
+        $this->assertStringContainsString('"reason":"handshake_timeout"', $log);
+        $this->assertStringContainsString('"listener":"federation-ws :39105"', $log);
+        $this->assertSame(0, InboundHandshakeGuard::armedCount());
+    }
+
+    public function testFederationWorkerUpgradeCancelsTheDeadlineBeforeItsOwnRefusal(): void
+    {
+        $federation = new FederationWorker($this->makeThrowingContainer(), port: 39106, handshakeTimeoutSeconds: 7.0);
+        $worker = $federation->start();
+
+        $connection = $this->makeSilentConnection();
+        // A path with no hub_id: the worker's own policy refusal runs (a
+        // pre-upgrade refusal defers its close frame past the handshake, so
+        // close() itself is not asserted); the guard must already be cancelled
+        // and must add no act of its own.
+        $onConnect = $worker->onConnect;
+        $this->assertIsCallable($onConnect);
+        $onConnect($connection);
+
+        $request = new WorkermanRequest("GET /nope HTTP/1.1\r\nHost: hub.example.com\r\nUpgrade: websocket\r\n"
+            . "Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
+            . "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n");
+        $federation->onWebSocketConnect($connection, $request);
+
+        $this->assertSame([0], $this->loop->cancelled);
+        $this->assertSame(0, InboundHandshakeGuard::armedCount());
+
+        $this->loop->fire(0); // late fire of the retained callback is inert
         $this->assertStringNotContainsString('handshake_timeout', $this->capturedLoggerOutput());
     }
 

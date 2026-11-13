@@ -21,6 +21,8 @@ use ReflectionClass;
  */
 final class PhlixMySQLConnectionTest extends TestCase
 {
+    use \Phlix\Hub\Tests\Support\TempLoggerCapture;
+
     /**
      * @return list<array{int, mixed}>
      */
@@ -434,5 +436,49 @@ final class PhlixMySQLConnectionTest extends TestCase
             $this->assertStringContainsString('refusing to commit', $e->getMessage());
         }
         $this->assertFalse($this->readProp($conn, 'txPoisoned'));
+    }
+    /**
+     * HUB-S12: the poison branch of execute() must also release the
+     * transaction mutex when it runs INSIDE a coroutine (the non-coroutine test
+     * above takes no mutex, so it could not see a leak). Child-process smoke,
+     * like the serialisation test: coroutine A poisons its transaction with a
+     * "gone away" (2006); coroutine B must then be able to begin a transaction
+     * on the same connection instead of blocking on a leaked lock.
+     */
+    public function testPoisonedTransactionReleasesLockInsideCoroutine(): void
+    {
+        if (!extension_loaded('swoole')) {
+            self::markTestSkipped('ext-swoole required for the coroutine poison-path smoke.');
+        }
+
+        $script = __DIR__ . '/Fixtures/transaction_poison_smoke.php';
+        self::assertFileExists($script);
+
+        $result = SwooleFixtureProcess::run($script);
+        $events = array_values(array_filter(explode("\n", trim($result['stdout']))));
+
+        self::assertSame(
+            ['A:begin', 'A:poisoned', 'A:poison-cleared', 'B:begin'],
+            $events,
+            "a leaked mutex shows as B:blocked; child output was:\n" . $result['stdout'],
+        );
+    }
+    /**
+     * HUB-S14: a failed `SELECT VERSION()` probe leaves a warning (the prior
+     * upsert flavor is kept, which is wrong on MariaDB) and never throws.
+     */
+    public function testFlavorDetectionFailureIsLoggedNotSwallowed(): void
+    {
+        $this->startLoggerCapture();
+        try {
+            $conn = (new ReflectionClass(PhlixMySQLConnection::class))->newInstanceWithoutConstructor();
+            $this->invokePrivate($conn, 'warnFlavorDetectionFailed', new \RuntimeException('probe boom'));
+            $out = $this->capturedLoggerOutput();
+        } finally {
+            $this->stopLoggerCapture();
+        }
+
+        $this->assertStringContainsString('flavor detection', $out);
+        $this->assertStringContainsString('probe boom', $out);
     }
 }

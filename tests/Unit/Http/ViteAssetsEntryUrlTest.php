@@ -14,7 +14,17 @@ namespace Phlix\Hub\Tests\Unit\Http;
 use Phlix\Hub\Http\ViteAssets;
 use PHPUnit\Framework\TestCase;
 
+use function exec;
+use function escapeshellarg;
 use function file_get_contents;
+use function file_put_contents;
+use function function_exists;
+use function json_encode;
+use function mkdir;
+use function rmdir;
+use function sys_get_temp_dir;
+use function uniqid;
+use function unlink;
 use function file_exists;
 use function json_decode;
 use function str_starts_with;
@@ -93,5 +103,78 @@ final class ViteAssetsEntryUrlTest extends TestCase
             "the part after the base must be the manifest's own file value (no '/' "
             . 'prefix resurrection, no second guess at the base); got ' . $suffix
         );
+    }
+    /**
+     * Write a one-entry manifest under a scratch public root.
+     */
+    private function scratchRoot(string $entryFile): string
+    {
+        $root = sys_get_temp_dir() . '/phlix-hub-vite-' . uniqid('', true);
+        mkdir($root . '/assets/app/.vite', 0700, true);
+        $this->writeManifest($root, $entryFile);
+
+        return $root;
+    }
+
+    private function writeManifest(string $root, string $entryFile): void
+    {
+        file_put_contents(
+            $root . '/assets/app/.vite/manifest.json',
+            json_encode(['src/main.ts' => ['file' => $entryFile, 'isEntry' => true]], JSON_THROW_ON_ERROR),
+        );
+    }
+
+    private function prune(string $root): void
+    {
+        @unlink($root . '/assets/app/.vite/manifest.json');
+        @rmdir($root . '/assets/app/.vite');
+        @rmdir($root . '/assets/app');
+        @rmdir($root . '/assets');
+        @rmdir($root);
+    }
+
+    public function testMemoSelfHealsWhenTheManifestIsRebuilt(): void
+    {
+        $root = $this->scratchRoot('assets/index-AAAA.js');
+        try {
+            $assets = new ViteAssets($root);
+            self::assertSame('/assets/app/assets/index-AAAA.js', $assets->getEntryJsUrl());
+            // Memo hit: unchanged manifest answers from the memo (a second
+            // instance, sharing the static memo, like a worker's next request).
+            self::assertSame('/assets/app/assets/index-AAAA.js', (new ViteAssets($root))->getEntryJsUrl());
+
+            // Rebuild with a different size (the memo key is mtime+size, and
+            // mtime alone can collide inside one second).
+            $this->writeManifest($root, 'assets/index-BBBBBBBBBB.js');
+            // A brand-new instance shares the static memo, like a worker's next request.
+            self::assertSame(
+                '/assets/app/assets/index-BBBBBBBBBB.js',
+                (new ViteAssets($root))->getEntryJsUrl(),
+                'a rebuilt manifest must replace the memoised entry URL',
+            );
+        } finally {
+            $this->prune($root);
+        }
+    }
+
+    public function testRemovedManifestIsReportedEvenAfterAMemoisedRead(): void
+    {
+        if (!function_exists('exec')) {
+            self::markTestSkipped('exec() is disabled; cannot remove the manifest outside this process.');
+        }
+        $root = $this->scratchRoot('assets/index-CCCC.js');
+        try {
+            $assets = new ViteAssets($root);
+            $assets->getEntryJsUrl();
+            $path = $root . '/assets/app/.vite/manifest.json';
+            self::assertTrue(file_exists($path)); // last stat'd path: primes a positive cache entry
+            exec('rm -f ' . escapeshellarg($path));
+
+            $this->expectException(\RuntimeException::class);
+            $this->expectExceptionMessage('Vite manifest not found');
+            $assets->getEntryJsUrl();
+        } finally {
+            $this->prune($root);
+        }
     }
 }

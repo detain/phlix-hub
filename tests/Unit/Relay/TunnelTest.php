@@ -1724,6 +1724,58 @@ class TunnelTest extends TestCase
     }
 
     /**
+     * HUB-S24: the O(1) running byte counter must equal a from-scratch recount
+     * of the three queues after every kind of mutation (client enqueue, body
+     * enqueue, whole-queue drop on client removal, teardown).
+     */
+    public function testRunningPendingBytesCounterMatchesRecount(): void
+    {
+        $tunnel = $this->activeTunnel();
+        $this->serverWs->method('send')->willReturn(false);
+        $this->serverWs->method('pauseRecv');
+        $this->serverWs->method('resumeRecv');
+        $clients = $this->congestedClients($tunnel, 2);
+
+        $counter = new \ReflectionProperty($tunnel, 'pendingBytesTotal');
+        $recount = new \ReflectionMethod($tunnel, 'recountPendingBytes');
+        $check = function (string $when) use ($tunnel, $counter, $recount): int {
+            $running = $counter->getValue($tunnel);
+            $this->assertIsInt($running);
+            $this->assertSame($recount->invoke($tunnel), $running, "counter drifted {$when}");
+            return $running;
+        };
+
+        // Registering congested clients already queues CLIENT_CONNECT control frames.
+        $check('at start');
+
+        foreach ($clients as $client) {
+            for ($i = 0; $i < 5; $i++) {
+                $frame = new RelayFrame(RelayFrameType::DATA, $client->channelId, str_repeat('c', 1000));
+                $tunnel->sendToClient($client->channelId, $frame);
+            }
+        }
+        $afterClient = $check('after client enqueues');
+        $this->assertGreaterThan(10000, $afterClient);
+
+        for ($i = 0; $i < 3; $i++) {
+            $body = RelayHttpRequestCodec::encodeBody(str_repeat('b', 500));
+            $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, 0, $body));
+        }
+        $afterBody = $check('after body enqueues');
+        $this->assertGreaterThan($afterClient, $afterBody);
+
+        $tunnel->removeClient($clients[0]);
+        $afterRemove = $check('after removing a client with a queued backlog');
+        $this->assertLessThan($afterBody, $afterRemove);
+
+        $tunnel->close('test_teardown');
+        // Teardown may itself queue control frames (disconnect notices) on the
+        // congested server socket, so the figure need not be 0 — it must still
+        // equal the recount, and the bulky client/body backlog must be gone.
+        $this->assertLessThan($afterRemove, $check('after teardown'));
+    }
+
+    /**
      * Byte cap, non-overflow arm: a modest backlog under the cap does not close.
      */
     public function testBodyQueueUnderByteCapStaysOpen(): void
@@ -2458,5 +2510,8 @@ class TunnelTest extends TestCase
     {
         $prop = new \ReflectionProperty($tunnel, 'pendingClientFrames');
         $prop->setValue($tunnel, $queues);
+        // Keep the running byte counter honest for a directly seeded backlog.
+        $recount = new \ReflectionMethod($tunnel, 'recountPendingBytes');
+        (new \ReflectionProperty($tunnel, 'pendingBytesTotal'))->setValue($tunnel, $recount->invoke($tunnel));
     }
 }

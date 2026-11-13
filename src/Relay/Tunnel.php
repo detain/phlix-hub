@@ -295,6 +295,19 @@ final class Tunnel implements TunnelInterface
     private array $pendingClientFrames = [];
 
     /**
+     * Running byte counter over the three backpressure queues
+     * (high-priority payloads + body payloads + client encoded frames), checked
+     * against {@see MAX_PENDING_BYTES} by {@see pendingBytes()} in O(1) instead
+     * of rescanning every queued frame on each enqueue. EVERY queue mutation
+     * adjusts it (enqueue +, dequeue -, whole-queue drops via the
+     * drop*Queue helpers); {@see recountPendingBytes()} is the from-scratch
+     * oracle the tests compare it against.
+     *
+     * @var int
+     */
+    private int $pendingBytesTotal = 0;
+
+    /**
      * @var int Number of clients with backpressure (send buffer full). When > 0,
      *          serverWs->pauseRecv() has been called to stop receiving from the
      *          server. Each client's onBufferDrain decrements this; when it hits 0,
@@ -737,9 +750,11 @@ final class Tunnel implements TunnelInterface
     {
         while (!empty($this->pendingHighPriorityFrames)) {
             $frame = array_shift($this->pendingHighPriorityFrames);
+            $this->pendingBytesTotal -= strlen($frame->payload);
             $encoded = $this->codec->encode($frame->type, $frame->seq, $frame->payload);
             if ($this->serverWs->send($encoded) === false) {
                 array_unshift($this->pendingHighPriorityFrames, $frame);
+                $this->pendingBytesTotal += strlen($frame->payload);
                 $this->handleServerSendBackpressure();
                 return;
             }
@@ -778,6 +793,7 @@ final class Tunnel implements TunnelInterface
             return;
         }
         $this->pendingHighPriorityFrames[] = $frame;
+        $this->pendingBytesTotal += strlen($frame->payload);
     }
 
     /**
@@ -803,7 +819,7 @@ final class Tunnel implements TunnelInterface
             foreach (array_keys($this->pendingBodyFrames) as $channel) {
                 /** @psalm-suppress RiskyTruthyFalsyComparison */
                 if (empty($this->pendingBodyFrames[$channel])) {
-                    unset($this->pendingBodyFrames[$channel]);
+                    $this->dropBodyQueue($channel);
                     continue;
                 }
 
@@ -816,6 +832,7 @@ final class Tunnel implements TunnelInterface
                 }
 
                 array_shift($this->pendingBodyFrames[$channel]);
+                $this->pendingBytesTotal -= strlen($frame->payload);
                 /** @psalm-suppress DocblockTypeContradiction */
                 if (empty($this->pendingBodyFrames[$channel])) {
                     unset($this->pendingBodyFrames[$channel]);
@@ -864,15 +881,28 @@ final class Tunnel implements TunnelInterface
             return;
         }
         $this->pendingBodyFrames[$frame->channelId()][] = $frame;
+        $this->pendingBytesTotal += strlen($frame->payload);
     }
 
     /**
      * Aggregate queued BYTES across the high-priority, body and client queues,
-     * checked against {@see MAX_PENDING_BYTES} at every enqueue.
+     * checked against {@see MAX_PENDING_BYTES} at every enqueue. O(1): reads the
+     * running {@see $pendingBytesTotal} instead of rescanning every queue.
      *
      * @return int
      */
     private function pendingBytes(): int
+    {
+        return $this->pendingBytesTotal;
+    }
+
+    /**
+     * From-scratch recount of the queued bytes — the oracle the running
+     * counter is verified against (tests); never on a hot path.
+     *
+     * @return int
+     */
+    private function recountPendingBytes(): int
     {
         $bytes = 0;
         foreach ($this->pendingHighPriorityFrames as $frame) {
@@ -889,6 +919,36 @@ final class Tunnel implements TunnelInterface
             }
         }
         return $bytes;
+    }
+
+    /**
+     * Drop one channel's whole BODY queue, releasing its bytes from the counter.
+     *
+     * @param int $channelId Channel key of {@see $pendingBodyFrames}.
+     *
+     * @return void
+     */
+    private function dropBodyQueue(int $channelId): void
+    {
+        foreach ($this->pendingBodyFrames[$channelId] ?? [] as $frame) {
+            $this->pendingBytesTotal -= strlen($frame->payload);
+        }
+        unset($this->pendingBodyFrames[$channelId]);
+    }
+
+    /**
+     * Drop one channel's whole CLIENT queue, releasing its bytes from the counter.
+     *
+     * @param int $channelId Channel key of {@see $pendingClientFrames}.
+     *
+     * @return void
+     */
+    private function dropClientQueue(int $channelId): void
+    {
+        foreach ($this->pendingClientFrames[$channelId] ?? [] as $encoded) {
+            $this->pendingBytesTotal -= strlen($encoded);
+        }
+        unset($this->pendingClientFrames[$channelId]);
     }
 
     /**
@@ -1180,6 +1240,7 @@ final class Tunnel implements TunnelInterface
         }
 
         $this->pendingClientFrames[$channelId][] = $encoded;
+        $this->pendingBytesTotal += strlen($encoded);
         return true;
     }
 
@@ -1224,13 +1285,14 @@ final class Tunnel implements TunnelInterface
             }
 
             array_shift($this->pendingClientFrames[$channelId]);
+            $this->pendingBytesTotal -= strlen($encoded);
             $frameLen = strlen($encoded);
             $bucket?->spend((float) $frameLen);
             $this->recordClientBytesIn($frameLen);
         }
 
         if (($this->pendingClientFrames[$channelId] ?? []) === []) {
-            unset($this->pendingClientFrames[$channelId]);
+            $this->dropClientQueue($channelId);
             $this->cancelThrottleDrain($client);
         } else {
             $this->armThrottleDrain($client);
@@ -1306,7 +1368,7 @@ final class Tunnel implements TunnelInterface
         $this->cancelThrottleDrain($client);
         $channelId = $client->channelId;
         if ($channelId > 0) {
-            unset($this->pendingClientFrames[$channelId]);
+            $this->dropClientQueue($channelId);
         }
         $client->close();
     }
@@ -1357,6 +1419,7 @@ final class Tunnel implements TunnelInterface
             return;
         }
         $this->pendingClientFrames[$channelId][] = $encoded;
+        $this->pendingBytesTotal += strlen($encoded);
     }
 
     /**
@@ -1380,13 +1443,14 @@ final class Tunnel implements TunnelInterface
                 return false;
             }
             array_shift($this->pendingClientFrames[$channelId]);
+            $this->pendingBytesTotal -= strlen($encoded);
             $frameLen = strlen($encoded);
             if ($this->relaySessionId !== null) {
                 $this->sessionManager->recordBytesIn($this->relaySessionId, $frameLen);
             }
             $this->bytesIn += $frameLen;
         }
-        unset($this->pendingClientFrames[$channelId]);
+        $this->dropClientQueue($channelId);
         return true;
     }
 
@@ -1796,7 +1860,7 @@ final class Tunnel implements TunnelInterface
         // slot and drop its queue so the server isn't left paused forever (and
         // the queued frames aren't leaked in the resident worker).
         if ($channelId > 0 && isset($this->pendingClientFrames[$channelId])) {
-            unset($this->pendingClientFrames[$channelId]);
+            $this->dropClientQueue($channelId);
             $client->clientWs->onBufferDrain = null;
             // A THROTTLED client's backlog is a rate-limit queue (S42), NOT a
             // send-buffer backpressure queue: throttled clients never pause the
@@ -1825,7 +1889,7 @@ final class Tunnel implements TunnelInterface
         // tied to a persistent client channel — so this only reclaims the
         // departing channel's own bulk stream.
         if ($channelId > 0 && isset($this->pendingBodyFrames[$channelId])) {
-            unset($this->pendingBodyFrames[$channelId]);
+            $this->dropBodyQueue($channelId);
         }
 
         // Send CLIENT_DISCONNECT notification to the server, tagged with the
@@ -1886,6 +1950,7 @@ final class Tunnel implements TunnelInterface
         $this->clientConnections->removeAll($this->clientConnections);
         $this->channelClients = [];
         $this->pendingClientFrames = [];
+        $this->pendingBytesTotal = $this->recountPendingBytes();
     }
 
     /**
@@ -1948,6 +2013,7 @@ final class Tunnel implements TunnelInterface
         // notifyClientsDisconnected) so a reused Tunnel never resends stale frames.
         $this->pendingBodyFrames = [];
         $this->pendingHighPriorityFrames = [];
+        $this->pendingBytesTotal = $this->recountPendingBytes();
 
         // Notify clients
         $this->notifyClientsDisconnected($reason);

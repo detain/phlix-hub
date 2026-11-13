@@ -494,7 +494,7 @@ final class FederationController
             'relay_enabled' => false,
             'admin_delegation_enabled' => false,
             'status' => 'pending',
-            'created_at' => $storedPeer['created_at'] ?? null,
+            'created_at' => $storedPeer['created_at'] ?? date('Y-m-d H:i:s'),
         ]);
     }
 
@@ -879,7 +879,7 @@ final class FederationController
             // createOutgoingShare stamps 'active' — hello-time pushes only
             // query active rows, so 'pending' would never converge.
             'status' => 'active',
-            'shared_at' => $storedShare['shared_at'] ?? null,
+            'shared_at' => $storedShare['shared_at'] ?? date('Y-m-d H:i:s'),
         ]);
     }
 
@@ -1195,7 +1195,7 @@ final class FederationController
             'id' => $delegationId,
             'peer_id' => $peerIdRaw,
             'user_id' => $userIdRaw,
-            'granted_at' => $storedDelegation['granted_at'] ?? null,
+            'granted_at' => $storedDelegation['granted_at'] ?? date('Y-m-d H:i:s'),
         ]);
     }
 

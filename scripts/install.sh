@@ -865,7 +865,13 @@ phlix_apply_workerman_logrotate() {
 # this install's .logs/ directory) appends forever. One glob covers all of
 # them (the dated Monolog files app-YYYY-MM-DD.log etc. and workerman.log), so
 # worst-case disk is computable: <= (rotate + 1) x maxsize per live file.
-# Logrotate's own rotated copies (*.log.N[.gz]) do not match the *.log glob.
+# Logrotate's own rotated copies (*.log.N[.gz]) do not match the *.log glob,
+# so once Monolog deletes a dated base file (30 days) its rotated copies would
+# be ORPHANED, outside every policy, forever. The lastaction below sweeps them:
+# a rotated copy is at most rotate(8) x weekly = 56 days old while its base
+# lives, so anything older than 60 days is an orphan (or ancient) and is
+# deleted. That makes the disk bound strict: live files <= (rotate + 1) x
+# maxsize each, orphans live <= 60 days after their last rotation.
 #
 # copytruncate is MANDATORY, not a preference: the master opens the file once
 # and every forked worker inherits that fd, so a rename+create rotation would
@@ -887,10 +893,64 @@ ${INSTALL_PATH}/.logs/*.log {
     compress
     delaycompress
     copytruncate
+    sharedscripts
+    lastaction
+        /usr/bin/find ${INSTALL_PATH}/.logs -maxdepth 1 -type f -name '*.log.[0-9]*' -mtime +60 -delete
+    endscript
 }
 LOGROTATE_EOF
   chmod 644 "$PHLIX_LOGROTATE_FILE"
-  info ".logs/*.log: weekly / maxsize 64M / rotate 8 / copytruncate."
+  info ".logs/*.log: weekly / maxsize 64M / rotate 8 / copytruncate; orphaned *.log.N[.gz] older than 60d swept."
+}
+
+# MySQL/MariaDB connection-ceiling drop-in. Candidate config dirs, first
+# existing wins: Debian/Ubuntu MySQL (mysql.conf.d), Debian/Ubuntu MariaDB
+# (mariadb.conf.d), RHEL/Fedora/Arch MariaDB+MySQL (/etc/my.cnf.d), and the
+# generic Debian conf.d. The file name sorts last (zz-) so it wins over the
+# distro defaults. Idempotent: the file is only rewritten (and the server only
+# restarted) when its content actually changes. No known layout: warn loudly
+# instead of silently leaving the stock ceiling (the hub also logs an ERROR at
+# boot when pool demand meets max_connections).
+PHLIX_MYSQL_CEILING_FILE_NAME="zz-phlix-hub.cnf"
+PHLIX_MYSQL_CONF_DIRS="/etc/mysql/mysql.conf.d /etc/mysql/mariadb.conf.d /etc/my.cnf.d /etc/mysql/conf.d"
+PHLIX_MYSQL_CEILING_CONTENT='[mysqld]
+max_connections = 300'
+
+phlix_apply_mysql_ceiling() {
+  local dir="" d want have file
+  for d in $PHLIX_MYSQL_CONF_DIRS; do
+    [ -d "$d" ] && { dir="$d"; break; }
+  done
+  if [ -z "$dir" ]; then
+    warn "No MySQL/MariaDB config directory found (looked in: $PHLIX_MYSQL_CONF_DIRS); max_connections left at the server default. Set max_connections >= 300 yourself if you run several relay workers."
+    return 0
+  fi
+  file="$dir/$PHLIX_MYSQL_CEILING_FILE_NAME"
+  want="$PHLIX_MYSQL_CEILING_CONTENT"
+  have=""
+  [ -f "$file" ] && have="$(cat "$file" 2>/dev/null)"
+  if [ "$have" = "$want" ]; then
+    info "max_connections drop-in already current ($file); no restart needed."
+    return 0
+  fi
+  printf '%s\n' "$want" > "$file"
+  chmod 644 "$file"
+  info "Wrote $file (max_connections = 300); restarting the database server."
+  systemctl restart mysql >/dev/null 2>&1 \
+    || systemctl restart mysqld >/dev/null 2>&1 \
+    || systemctl restart mariadb >/dev/null 2>&1 || true
+}
+
+# Uninstall half: remove the drop-in from EVERY candidate dir (an install may
+# have used any of them). Deliberately no restart — other databases on this
+# server may be in use and the raised ceiling is harmless; it lapses at the
+# next restart.
+phlix_remove_mysql_ceiling() {
+  local d f
+  for d in $PHLIX_MYSQL_CONF_DIRS; do
+    f="$d/$PHLIX_MYSQL_CEILING_FILE_NAME"
+    [ -f "$f" ] && { log "Removing database ceiling drop-in $f (takes effect at the next database restart)"; rm -f "$f"; }
+  done
 }
 
 # Parse the User= line from a systemd unit. Empty when the file is absent
@@ -1594,6 +1654,9 @@ do_uninstall() {
     [ -f "$f" ] && { log "Removing tuning drop-in $f"; rm -f "$f"; }
   done
 
+  # 4y. Database connection-ceiling drop-in (HUB-S17).
+  phlix_remove_mysql_ceiling
+
   # 5. Certbot artefacts
   [ -n "$cron" ] && { log "Removing certbot cron entry"; rm -f "$cron"; }
   [ -n "$hook" ] && { log "Removing certbot deploy hook"; rm -f "$hook"; }
@@ -2130,11 +2193,8 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_PATH"
 log "Configuring MySQL database and user"
 # Connection ceiling: the hub pools DB_POOL_SIZE (default 8) connections per
 # worker per connection name (mysql/metrics/txn), so the stock max_connections
-# (151) is easy to exceed with several workers. Drop-in raises it to 300.
-if [ -d /etc/mysql/mysql.conf.d ]; then
-  printf '[mysqld]\nmax_connections = 300\n' > /etc/mysql/mysql.conf.d/zz-phlix-hub.cnf
-  systemctl restart mysql >/dev/null 2>&1 || systemctl restart mysqld >/dev/null 2>&1 || true
-fi
+# (151) is easy to exceed with several workers. A drop-in raises it to 300.
+phlix_apply_mysql_ceiling
 systemctl enable --now mysql >/dev/null 2>&1 || systemctl enable --now mysqld >/dev/null 2>&1 || true
 # Runs as root via the local socket. Idempotent.
 #

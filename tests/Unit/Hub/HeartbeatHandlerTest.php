@@ -276,6 +276,67 @@ final class HeartbeatHandlerTest extends TestCase
         );
     }
 
+    /**
+     * HUB-S14: the batched multi-row library upsert is flavor-rewritten too —
+     * on MariaDB the row alias must not reach the wire and every tuple's update
+     * rides VALUES(library_name); on MySQL it stays alias-form.
+     */
+    public function testBatchedLibraryUpsertIsRewrittenPerServerFlavor(): void
+    {
+        foreach (['10.6.18-MariaDB' => false, '8.0.46' => true] as $version => $alias) {
+            \Phlix\Hub\Common\Database\UpsertSyntax::detect($version);
+            $serverId = 'server-flavor-test';
+            $captured = '';
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturnCallback(
+                function (string $sql) use ($serverId, &$captured) {
+                    if (str_contains($sql, 'FOR UPDATE')) {
+                        return [['id' => $serverId]];
+                    }
+                    if (str_contains($sql, 'INSERT INTO server_libraries')) {
+                        $captured = $sql;
+                    }
+                    return [];
+                }
+            );
+            $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
+            $jwtService = new EnrollmentJwtService($keyManager, 'https://hub.example.com');
+            $handler = $this->createHandler($db, $jwtService, $this->createMock(StructuredLogger::class));
+            $heartbeat = new HeartbeatDto(
+                serverId: $serverId,
+                version: '0.11.0',
+                timestamp: time(),
+                uptimeSeconds: 100,
+                activeSessions: 0,
+                activeTranscodes: 0,
+                hostnameCandidates: [],
+                libraries: [
+                    LibraryRef::fromPayload(['library_id' => 'lib-1', 'library_name' => 'Movies']),
+                    LibraryRef::fromPayload(['library_id' => 'lib-2', 'library_name' => 'TV']),
+                ],
+            );
+            try {
+                $handler->handle($serverId, $jwtService->createEnrollmentJwt($serverId), $heartbeat);
+            } finally {
+                \Phlix\Hub\Common\Database\UpsertSyntax::reset();
+            }
+
+            self::assertNotSame('', $captured, "{$version}: no library upsert issued");
+            if ($alias) {
+                self::assertStringContainsString(
+                    'AS new_row ON DUPLICATE KEY UPDATE library_name = new_row.library_name',
+                    $captured,
+                );
+            } else {
+                self::assertStringNotContainsString('new_row', $captured);
+                self::assertStringContainsString(
+                    'ON DUPLICATE KEY UPDATE library_name = VALUES(library_name)',
+                    $captured,
+                );
+            }
+        }
+    }
+
     public function testHandleThrowsOnInvalidEnrollmentJwt(): void
     {
         $db = $this->createMock(Connection::class);

@@ -264,6 +264,27 @@ final class FederationControllerTest extends TestCase
         self::assertSame('2001-02-03 04:05:06', $body['created_at']);
     }
 
+    public function testCreatePeerKeepsStringShapeWhenReselectMisses(): void
+    {
+        $this->hubRepo->method('getPeerByUrl')->willReturn(null);
+        $this->hubRepo->method('getPeerByPublicKey')->willReturn(null);
+        $this->hubRepo->method('getPeerById')->willReturn(null);
+
+        $request = new Request();
+        $request->path = '/api/v1/me/federation/peers';
+        $request->method = 'POST';
+        $request->userId = 'admin-1';
+        $request->body = [
+            'url' => 'https://miss-peer.example.com',
+            'public_key' => 'miss-peer-key',
+            'name' => 'Miss Peer',
+        ];
+
+        $body = self::arrayNode(json_decode($this->controller->createPeer($request)->body, true));
+
+        self::assertIsString($body['created_at'], 'a missed re-SELECT must not emit a null timestamp');
+    }
+
     public function testCreatePeerReturns201OnSuccess(): void
     {
         $this->hubRepo->method('getPeerByUrl')->willReturn(null);
@@ -636,6 +657,56 @@ final class FederationControllerTest extends TestCase
         self::assertSame('peer-1', $body['peer_id']);
     }
 
+    private function outgoingShareRequest(): Request
+    {
+        $request = new Request();
+        $request->path = '/api/v1/me/federation/library-shares/outgoing';
+        $request->method = 'POST';
+        $request->userId = 'admin-1';
+        $request->body = [
+            'library_id' => 'lib-1',
+            'library_name' => 'My Movies',
+            'peer_id' => 'peer-1',
+            'permission' => 'read',
+        ];
+
+        return $request;
+    }
+
+    private function givenKnownPeer(): void
+    {
+        $this->hubRepo->method('getPeerById')->willReturn([
+            'id' => 'peer-1',
+            'name' => 'Peer Hub',
+            'url' => 'https://peer.example.com',
+            'public_key' => 'peer-key',
+            'created_at' => '2001-02-03 04:05:06',
+        ]);
+    }
+
+    public function testCreateOutgoingShareEchoesStoredSharedAt(): void
+    {
+        $this->givenKnownPeer();
+        $this->libraryShares->method('getOutgoingShareById')->willReturn(['shared_at' => '2002-03-04 05:06:07']);
+
+        $response = $this->controller->createOutgoingShare($this->outgoingShareRequest());
+        $body = self::arrayNode(json_decode($response->body, true));
+
+        self::assertSame('2002-03-04 05:06:07', $body['shared_at']);
+    }
+
+    public function testCreateOutgoingShareKeepsStringShapeWhenReselectMisses(): void
+    {
+        $this->givenKnownPeer();
+        $this->libraryShares->method('getOutgoingShareById')->willReturn(null);
+
+        $response = $this->controller->createOutgoingShare($this->outgoingShareRequest());
+        $body = self::arrayNode(json_decode($response->body, true));
+
+        self::assertIsString($body['shared_at'], 'a missed re-SELECT must not emit a null timestamp');
+        self::assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $body['shared_at']);
+    }
+
     public function testCreateOutgoingShareReturns404WhenPeerNotFound(): void
     {
         $this->hubRepo->method('getPeerById')->willReturn(null);
@@ -864,6 +935,56 @@ final class FederationControllerTest extends TestCase
         $response = $this->controller->createAdminDelegation($request);
 
         self::assertSame(403, $response->statusCode);
+    }
+
+    /** @return array<string, mixed> */
+    private function masterHubConfig(): array
+    {
+        return [
+            'id' => 'hub-1',
+            'name' => 'Master Hub',
+            'url' => 'https://master.example.com',
+            'public_key' => 'key',
+            'role' => 'master',
+            'is_master' => 1,
+            'is_active' => 1,
+        ];
+    }
+
+    private function adminDelegationRequest(): Request
+    {
+        $request = new Request();
+        $request->path = '/api/v1/me/federation/admin-delegations';
+        $request->method = 'POST';
+        $request->userId = 'admin-1';
+        $request->body = ['peer_id' => 'peer-1', 'user_id' => 'user-1'];
+
+        return $request;
+    }
+
+    public function testCreateAdminDelegationEchoesStoredGrantedAt(): void
+    {
+        $this->hubRepo->method('getHubConfig')->willReturn($this->masterHubConfig());
+        $this->hubRepo->method('getPeerById')->willReturn(['id' => 'peer-1', 'name' => 'Peer Hub']);
+        $this->adminDel->method('getDelegationById')->willReturn(['granted_at' => '2003-04-05 06:07:08']);
+
+        $response = $this->controller->createAdminDelegation($this->adminDelegationRequest());
+        $body = self::arrayNode(json_decode($response->body, true));
+
+        self::assertSame('2003-04-05 06:07:08', $body['granted_at']);
+    }
+
+    public function testCreateAdminDelegationKeepsStringShapeWhenReselectMisses(): void
+    {
+        $this->hubRepo->method('getHubConfig')->willReturn($this->masterHubConfig());
+        $this->hubRepo->method('getPeerById')->willReturn(['id' => 'peer-1', 'name' => 'Peer Hub']);
+        $this->adminDel->method('getDelegationById')->willReturn(null);
+
+        $response = $this->controller->createAdminDelegation($this->adminDelegationRequest());
+        $body = self::arrayNode(json_decode($response->body, true));
+
+        self::assertIsString($body['granted_at'], 'a missed re-SELECT must not emit a null timestamp');
+        self::assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $body['granted_at']);
     }
 
     public function testCreateAdminDelegationReturns201OnSuccess(): void

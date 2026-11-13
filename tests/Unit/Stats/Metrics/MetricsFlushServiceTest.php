@@ -663,6 +663,53 @@ final class MetricsFlushServiceTest extends TestCase
     }
 
     /**
+     * HUB-S14: every metrics upsert (overall rollup, route rollup, connections,
+     * relay row) must be rewritten to the VALUES() form on MariaDB — no row
+     * alias may reach the wire there — and stay in alias form on MySQL.
+     */
+    public function testEveryMetricsUpsertIsRewrittenPerServerFlavor(): void
+    {
+        foreach (['10.6.18-MariaDB' => false, '8.0.46' => true] as $version => $alias) {
+            \Phlix\Hub\Common\Database\UpsertSyntax::detect($version);
+            $this->queries = [];
+            $registry  = new MetricsRegistry(10);
+            $collector = new MetricsCollector($registry, true);
+            $this->mockConnectionPool($this->mockConnection());
+
+            $registry->recordRequest('GET', '/api/v1/x', 200, 5.0, 10, 20, 1000);
+            $registry->openConnection('c-1', 'websocket', null, '1.2.3.4', null, null, 1000);
+            $registry->touchConnection('c-1', 100, 200, 1004);
+            $registry->recordRelayError(503);
+            try {
+                $this->service($collector)->flush(1, 1005);
+            } finally {
+                \Phlix\Hub\Common\Database\UpsertSyntax::reset();
+            }
+
+            $upserts = $this->queriesMatching('ON DUPLICATE KEY UPDATE');
+            $tables = array_map(
+                static fn (array $q): string => preg_match('/INSERT INTO (\w+)/', $q['sql'], $m) === 1 ? $m[1] : '?',
+                $upserts,
+            );
+            foreach (['metrics_rollup', 'metrics_route_rollup', 'metrics_connections'] as $table) {
+                $this->assertContains($table, $tables, "{$version}: no {$table} upsert was issued");
+            }
+            // The relay flush also writes metrics_rollup: at least 2 of those.
+            $this->assertGreaterThanOrEqual(2, count(array_keys($tables, 'metrics_rollup', true)));
+            foreach ($upserts as $q) {
+                if ($alias) {
+                    $this->assertStringContainsString('AS new_row', $q['sql'], $version);
+                    $this->assertStringNotContainsString('VALUES(', $q['sql'], $version);
+                } else {
+                    $this->assertStringNotContainsString('new_row', $q['sql'], $version);
+                    $this->assertDoesNotMatchRegularExpression('/\sAS\s+new_row/i', $q['sql'], $version);
+                    $this->assertStringContainsString('VALUES(', $q['sql'], $version);
+                }
+            }
+        }
+    }
+
+    /**
      * Mock ConnectionPool::getConnection() to return our mock connection.
      */
     private function mockConnectionPool(Connection $conn): void

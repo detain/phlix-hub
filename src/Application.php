@@ -2960,6 +2960,57 @@ final class Application
     }
 
     /**
+     * Number of connection NAMES each worker pools (mysql / metrics / txn).
+     */
+    public const DB_POOL_CONNECTION_NAMES = 3;
+
+    /** Pool size when `DB_POOL_SIZE` is unset or not a positive integer. */
+    public const DB_POOL_SIZE_DEFAULT = 8;
+
+    /**
+     * Worst-case DB connection demand for the boot ceiling check, or null when
+     * the pool is disabled (no ceiling applies). Pure: env values are passed in
+     * so the arithmetic and the skip arms are unit-testable (HUB-S17).
+     *
+     * @param int          $workers  Worker processes that pool connections.
+     * @param string|false $poolRaw  Raw `DB_POOL_SIZE` (false = unset).
+     * @param string|false $poolOn   Raw `DB_POOL_ENABLED` (false = unset).
+     *
+     * @return array{demand: int, pool_size: int}|null
+     */
+    public static function dbCeilingDemand(int $workers, string|false $poolRaw, string|false $poolOn): ?array
+    {
+        if ($poolOn !== false && !filter_var($poolOn, FILTER_VALIDATE_BOOLEAN)) {
+            return null;
+        }
+        $pool = ($poolRaw === false || (int) $poolRaw < 1) ? self::DB_POOL_SIZE_DEFAULT : (int) $poolRaw;
+
+        return [
+            'demand' => $workers * self::DB_POOL_CONNECTION_NAMES * $pool,
+            'pool_size' => $pool,
+        ];
+    }
+
+    /**
+     * Log the boot ERROR when the worst-case demand meets/exceeds the server's
+     * `max_connections`. A non-positive `$max` (probe failed) stays silent.
+     *
+     * @return bool True when the ERROR was logged.
+     */
+    public static function reportDbCeiling(int $workers, int $demand, int $poolSize, int $max): bool
+    {
+        if ($max <= 0 || $demand < $max) {
+            return false;
+        }
+        LoggerFactory::get(LogChannels::RELAY)->error(
+            'DB connection ceiling: worst-case pool demand meets/exceeds MySQL max_connections',
+            ['demand' => $demand, 'max_connections' => $max, 'workers' => $workers, 'pool_size' => $poolSize],
+        );
+
+        return true;
+    }
+
+    /**
      * Boot fail-loud: compute the worst-case DB connection demand
      * (workers x 3 connection names x pool_size) and log ERROR when it is not
      * below MySQL's max_connections. Best-effort; never blocks boot.
@@ -2967,13 +3018,12 @@ final class Application
     private static function warnIfDbCeilingExceeded(int $workers): void
     {
         try {
-            $poolRaw = getenv('DB_POOL_SIZE');
-            $pool = ($poolRaw === false || (int) $poolRaw < 1) ? 8 : (int) $poolRaw;
-            $poolOn = getenv('DB_POOL_ENABLED');
-            if ($poolOn !== false && !filter_var($poolOn, FILTER_VALIDATE_BOOLEAN)) {
+            $plan = self::dbCeilingDemand($workers, getenv('DB_POOL_SIZE'), getenv('DB_POOL_ENABLED'));
+            if ($plan === null) {
                 return;
             }
-            $demand = $workers * 3 * $pool;
+            $demand = $plan['demand'];
+            $pool = $plan['pool_size'];
             $userEnv = getenv('HUB_DB_USER');
             $passEnv = getenv('HUB_DB_PASSWORD');
             $mysqli = @mysqli_init();
@@ -2996,12 +3046,7 @@ final class Application
             $row = $res instanceof \mysqli_result ? $res->fetch_row() : null;
             $mysqli->close();
             $max = is_array($row) ? (int) $row[1] : 0;
-            if ($max > 0 && $demand >= $max) {
-                LoggerFactory::get(LogChannels::RELAY)->error(
-                    'DB connection ceiling: worst-case pool demand meets/exceeds MySQL max_connections',
-                    ['demand' => $demand, 'max_connections' => $max, 'workers' => $workers, 'pool_size' => $pool],
-                );
-            }
+            self::reportDbCeiling($workers, $demand, $pool, $max);
         } catch (Throwable) {
             // best-effort
         }

@@ -445,6 +445,43 @@ final class SharedUiControllerCspTest extends TestCase
         self::assertSame($expected, SharedUiController::configuredSocketBaseUrl());
     }
 
+    public function testRejectedWsUrlLogsOneNoticeOnlyWhenAskedTo(): void
+    {
+        putenv('HUB_WS_URL=wss://evil.example.com/path');
+
+        // Silent by default: CSP derivation calls this on every request.
+        $this->clearLoggerCapture();
+        self::assertNull(SharedUiController::configuredSocketBaseUrl());
+        self::assertStringNotContainsString('ignored HUB_WS_URL', $this->capturedLoggerOutput());
+
+        // The shell passes true: a set-but-rejected value must leave an operator signal.
+        self::assertNull(SharedUiController::configuredSocketBaseUrl(true));
+        self::assertSame(
+            1,
+            substr_count($this->capturedLoggerOutput(), 'SharedUiController ignored HUB_WS_URL'),
+            'one notice per rejected read',
+        );
+
+        // A valid or unset value never logs.
+        $this->clearLoggerCapture();
+        putenv('HUB_WS_URL=wss://hub.example.com');
+        self::assertSame('wss://hub.example.com', SharedUiController::configuredSocketBaseUrl(true));
+        putenv('HUB_WS_URL');
+        self::assertNull(SharedUiController::configuredSocketBaseUrl(true));
+        self::assertStringNotContainsString('ignored HUB_WS_URL', $this->capturedLoggerOutput());
+    }
+
+    public function testShellRenderLogsTheRejectedWsUrlNotice(): void
+    {
+        putenv('HUB_WS_URL=http://not-a-socket.example.com');
+        $this->clearLoggerCapture();
+
+        $response = (new SharedUiController($this->makeShellRoot()))->shell(new Request(), []);
+
+        self::assertNull(self::phlixConfig($response->body)['wsUrl']);
+        self::assertStringContainsString('SharedUiController ignored HUB_WS_URL', $this->capturedLoggerOutput());
+    }
+
     /**
      * @return array<string,array{0:string,1:?string}>
      */

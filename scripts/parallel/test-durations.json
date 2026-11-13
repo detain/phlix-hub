@@ -11,6 +11,7 @@
         "tests/Unit/Alexa/AlexaSpeechTest.php": 0.003,
         "tests/Unit/Alexa/ChainVerificationTest.php": 0.001,
         "tests/Unit/Alexa/CurlCertChainFetcherTimeoutTest.php": 6.641,
+        "tests/Unit/ApplicationDbCeilingTest.php": 0.002,
         "tests/Unit/ApplicationMaintenanceResponseTest.php": 0.001,
         "tests/Unit/ApplicationRateLimitResponseTest.php": 0,
         "tests/Unit/ApplicationRouteTemplateTest.php": 0.001,

@@ -348,6 +348,50 @@ final class RequestManagerTest extends TestCase
         self::assertSame(RequestTransitionResult::NotFound, $this->manager->approveRequest('test-id'));
     }
 
+    /**
+     * HUB-S47: shared >= 0.55 takes the Sonarr root folder as a PATH string.
+     * Pins the derivation: parent directory of the first series' path, with
+     * `/tv` as the fallback for every shape that yields no usable parent.
+     *
+     * @param list<array<string, mixed>> $series
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('sonarrRootFolderProvider')]
+    public function testSonarrRootFolderIsAPathString(array $series, string $expected): void
+    {
+        $client = $this->createMock(\Phlix\Shared\Arr\SonarrClient::class);
+        $client->method('getSeries')->willReturn($series);
+
+        $method = new \ReflectionMethod(RequestManager::class, 'getSonarrRootFolder');
+        $actual = $method->invoke($this->manager, $client);
+
+        self::assertIsString($actual);
+        self::assertSame($expected, $actual);
+    }
+
+    /** @return array<string, array{0: list<array<string, mixed>>, 1: string}> */
+    public static function sonarrRootFolderProvider(): array
+    {
+        return [
+            'parent of first series path' => [[['path' => '/data/tv/Some Show']], '/data/tv'],
+            'only the first series counts' => [[['path' => '/a/Show'], ['path' => '/b/Other']], '/a'],
+            'no series' => [[], '/tv'],
+            'series without a path' => [[['title' => 'x']], '/tv'],
+            'empty path' => [[['path' => '']], '/tv'],
+            'non-string path' => [[['path' => 7]], '/tv'],
+            'bare name has no parent' => [[['path' => 'Show']], '/tv'],
+        ];
+    }
+
+    public function testSonarrRootFolderFallsBackWhenTheClientThrows(): void
+    {
+        $client = $this->createMock(\Phlix\Shared\Arr\SonarrClient::class);
+        $client->method('getSeries')->willThrowException(new \RuntimeException('sonarr down'));
+
+        $method = new \ReflectionMethod(RequestManager::class, 'getSonarrRootFolder');
+
+        self::assertSame('/tv', $method->invoke($this->manager, $client));
+    }
+
     public function testMarkAvailable(): void
     {
         $this->db->expects(self::exactly(1))
