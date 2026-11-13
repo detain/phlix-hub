@@ -129,7 +129,7 @@ final class InviteLinkControllerTest extends TestCase
      * VISIBLE on the response — the body carries what the link will actually
      * enforce, not what the caller typed. Permission is forwarded verbatim to
      * the handler, which admits only read/readwrite (any other value 400s
-     * "Invalid permission level" before persisting).
+     * "Invalid permission value" before persisting).
      */
     public function testCreateInviteLinkEchoesCoercedEffectiveValues(): void
     {

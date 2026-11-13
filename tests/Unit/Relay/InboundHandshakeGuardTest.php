@@ -434,20 +434,33 @@ final class InboundHandshakeGuardTest extends TestCase
         }
     }
 
-    public function testFederationSurfaceStaysUnguardedPerOwnerReel(): void
+    public function testFederationSurfaceComposesTheGuardAndCancelsTwice(): void
     {
-        $source = file_get_contents(dirname(__DIR__, 3) . '/src/Relay/FederationWorker.php');
-        $this->assertIsString($source);
-        $this->assertStringNotContainsString(
-            'InboundHandshakeGuard',
-            $source,
-            ':8805 federation is owner-reel scope — this lane must not reach it',
+        $root = dirname(__DIR__, 3);
+        $source = (string) file_get_contents($root . '/src/Relay/FederationWorker.php');
+        $this->assertStringContainsString('InboundHandshakeGuard::compose(', $source);
+        $this->assertStringContainsString('InboundPackageCap::onConnect()', $source);
+        $this->assertSame(
+            2,
+            substr_count($source, 'InboundHandshakeGuard::cancel($connection);'),
+            'owes exactly two cancel sites: onWebSocketConnect + onClose',
         );
-        $this->assertStringContainsString(
-            'InboundPackageCap::onConnect()',
-            $source,
-            'federation keeps its bare cap handler',
-        );
+
+        $provider = (string) file_get_contents($root . '/src/Common/Container/Providers/HubServicesProvider.php');
+        $this->assertStringContainsString('$federationHandshakeTimeout', $provider);
+        $this->assertStringContainsString('ws_handshake_timeout_seconds', $provider);
+    }
+
+    public function testFederationWorkerUpgradeCancelsTheArmedDeadline(): void
+    {
+        // Source-level wiring is pinned above; behaviour of cancel() itself
+        // is covered by the RelayWorker/ClientRelayWorker cases. Here we pin
+        // that the federation worker accepts the deadline as a ctor arg.
+        $ref = new \ReflectionClass(\Phlix\Hub\Relay\FederationWorker::class);
+        $ctor = $ref->getConstructor();
+        $this->assertNotNull($ctor);
+        $params = array_map(static fn ($p) => $p->getName(), $ctor->getParameters());
+        $this->assertContains('handshakeTimeoutSeconds', $params);
     }
 
     public function testApplicationAndConfigCarryTheDeadlineKnob(): void

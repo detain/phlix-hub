@@ -231,7 +231,7 @@ return [
         // `0` disables the deadline
         // (same "`0` = off" law as the drain grace beside it); a negative
         // value is a typo, not a policy → parsed to the default. Federation
-        // :8805 is NOT governed (owner-reel surface).
+        // :8805 is governed too (HUB-S32): same deadline, same env knob.
         // Consumer: \Phlix\Hub\Relay\InboundHandshakeGuard via Application.
         'ws_handshake_timeout_seconds' => $envFloat('HUB_RELAY_WS_HANDSHAKE_TIMEOUT_SECONDS', 30.0),
     ],

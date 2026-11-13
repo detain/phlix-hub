@@ -12,6 +12,17 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Fix [HUB-S32] — federation listener hardening: `:8805` handshake guard (HUB-43/44/45) — 2026-11-13
+
+- `FederationWorker` (:8805) now composes `InboundHandshakeGuard` over its `InboundPackageCap` accept
+  handler: a socket that completes TCP/TLS but never sends the HTTP upgrade is closed after
+  `relay.ws_handshake_timeout_seconds` (`HUB_RELAY_WS_HANDSHAKE_TIMEOUT_SECONDS`, default 30 s,
+  `0` = off) with the `reason=handshake_timeout` WARN. The deadline is cancelled on upgrade and on close.
+- The six raw close-string arms already route through `WebSocketCloseFrame::reject` and the
+  `HUB_FEDERATION_BIND` / `HUB_RELAY_BIND` / `HUB_WS_BIND` knobs already existed at the tip
+  (verified); docs/websockets.md updated for the :8805 guard.
+- Test-comment nit (HUB-S1): InviteLinkControllerTest comment now says "Invalid permission value".
+
 ### Fix [HUB-S49] — gate-aware error envelopes via `detail` (HUB-49) — 2026-11-13
 
 - Owner ruling: zero new wire codes. The federation-disabled 409 (`provider.not_configured`) and the

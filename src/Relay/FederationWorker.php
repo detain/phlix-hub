@@ -156,6 +156,8 @@ final class FederationWorker
      * @param string             $bindHost    Listen host (config `federation_bind_host` /
      *                                         HUB_FEDERATION_BIND); default 0.0.0.0 is the
      *                                         historical literal (no wire change).
+     * @param float              $handshakeTimeoutSeconds Pre-upgrade deadline
+     *                                         ({@see InboundHandshakeGuard}); <= 0 disables.
      */
     public function __construct(
         private readonly ContainerInterface $container,
@@ -168,6 +170,7 @@ final class FederationWorker
         private readonly ?string $tlsKey = null,
         private readonly bool $requireTls = false,
         private readonly string $bindHost = '0.0.0.0',
+        private readonly float $handshakeTimeoutSeconds = InboundHandshakeGuard::DEFAULT_TIMEOUT_SECONDS,
     ) {
         ProcessLocalTopology::assertSingleProcess($count, 'phlix-hub-federation-ws (:8805)');
     }
@@ -355,7 +358,15 @@ final class FederationWorker
         $worker->onWebSocketConnect = [$this, 'onWebSocketConnect'];
         // Minor 57: declared inbound package cap pinned at TCP-accept (law in
         // InboundPackageCap) — this surface no longer inherits it from vendor.
-        $capHandler = InboundPackageCap::onConnect();
+        // The cap handler is wrapped in the repo-owned pre-upgrade deadline
+        // (HOST-3 H3-3, extended to :8805 by HUB-S32): a socket that never
+        // completes its WS upgrade is closed after
+        // relay.ws_handshake_timeout_seconds instead of being held.
+        $capHandler = InboundHandshakeGuard::compose(
+            InboundPackageCap::onConnect(),
+            $this->handshakeTimeoutSeconds,
+            'federation-ws :' . $this->port,
+        );
         if ($materialWatch !== null) {
             // Audit §3.2 runtime observability (see the :8802 sibling's
             // identical wiring): accept-time material re-check + enable_crypto
@@ -536,6 +547,9 @@ final class FederationWorker
      */
     public function onWebSocketConnect(TcpConnection $connection, WorkermanRequest $request): void
     {
+        // The upgrade arrived: cancel the handshake deadline FIRST.
+        InboundHandshakeGuard::cancel($connection);
+
         $logger = LoggerFactory::get(LogChannels::RELAY);
         $connId = spl_object_id($connection);
 
@@ -742,6 +756,9 @@ final class FederationWorker
      */
     public function onClose(TcpConnection $connection): void
     {
+        // A socket that died before upgrading must not leave its deadline armed.
+        InboundHandshakeGuard::cancel($connection);
+
         $connId = spl_object_id($connection);
         $hubId = self::$connHubIds[$connId] ?? null;
         unset(self::$connHubIds[$connId]);

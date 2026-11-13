@@ -1823,6 +1823,14 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ? $federationBindRaw
                 : '0.0.0.0';
 
+            // :8805 shares the governed trio's pre-upgrade deadline
+            // (relay.ws_handshake_timeout_seconds / HUB_RELAY_WS_HANDSHAKE_TIMEOUT_SECONDS).
+            /** @var mixed $federationRelayCfg */
+            $federationRelayCfg = is_array($appConfig) ? ($appConfig['relay'] ?? []) : [];
+            $federationHandshakeTimeout = \Phlix\Hub\Relay\InboundHandshakeGuard::resolveTimeoutSeconds(
+                is_array($federationRelayCfg) ? ($federationRelayCfg['ws_handshake_timeout_seconds'] ?? null) : null,
+            );
+
             $federationWorker = new FederationWorker(
                 $container,
                 $federationPort,
@@ -1834,6 +1842,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 $federationTlsKey,
                 $federationRequireTls,
                 $federationBindHost,
+                $federationHandshakeTimeout,
             );
             // R14-01/R16-01: prepend the curated coroutine-hook step to this
             // worker's class-owned onWorkerStart. The wrap itself is master-

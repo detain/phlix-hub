@@ -414,6 +414,7 @@ final class FederationWorkerTlsPostureTest extends TestCase
                 \$federationTlsKey,
                 \$federationRequireTls,
                 \$federationBindHost,
+                \$federationHandshakeTimeout,
             );",
             $provider,
             'the parsed TLS values must be what is actually constructed'

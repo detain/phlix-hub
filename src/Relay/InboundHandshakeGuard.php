@@ -74,8 +74,9 @@ use function spl_object_id;
  * detection cost: the stall class this guard defends against holds sockets
  * for MINUTES (10 min observed live). `0` disables the deadline
  * (same "`0` = off" law as `reconnect_drain_grace_seconds` beside it).
- * Federation `:8805` is deliberately NOT governed (owner-reel surface; it
- * keeps its bare {@see InboundPackageCap} connect handler).
+ * Federation `:8805` is governed too (HUB-S32, owner ruling 2026-11-13):
+ * {@see FederationWorker} composes the guard over its {@see InboundPackageCap}
+ * handler with the same deadline and env knob.
  */
 final class InboundHandshakeGuard
 {
