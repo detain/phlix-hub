@@ -2193,11 +2193,10 @@ class FederationPeerManager
                 'FederationPeerManager: undecodable frame from master, closing connection',
                 ['error' => $e->getMessage()],
             );
-            try {
-                $this->masterConnection?->close();
-            } catch (Throwable) {
-                // Connection already gone — no-op.
-            }
+            // Route through the shared teardown so the stale connection slot is
+            // cleared and the timers are cancelled; otherwise the next redial
+            // would be refused as "already connected".
+            $this->closeLinkAndReschedule();
             return;
         }
         if ($frame === null) {

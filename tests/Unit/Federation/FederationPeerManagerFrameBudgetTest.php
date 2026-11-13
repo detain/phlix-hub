@@ -497,6 +497,35 @@ final class FederationPeerManagerFrameBudgetTest extends TestCase
         );
     }
 
+    /**
+     * HUB-15 / HUB-S33: an undecodable binary frame must tear the link down
+     * through the shared closeLinkAndReschedule() path — slot cleared, one
+     * reconnect timer armed — never a bare close() that leaves the stale
+     * masterConnection slot behind (establishConnection() would then refuse
+     * every redial as "already connected").
+     */
+    public function testInvalidFrameTypeClearsSlotAndArmsReconnect(): void
+    {
+        $this->forceWorkermanRuntime();
+
+        $manager = $this->peerManager();
+        $connection = new AsyncTcpConnection('ws://127.0.0.1:1');
+        $this->setMasterConnection($manager, $connection);
+
+        // seq=1, type=0xFF (invalid), len=0.
+        $bad = pack('NCn', 1, 0xFF, 0);
+        (new \ReflectionMethod(FederationPeerManager::class, 'handleBinaryFrame'))
+            ->invoke($manager, $bad);
+
+        self::assertNull(
+            $this->readProp($manager, 'masterConnection'),
+            'a stale slot would make establishConnection() refuse every redial',
+        );
+        $armed = $this->armedTimers();
+        self::assertCount(1, $armed, 'the teardown must hand the link to exactly one reconnect timer');
+        self::assertSame(5.0, $armed[0]['interval']);
+    }
+
     // ------------------------------------------------------------- helpers
 
     /**
