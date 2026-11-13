@@ -285,7 +285,7 @@ final class AuthController
         if ($userId !== '' || $refreshToken !== '') {
             $this->auth->logout(
                 $userId,
-                $request->remoteIp ?: 'unknown',
+                $request->getTrustedClientIp() ?: 'unknown',
                 UserLoggedOut::REASON_EXPLICIT,
                 $refreshToken,
             );
@@ -594,6 +594,6 @@ final class AuthController
         if ($deviceId !== '') {
             return $deviceId;
         }
-        return $request->remoteIp ?: 'unknown';
+        return $request->getTrustedClientIp() ?: 'unknown';
     }
 }

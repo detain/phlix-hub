@@ -12,6 +12,17 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Fixed [HUB-S29] — trusted-client-IP parity in logout/device markers (HUB-40) — 2026-11-12
+
+- `AuthController` logout audit line and the fallback device-id marker now use
+  `getTrustedClientIp()` (falling back to `'unknown'`), matching login/signup; pinned by
+  `testLogoutAuditLineUsesTrustedClientIp`.
+- Folded minor (HUB-S28): changelog entry below for the federation 201 timestamp echo.
+
+### Fixed [HUB-S28] — federation 201 responses echo stored timestamps (HUB-47) — 2026-11-12
+
+- Federation 201 responses now echo the stored timestamps (HUB-S28 / HUB-47).
+
 ### Fixed [HUB-S26] — claim JWK encode hardening (HUB-12) — 2026-11-12
 
 - `ClaimRequestHandler` encodes claim JWKs with `JSON_THROW_ON_ERROR`, rejects non-finite

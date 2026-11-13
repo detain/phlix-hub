@@ -491,6 +491,28 @@ final class AuthControllerTest extends TestCase
     }
 
     /**
+     * HUB-40: the logout audit line carries the TRUSTED client IP (rightmost
+     * appended hop behind a loopback proxy), not the raw loopback peer.
+     */
+    public function testLogoutAuditLineUsesTrustedClientIp(): void
+    {
+        $mgr = $this->authMgr();
+        $mgr->expects(self::once())
+            ->method('logout')
+            ->with('u-6', '203.0.113.50', self::anything(), self::anything());
+
+        $controller = $this->controller($mgr);
+        $request = new Request();
+        $request->method = 'POST';
+        $request->path = '/api/v1/auth/logout';
+        $request->userId = 'u-6';
+        $request->remoteIp = '127.0.0.1';
+        $request->headers = ['X-FORWARDED-FOR' => '198.51.100.66, 203.0.113.50'];
+
+        self::assertSame(204, $controller($request)->statusCode);
+    }
+
+    /**
      * Finding 5: logout with a presented refresh token forwards it so the
      * manager can actually revoke the lineage (jti registry).
      */
