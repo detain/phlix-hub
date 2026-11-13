@@ -1575,6 +1575,8 @@ paths:
                       additionalProperties: true
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   "/api/v1/auth/sessions":
     get:
       operationId: "get_api_v1_auth_sessions"
