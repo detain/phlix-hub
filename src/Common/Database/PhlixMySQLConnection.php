@@ -195,6 +195,16 @@ final class PhlixMySQLConnection extends Connection
         if ($this->pdo instanceof \PDO) {
             $this->pdo->setAttribute(\PDO::ATTR_EMULATE_PREPARES, true);
             $this->pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, true);
+            // HUB-S14: detect MySQL vs MariaDB so UpsertSyntax::adapt() picks the
+            // row-alias or VALUES() upsert form. Failure keeps the prior flavor.
+            try {
+                $stmt = $this->pdo->query('SELECT VERSION()');
+                $version = $stmt !== false ? $stmt->fetchColumn() : false;
+                if (is_string($version)) {
+                    UpsertSyntax::detect($version);
+                }
+            } catch (\Throwable) {
+            }
         }
     }
 

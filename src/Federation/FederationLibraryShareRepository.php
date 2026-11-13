@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Federation;
 
+use Phlix\Hub\Common\Database\UpsertSyntax;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 
@@ -327,12 +328,13 @@ class FederationLibraryShareRepository
         }
 
         $this->db->query(
-            'INSERT INTO federation_incoming_share_offers
+            UpsertSyntax::adapt('INSERT INTO federation_incoming_share_offers
              (id, peer_id, library_id, library_name, permission)
              VALUES (:id, :peer_id, :library_id, :library_name, :permission)
+             AS new_row
              ON DUPLICATE KEY UPDATE
-               library_name = VALUES(library_name),
-               permission = VALUES(permission)',
+               library_name = new_row.library_name,
+               permission = new_row.permission'),
             [
                 'id' => $id,
                 'peer_id' => $peerId,

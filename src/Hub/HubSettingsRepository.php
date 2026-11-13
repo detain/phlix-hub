@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Hub;
 
+use Phlix\Hub\Common\Database\UpsertSyntax;
 use Phlix\Hub\Common\Support\Ids;
 use Workerman\MySQL\Connection;
 
@@ -325,11 +326,11 @@ class HubSettingsRepository
         $encoded = self::encode($value, $valueType);
 
         // Upsert on the unique `setting_key` index.
-        $sql = 'INSERT INTO hub_settings (id, setting_key, setting_value, value_type)'
+        $sql = UpsertSyntax::adapt('INSERT INTO hub_settings (id, setting_key, setting_value, value_type)'
             . ' VALUES (?, ?, ?, ?)'
-            . ' ON DUPLICATE KEY UPDATE'
-            . ' setting_value = VALUES(setting_value),'
-            . ' value_type = VALUES(value_type)';
+            . ' AS new_row ON DUPLICATE KEY UPDATE'
+            . ' setting_value = new_row.setting_value,'
+            . ' value_type = new_row.value_type');
 
         $this->db->query($sql, [$id, $key, $encoded, $valueType]);
     }

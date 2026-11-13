@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Hub;
 
+use Phlix\Hub\Common\Database\UpsertSyntax;
 use Phlix\Hub\Common\Support\Ids;
 use InvalidArgumentException;
 use RuntimeException;
@@ -483,12 +484,12 @@ class RelaySessionManager
         $periodStart = $this->currentPeriodStart();
 
         $this->db->query(
-            'INSERT INTO relay_user_quotas (user_id, period_start, bytes_in, bytes_out)
+            UpsertSyntax::adapt('INSERT INTO relay_user_quotas (user_id, period_start, bytes_in, bytes_out)
              VALUES (:user_id, :period_start, :bytes_in, :bytes_out)
              AS new_row
              ON DUPLICATE KEY UPDATE
                  bytes_in = relay_user_quotas.bytes_in + new_row.bytes_in,
-                 bytes_out = relay_user_quotas.bytes_out + new_row.bytes_out',
+                 bytes_out = relay_user_quotas.bytes_out + new_row.bytes_out'),
             [
                 'user_id' => $userId,
                 'period_start' => $periodStart,
@@ -565,13 +566,13 @@ class RelaySessionManager
 
         if ($maxConcurrentStreams === null) {
             $this->db->query(
-                'INSERT INTO relay_user_quotas
+                UpsertSyntax::adapt('INSERT INTO relay_user_quotas
                      (user_id, period_start, bytes_in, bytes_out, quota_bytes_in, quota_bytes_out)
                  VALUES (:user_id, :period_start, 0, 0, :quota_bytes_in, :quota_bytes_out)
                  AS new_row
                  ON DUPLICATE KEY UPDATE
                      quota_bytes_in = new_row.quota_bytes_in,
-                     quota_bytes_out = new_row.quota_bytes_out',
+                     quota_bytes_out = new_row.quota_bytes_out'),
                 [
                     'user_id' => $userId,
                     'period_start' => $periodStart,
@@ -584,14 +585,14 @@ class RelaySessionManager
         }
 
         $this->db->query(
-            'INSERT INTO relay_user_quotas
+            UpsertSyntax::adapt('INSERT INTO relay_user_quotas
                  (user_id, period_start, bytes_in, bytes_out, quota_bytes_in, quota_bytes_out, max_concurrent_streams)
              VALUES (:user_id, :period_start, 0, 0, :quota_bytes_in, :quota_bytes_out, :max_concurrent_streams)
              AS new_row
              ON DUPLICATE KEY UPDATE
                  quota_bytes_in = new_row.quota_bytes_in,
                  quota_bytes_out = new_row.quota_bytes_out,
-                 max_concurrent_streams = new_row.max_concurrent_streams',
+                 max_concurrent_streams = new_row.max_concurrent_streams'),
             [
                 'user_id' => $userId,
                 'period_start' => $periodStart,
@@ -771,11 +772,11 @@ class RelaySessionManager
     public function setUserThrottle(string $userId, int $throttleBps): void
     {
         $this->db->query(
-            'INSERT INTO relay_user_settings (user_id, throttle_bps)
+            UpsertSyntax::adapt('INSERT INTO relay_user_settings (user_id, throttle_bps)
              VALUES (:user_id, :throttle_bps)
              AS new_row
              ON DUPLICATE KEY UPDATE
-                 throttle_bps = new_row.throttle_bps',
+                 throttle_bps = new_row.throttle_bps'),
             [
                 'user_id' => $userId,
                 'throttle_bps' => $throttleBps,

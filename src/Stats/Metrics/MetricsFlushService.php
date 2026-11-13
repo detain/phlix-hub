@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Stats\Metrics;
 
+use Phlix\Hub\Common\Database\UpsertSyntax;
 use Phlix\Hub\Common\Database\ConnectionPool;
 
 /**
@@ -236,7 +237,7 @@ final class MetricsFlushService
             // emulated prepares (SQLSTATE[HY093]). Keep no placeholder a prefix of
             // another. See flushConnections() for the same trap.
             $db->query(
-                "INSERT INTO metrics_rollup
+                UpsertSyntax::adapt("INSERT INTO metrics_rollup
                  (bucket_started_at, worker_id, request_count, error_count,
                   duration_ms_sum, duration_ms_max, bytes_in, bytes_out,
                   h_le_10, h_le_50, h_le_100, h_le_250, h_le_500,
@@ -261,7 +262,7 @@ final class MetricsFlushService
                      h_le_1000       = metrics_rollup.h_le_1000 + new_row.h_le_1000,
                      h_le_2500       = metrics_rollup.h_le_2500 + new_row.h_le_2500,
                      h_le_5000       = metrics_rollup.h_le_5000 + new_row.h_le_5000,
-                     h_gt_5000       = metrics_rollup.h_gt_5000 + new_row.h_gt_5000",
+                     h_gt_5000       = metrics_rollup.h_gt_5000 + new_row.h_gt_5000"),
                 [
                     'bucket'          => $this->datetime($b['bucket_started_at']),
                     'worker_id'       => 'hub-relay',
@@ -310,7 +311,7 @@ final class MetricsFlushService
 
         foreach ($routes as $r) {
             $db->query(
-                "INSERT INTO metrics_route_rollup
+                UpsertSyntax::adapt("INSERT INTO metrics_route_rollup
                  (bucket_started_at, worker_id, method, route,
                   request_count, error_count, duration_ms_sum, duration_ms_max)
                  VALUES (:bucket, :worker_id, :method, :route,
@@ -320,7 +321,7 @@ final class MetricsFlushService
                      request_count   = metrics_route_rollup.request_count + new_row.request_count,
                      error_count     = metrics_route_rollup.error_count + new_row.error_count,
                      duration_ms_sum = metrics_route_rollup.duration_ms_sum + new_row.duration_ms_sum,
-                     duration_ms_max = GREATEST(metrics_route_rollup.duration_ms_max, new_row.duration_ms_max)",
+                     duration_ms_max = GREATEST(metrics_route_rollup.duration_ms_max, new_row.duration_ms_max)"),
                 [
                     'bucket'          => $this->datetime($r['bucket_started_at']),
                     'worker_id'       => 'hub-relay',
@@ -371,7 +372,7 @@ final class MetricsFlushService
             // rewrite the wrong token and throw SQLSTATE[HY093] "parameter was not
             // defined". Keep no placeholder name a prefix of another here.
             $db->query(
-                "INSERT INTO metrics_connections
+                UpsertSyntax::adapt("INSERT INTO metrics_connections
                  (connection_id, worker_id, kind, user_id, remote_ip, session_id,
                   media_item_id, bytes_in, bytes_out, bytes_in_rate, bytes_out_rate,
                   opened_at, last_seen_at)
@@ -389,7 +390,7 @@ final class MetricsFlushService
                      bytes_out      = new_row.bytes_out,
                      bytes_in_rate  = new_row.bytes_in_rate,
                      bytes_out_rate = new_row.bytes_out_rate,
-                     last_seen_at   = new_row.last_seen_at",
+                     last_seen_at   = new_row.last_seen_at"),
                 [
                     'id'             => $id,
                     'worker_id'      => 'hub-relay',
@@ -494,7 +495,7 @@ final class MetricsFlushService
             }
 
             $db->query(
-                "INSERT INTO metrics_rollup
+                UpsertSyntax::adapt("INSERT INTO metrics_rollup
                  (bucket_started_at, worker_id,
                   relay_pending_requests, relay_reply_drops,
                   relay_latency_h_le_10, relay_latency_h_le_50, relay_latency_h_le_100,
@@ -527,7 +528,7 @@ final class MetricsFlushService
                      relay_error_504           = metrics_rollup.relay_error_504 + new_row.relay_error_504,
                      relay_decode_buffer_bytes =
                          GREATEST(metrics_rollup.relay_decode_buffer_bytes, new_row.relay_decode_buffer_bytes),
-                     relay_cancels             = metrics_rollup.relay_cancels + new_row.relay_cancels",
+                     relay_cancels             = metrics_rollup.relay_cancels + new_row.relay_cancels"),
                 [
                     'bucket'    => $this->datetime($bucketTs),
                     'worker_id' => 'hub-relay',

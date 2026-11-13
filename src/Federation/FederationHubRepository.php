@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Federation;
 
+use Phlix\Hub\Common\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**
@@ -128,11 +129,11 @@ class FederationHubRepository
     private function upsertSentinelRow(string $name, string $url, string $publicKey): void
     {
         $this->db->query(
-            'INSERT INTO federation_hubs (id, name, url, public_key)
+            UpsertSyntax::adapt('INSERT INTO federation_hubs (id, name, url, public_key)
              VALUES (:id, :name, :url, :public_key)
              AS new_row
              ON DUPLICATE KEY UPDATE
-                 name = new_row.name, url = new_row.url, public_key = new_row.public_key',
+                 name = new_row.name, url = new_row.url, public_key = new_row.public_key'),
             [
                 'id' => self::HUB_ROW_ID,
                 'name' => $name,

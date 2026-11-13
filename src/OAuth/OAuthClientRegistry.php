@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\OAuth;
 
+use Phlix\Hub\Common\Database\UpsertSyntax;
 use InvalidArgumentException;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\Support\Ids;
@@ -212,14 +213,14 @@ final class OAuthClientRegistry
         );
 
         $this->db->query(
-            'INSERT INTO oauth_clients'
+            UpsertSyntax::adapt('INSERT INTO oauth_clients'
                 . ' (id, client_id, name, redirect_uris, allowed_scopes, is_confidential, client_secret_hash)'
                 . ' VALUES (:id, :client_id, :name, :redirect_uris, :allowed_scopes, :is_confidential,'
                 . ' :client_secret_hash)'
-                . ' ON DUPLICATE KEY UPDATE'
-                . ' name = VALUES(name), redirect_uris = VALUES(redirect_uris),'
-                . ' allowed_scopes = VALUES(allowed_scopes), is_confidential = VALUES(is_confidential),'
-                . ' client_secret_hash = VALUES(client_secret_hash), disabled_at = NULL',
+                . ' AS new_row ON DUPLICATE KEY UPDATE'
+                . ' name = new_row.name, redirect_uris = new_row.redirect_uris,'
+                . ' allowed_scopes = new_row.allowed_scopes, is_confidential = new_row.is_confidential,'
+                . ' client_secret_hash = new_row.client_secret_hash, disabled_at = NULL'),
             [
                 'id'                 => $client->id,
                 'client_id'          => $client->clientId,

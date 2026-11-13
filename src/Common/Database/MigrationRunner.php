@@ -426,9 +426,9 @@ class MigrationRunner
         // binding mismatch — see .claude/rules/database-queries.md.
         try {
             $this->db->query(
-                'INSERT INTO `' . self::TRACKING_TABLE . '` (filename, checksum)'
+                UpsertSyntax::adapt('INSERT INTO `' . self::TRACKING_TABLE . '` (filename, checksum)'
                 . ' VALUES (:filename, :checksum)'
-                . ' ON DUPLICATE KEY UPDATE checksum = VALUES(checksum)',
+                . ' AS new_row ON DUPLICATE KEY UPDATE checksum = new_row.checksum'),
                 ['filename' => $filename, 'checksum' => $checksum],
             );
 
@@ -440,8 +440,8 @@ class MigrationRunner
             // Pre-041 schema: record the filename only. run()'s post-loop flush
             // writes the checksum once the column exists.
             $this->db->query(
-                'INSERT INTO `' . self::TRACKING_TABLE . '` (filename) VALUES (:filename)'
-                . ' ON DUPLICATE KEY UPDATE filename = VALUES(filename)',
+                UpsertSyntax::adapt('INSERT INTO `' . self::TRACKING_TABLE . '` (filename) VALUES (:filename)'
+                . ' AS new_row ON DUPLICATE KEY UPDATE filename = new_row.filename'),
                 ['filename' => $filename],
             );
 

@@ -12,6 +12,21 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Fix [HUB-S14] — portable upsert SQL: MySQL 8.0.19+ row alias and MariaDB 10.6+ `VALUES()` — 2026-11-13
+
+- New `Common\Database\UpsertSyntax`. Upserts are authored once in the row-alias form
+  (`AS new_row` / `new_row.col`) and passed through `UpsertSyntax::adapt()`; on MariaDB (no row
+  alias) and pre-8.0.19 MySQL it is rewritten to `VALUES(col)`, on MySQL 8.0.19+ it is untouched,
+  so no `VALUES()` deprecation warnings on MySQL and no 1064 on MariaDB. The flavor is detected at
+  connect (`SELECT VERSION()` in `PhlixMySQLConnection::connect()`). All 14 alias/`VALUES()`
+  upserts converted (RelaySessionManager, HeartbeatHandler, MetricsFlushService, FederationHub /
+  LibraryShare / AdminDelegation repositories, HubSettingsRepository, OAuthClientRegistry,
+  MigrationRunner). README MariaDB 10.6+ support claim kept. Tests: `UpsertSyntaxTest` covers both
+  syntaxes and version detection.
+- Folded minors: Docs — README/docblock record rows landed 2026-11-12 (HUB-S51 record bullet);
+  HUB-S1 punctuation, HUB-S24 `Tunnel::MAX_PENDING_BYTES` docblock, HUB-S32 bind-host comment and
+  HUB-S48 `/api/v1/themes` 429 verified already present at the tip.
+
 ### Chore [HUB-S46] — adopt `@phlix/ui` v1.0.0 + `/app` SPA regen — 2026-11-13
 
 - Pin tarball `v0.99.28` -> `v1.0.0` (tag peels to 5901e055; requests `@phlix/contracts` #v0.5.8).

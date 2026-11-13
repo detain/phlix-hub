@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Hub;
 
+use Phlix\Hub\Common\Database\UpsertSyntax;
 use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Common\Support\Ids;
@@ -317,9 +318,11 @@ class HeartbeatHandler
         }
 
         $this->db->query(
-            'INSERT INTO server_libraries (id, server_id, library_id, library_name, created_at, updated_at)
-             VALUES ' . implode(', ', $tuples) .
-            ' AS new_row ON DUPLICATE KEY UPDATE library_name = new_row.library_name, updated_at = NOW()',
+            UpsertSyntax::adapt(
+                'INSERT INTO server_libraries (id, server_id, library_id, library_name, created_at, updated_at)
+                 VALUES ' . implode(', ', $tuples) .
+                ' AS new_row ON DUPLICATE KEY UPDATE library_name = new_row.library_name, updated_at = NOW()'
+            ),
             $upsertParams,
         );
 

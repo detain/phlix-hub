@@ -304,7 +304,7 @@ Supporting pieces:
   runtime will not be active` warning at boot. `scripts/install.sh` compiles both from source;
   the manual package list below deliberately omits them (apt has no php-swoole on the supported
   releases) — build them or use `ghcr.io/detain/phlix-base`, which carries PHP 8.3 + Swoole + php-uv.
-- **MySQL 8.0+** (or MariaDB 10.6+ — not exercised by CI; MySQL is the tested engine)
+- **MySQL 8.0+** (or MariaDB 10.6+ — upsert SQL is flavor-adapted at connect via `UpsertSyntax`; CI exercises MySQL)
 - **Composer 2**
 - A POSIX host (Linux recommended; Workerman uses `pcntl`/`posix` for process management)
 
