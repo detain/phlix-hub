@@ -100,6 +100,12 @@ final class FederationWorker
      */
     public const CLOSE_TRY_AGAIN_LATER = 1013;
 
+    /** RFC 6455 policy violation (1008): bad path / unknown peer at connect. */
+    public const CLOSE_POLICY = 1008;
+
+    /** RFC 6455 internal error (1011): connect-time server-side failure. */
+    public const CLOSE_INTERNAL = 1011;
+
     /**
      * Map of connection ID => hub ID, set at WS-connect time so later
      * message/close callbacks know which hub the connection belongs to.
@@ -147,6 +153,9 @@ final class FederationWorker
      *                                         (config `federation_require_tls` /
      *                                         HUB_FEDERATION_REQUIRE_TLS, mirroring the
      *                                         :8802 sibling's relay_require_tls).
+     * @param string             $bindHost    Listen host (config `federation_bind_host` /
+     *                                         HUB_FEDERATION_BIND); default 0.0.0.0 is the
+     *                                         historical literal (no wire change).
      */
     public function __construct(
         private readonly ContainerInterface $container,
@@ -158,6 +167,7 @@ final class FederationWorker
         private readonly ?string $tlsCert = null,
         private readonly ?string $tlsKey = null,
         private readonly bool $requireTls = false,
+        private readonly string $bindHost = '0.0.0.0',
     ) {
         ProcessLocalTopology::assertSingleProcess($count, 'phlix-hub-federation-ws (:8805)');
     }
@@ -333,7 +343,7 @@ final class FederationWorker
             ];
         }
 
-        $worker = new Worker("websocket://0.0.0.0:{$this->port}", $sslContext);
+        $worker = new Worker(WsTlsContext::listenString($this->bindHost, $this->port), $sslContext);
         $worker->name = 'phlix-hub-federation-ws';
         $worker->count = $this->count;
 
@@ -534,7 +544,7 @@ final class FederationWorker
             $logger->warning('Federation: WS rejected, missing hub_id in path', [
                 'path' => $request->path(),
             ]);
-            $connection->close('invalid_path');
+            WebSocketCloseFrame::reject($connection, self::CLOSE_POLICY);
             return;
         }
 
@@ -594,7 +604,7 @@ final class FederationWorker
         try {
             $hubRepo = $this->container->get(FederationHubRepository::class);
             if (!$hubRepo instanceof FederationHubRepository) {
-                $connection->close('internal_error');
+                WebSocketCloseFrame::reject($connection, self::CLOSE_INTERNAL);
                 return;
             }
 
@@ -603,7 +613,7 @@ final class FederationWorker
                 $logger->warning('Federation: WS rejected, unknown hub', [
                     'hub_id' => $hubId,
                 ]);
-                $connection->close('unknown_hub');
+                WebSocketCloseFrame::reject($connection, self::CLOSE_POLICY);
                 return;
             }
         } catch (Throwable $e) {
@@ -611,7 +621,7 @@ final class FederationWorker
                 'hub_id' => $hubId,
                 'error' => $e->getMessage(),
             ]);
-            $connection->close('internal_error');
+            WebSocketCloseFrame::reject($connection, self::CLOSE_INTERNAL);
             return;
         }
 
@@ -620,7 +630,7 @@ final class FederationWorker
         try {
             $controller = $this->resolveController();
             if ($controller === null) {
-                $connection->close('internal_error');
+                WebSocketCloseFrame::reject($connection, self::CLOSE_INTERNAL);
                 unset(self::$connHubIds[$connId]);
                 return;
             }
@@ -632,7 +642,7 @@ final class FederationWorker
                 'error' => $e->getMessage(),
             ]);
             unset(self::$connHubIds[$connId]);
-            $connection->close('internal_error');
+            WebSocketCloseFrame::reject($connection, self::CLOSE_INTERNAL);
         }
     }
 

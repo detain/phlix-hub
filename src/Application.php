@@ -2732,6 +2732,10 @@ final class Application
             $relayTlsKey,
             $relayRequireTls,
             $wsHandshakeTimeoutSeconds,
+            // Listen-host knob (HUB_RELAY_BIND); default 0.0.0.0 = historical literal.
+            is_string($this->config['relay_bind_host'] ?? null) && $this->config['relay_bind_host'] !== ''
+                ? $this->config['relay_bind_host']
+                : '0.0.0.0',
         );
         // R14-01/R16-01: the relay worker's own onWorkerStart is set inside
         // RelayWorker::start() (a file outside this lane), so prepend the

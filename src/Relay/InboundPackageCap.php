@@ -39,6 +39,9 @@ use Workerman\Connection\TcpConnection;
  *    (MAX_HIGH_PRIORITY_QUEUE / MAX_BODY_QUEUE / MAX_CLIENT_QUEUE × 10 MiB)
  *    become a computable worst-case residency instead of an open question.
  *
+ * Aggregate bound: Tunnel::MAX_PENDING_BYTES (32 MiB) also bounds the total
+ * queued bytes per tunnel, independent of the frame-count caps above.
+ *
  * Overflow posture (vendor, unchanged): `Input` refuses to buffer past the
  * cap and the connection is closed — the bound lives at the boundary, never
  * inside handler memory.

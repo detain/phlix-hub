@@ -1816,6 +1816,13 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ? ($appConfig['federation_require_tls'] ?? false)
                 : false);
 
+            // Listen host (HUB_FEDERATION_BIND); default 0.0.0.0 = historical literal.
+            $federationBindHost = is_array($appConfig)
+                && is_string($appConfig['federation_bind_host'] ?? null)
+                && $appConfig['federation_bind_host'] !== ''
+                ? $appConfig['federation_bind_host']
+                : '0.0.0.0';
+
             $federationWorker = new FederationWorker(
                 $container,
                 $federationPort,
@@ -1826,6 +1833,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 $federationTlsCert,
                 $federationTlsKey,
                 $federationRequireTls,
+                $federationBindHost,
             );
             // R14-01/R16-01: prepend the curated coroutine-hook step to this
             // worker's class-owned onWorkerStart. The wrap itself is master-

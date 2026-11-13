@@ -301,6 +301,10 @@ return [
     // 127.0.0.1/::1 when HAProxy is loopback-local). It governs ONLY these two
     // surfaces; :8802 (M21) and :8805 (M22) shipped without a host knob and
     // their binds/pins are byte-frozen by their own suites.
+    // Listen hosts for :8802 (relay) and :8805 (federation) — same shape and
+    // default (0.0.0.0, no wire-behavior change) as ws_bind_host above.
+    'relay_bind_host' => ($v = getenv('HUB_RELAY_BIND')) !== false && $v !== '' ? $v : '0.0.0.0',
+    'federation_bind_host' => ($v = getenv('HUB_FEDERATION_BIND')) !== false && $v !== '' ? $v : '0.0.0.0',
     'ws_bind_host' => ($v = getenv('HUB_WS_BIND')) !== false && $v !== '' ? $v : '0.0.0.0',
 
     // Sonarr/Radarr endpoints used by the request UI.

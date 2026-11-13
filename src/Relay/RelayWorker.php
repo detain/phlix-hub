@@ -110,6 +110,8 @@ final class RelayWorker
      *                                         `relay.ws_handshake_timeout_seconds`
      *                                         ({@see InboundHandshakeGuard});
      *                                         <= 0 disables the guard.
+     * @param string             $bindHost    Listen host (config `relay_bind_host` /
+     *                                         HUB_RELAY_BIND); default 0.0.0.0 preserved.
      */
     public function __construct(
         private readonly ContainerInterface $container,
@@ -122,6 +124,7 @@ final class RelayWorker
         private readonly ?string $tlsKey = null,
         private readonly bool $requireTls = false,
         private readonly float $handshakeTimeoutSeconds = InboundHandshakeGuard::DEFAULT_TIMEOUT_SECONDS,
+        private readonly string $bindHost = '0.0.0.0',
     ) {
         ProcessLocalTopology::assertSingleProcess($count, 'phlix-hub-relay-ws (:8802)');
     }
@@ -349,7 +352,7 @@ final class RelayWorker
             $sslContext = self::relayTlsContext($this->tlsCert, $this->tlsKey);
         }
 
-        $worker = new Worker("websocket://0.0.0.0:{$this->port}", $sslContext);
+        $worker = new Worker(WsTlsContext::listenString($this->bindHost, $this->port), $sslContext);
         $worker->name = 'phlix-hub-relay-ws';
         $worker->count = $this->count;
 
