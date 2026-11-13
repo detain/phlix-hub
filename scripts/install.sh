@@ -2128,6 +2128,13 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_PATH"
 # 3. Database
 # ---------------------------------------------------------------------------
 log "Configuring MySQL database and user"
+# Connection ceiling: the hub pools DB_POOL_SIZE (default 8) connections per
+# worker per connection name (mysql/metrics/txn), so the stock max_connections
+# (151) is easy to exceed with several workers. Drop-in raises it to 300.
+if [ -d /etc/mysql/mysql.conf.d ]; then
+  printf '[mysqld]\nmax_connections = 300\n' > /etc/mysql/mysql.conf.d/zz-phlix-hub.cnf
+  systemctl restart mysql >/dev/null 2>&1 || systemctl restart mysqld >/dev/null 2>&1 || true
+fi
 systemctl enable --now mysql >/dev/null 2>&1 || systemctl enable --now mysqld >/dev/null 2>&1 || true
 # Runs as root via the local socket. Idempotent.
 #
@@ -2178,6 +2185,11 @@ HUB_DB_USER=${DB_USER}
 HUB_DB_PASSWORD=${DB_PASS}
 
 HUB_JWT_SECRET=${JWT_SECRET}
+
+# DB connection pool size per worker per connection name. Keep
+# (HUB_WORKERS x 3 connection names x DB_POOL_SIZE) under MySQL
+# max_connections (the installer sets 300). The hub logs an ERROR at boot if not.
+#DB_POOL_SIZE=8
 
 # TRUSTED_PROXIES: comma-separated reverse-proxy IPs/CIDRs whose
 # X-Forwarded-For / X-Real-IP headers are TRUSTED when deriving the real client
@@ -2354,7 +2366,7 @@ systemctl is-active --quiet phlix-hub && info "phlix-hub service is running." \
 if [ "$SKIP_HAPROXY" = "yes" ]; then
   log "Skipping HAProxy / certbot setup (--no-proxy)"
   info "Run your own reverse proxy in front of:"
-  info "  127.0.0.1:${HUB_PORT}  (HTTP API + SSR pages + /health)"
+  info "  127.0.0.1:${HUB_PORT}  (HTTP API + SPA shell (/app) + /health)"
   info "  127.0.0.1:${CLIENT_RELAY_PORT}  (GET /client/{server_id}, WebSocket)"
   info "  127.0.0.1:${SYNCPLAY_PORT}  (GET /syncplay/{server_id}, WebSocket — watch parties)"
   info "  127.0.0.1:${FEDERATION_PORT}  (GET /relay/federation/{hub_id}, WebSocket — only"

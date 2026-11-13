@@ -2236,6 +2236,8 @@ final class Application
             fwrite(STDERR, $limiterNotice . PHP_EOL);
         }
 
+        self::warnIfDbCeilingExceeded($workers);
+
         // M-HUB-30: the hub's global HTTP body cap, pinned ONTO every inbound
         // connection rather than inherited from the vendor default (which this
         // release of Workerman sets to 10 MB via $defaultMaxPackageSize — the
@@ -2856,6 +2858,52 @@ final class Application
             return $logger instanceof StructuredLogger ? $logger : null;
         } catch (Throwable) {
             return null;
+        }
+    }
+
+    /**
+     * Boot fail-loud: compute the worst-case DB connection demand
+     * (workers x 3 connection names x pool_size) and log ERROR when it is not
+     * below MySQL's max_connections. Best-effort; never blocks boot.
+     */
+    private static function warnIfDbCeilingExceeded(int $workers): void
+    {
+        try {
+            $poolRaw = getenv('DB_POOL_SIZE');
+            $pool = ($poolRaw === false || (int) $poolRaw < 1) ? 8 : (int) $poolRaw;
+            $poolOn = getenv('DB_POOL_ENABLED');
+            if ($poolOn !== false && !filter_var($poolOn, FILTER_VALIDATE_BOOLEAN)) {
+                return;
+            }
+            $demand = $workers * 3 * $pool;
+            $userEnv = getenv('HUB_DB_USER');
+            $passEnv = getenv('HUB_DB_PASSWORD');
+            $mysqli = @mysqli_init();
+            if ($mysqli === false) {
+                return;
+            }
+            $mysqli->options(MYSQLI_OPT_CONNECT_TIMEOUT, 2);
+            if (!@$mysqli->real_connect(
+                getenv('HUB_DB_HOST') ?: '127.0.0.1',
+                $userEnv !== false ? $userEnv : 'phlix_hub',
+                $passEnv !== false ? $passEnv : 'phlix_hub',
+                getenv('HUB_DB_NAME') ?: 'phlix_hub',
+                (int) (getenv('HUB_DB_PORT') ?: 3306),
+            )) {
+                return;
+            }
+            $res = $mysqli->query("SHOW VARIABLES LIKE 'max_connections'");
+            $row = $res instanceof \mysqli_result ? $res->fetch_row() : null;
+            $mysqli->close();
+            $max = is_array($row) ? (int) $row[1] : 0;
+            if ($max > 0 && $demand >= $max) {
+                LoggerFactory::get(LogChannels::RELAY)->error(
+                    'DB connection ceiling: worst-case pool demand meets/exceeds MySQL max_connections',
+                    ['demand' => $demand, 'max_connections' => $max, 'workers' => $workers, 'pool_size' => $pool],
+                );
+            }
+        } catch (Throwable) {
+            // best-effort
         }
     }
 }
