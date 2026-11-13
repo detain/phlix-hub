@@ -253,6 +253,7 @@
         "tests/Unit/Relay/ClientRelayWorkerTest.php": 0.024,
         "tests/Unit/Relay/ClientRelayWorkerTlsPostureTest.php": 0.04,
         "tests/Unit/Relay/FederationWorkerExceptionBarrierTest.php": 0.054,
+        "tests/Unit/Relay/RelayWorkerExceptionBarrierTest.php": 0.05,
         "tests/Unit/Relay/FederationWorkerRateLimitTest.php": 0.011,
         "tests/Unit/Relay/FederationWorkerTlsMaterialTest.php": 0.002,
         "tests/Unit/Relay/FederationWorkerTlsPostureTest.php": 0.009,

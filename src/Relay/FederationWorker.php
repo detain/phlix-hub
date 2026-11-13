@@ -71,15 +71,15 @@ use function trim;
  *      leaf-side outbound link in THIS process shares it (both roles, one
  *      budget per remote peer — keys never collide across roles).
  *
- * Exception-barrier boundary (S312/M-HUB-03): the contain-per-dispatch
- * barrier is attested at THIS :8805 venue only — {@see self::onMessage()}
- * carries the law and its reasoning. The sibling relay workers (:8802
- * {@see RelayWorker}, :8803 {@see ClientRelayWorker}, :8804
- * {@see \Phlix\Hub\SyncPlay\SyncPlayRelayWorker}) name their frame handlers
- * without an attested barrier of this kind; whether each needs one is
- * unexamined, and this sentence marks the boundary so the header's silence
- * is never read as an assurance (review hub__asphp M-A follow-through,
- * HUB-68).
+ * Exception-barrier boundary (S312/M-HUB-03, extended by HUB-S31/HUB-56):
+ * the contain-per-dispatch barrier is attested here at :8805 —
+ * {@see self::onMessage()} carries the law and its reasoning — and at the
+ * sibling relay workers' frame dispatch: :8802 {@see RelayWorker::onMessage()}
+ * and :8803 {@see ClientRelayWorker::onMessage()} contain a throw with one
+ * error line and a `handler_error` close; :8804
+ * {@see \Phlix\Hub\SyncPlay\SyncPlayRelayWorker::onMessage()} carries its
+ * own M-HUB-03 dispatch guard (handleFrameFailure). All four venues run
+ * count=1, so the same single-process death vector applies to each.
  *
  * @package Phlix\Hub\Relay
  */

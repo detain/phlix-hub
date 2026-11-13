@@ -692,8 +692,25 @@ final class RelayWorker
             return;
         }
 
-        // Subsequent messages — delegate to tunnel
-        self::$connTunnels[$connId]->onServerMessage($data);
+        // Subsequent messages — delegate to tunnel.
+        // HUB-S31 (HUB-56) caller-side barrier, mirroring the S312 law on
+        // :8805: this :8802 worker is count=1, so a Throwable escaping a
+        // Workerman callback takes Worker::stopAll(250) through the sole
+        // process and drops every live tunnel. Contain per dispatch: one
+        // error line, drop the poisoned socket (onClose does the map cleanup).
+        try {
+            self::$connTunnels[$connId]->onServerMessage($data);
+        } catch (Throwable $e) {
+            LoggerFactory::get(LogChannels::RELAY)->error(
+                'Relay worker: dispatch threw; kept alive',
+                [
+                    'direction' => 'message',
+                    'error'     => $e->getMessage(),
+                    'class'     => get_class($e),
+                ],
+            );
+            $connection->close('handler_error');
+        }
     }
 
     /**

@@ -631,7 +631,23 @@ final class ClientRelayWorker
             return;
         }
 
-        $controller->onClientMessage($connection, $data);
+        // HUB-S31 (HUB-56) caller-side barrier, mirroring the S312 law on
+        // :8805: this :8803 worker is count=1, so a Throwable escaping the
+        // callback would stop the sole process and every client link with it.
+        // Contain per dispatch: one error line, drop the poisoned socket.
+        try {
+            $controller->onClientMessage($connection, $data);
+        } catch (Throwable $e) {
+            LoggerFactory::get(LogChannels::RELAY)->error(
+                'Client relay worker: dispatch threw; kept alive',
+                [
+                    'direction' => 'message',
+                    'error'     => $e->getMessage(),
+                    'class'     => get_class($e),
+                ],
+            );
+            $connection->close('handler_error');
+        }
     }
 
     /**
