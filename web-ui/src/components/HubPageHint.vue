@@ -2,7 +2,7 @@
 /**
  * Hub-local contextual page hint (W5 / plan §9 PageHint pass).
  *
- * Upstream `PageHint` is on BOTH barrels at the vendored v1.0.0 pin — the
+ * Upstream `PageHint` is on BOTH barrels at the vendored v1.0.2 pin — the
  * RUNTIME barrel (a `PageHint` export of `dist/phlix-ui.js`) AND the TYPE
  * entry (`dist/index.d.ts:30` names it; a typed `import { PageHint }
  * from '@phlix/ui'` now passes `vue-tsc` — re-executed at this pin). The

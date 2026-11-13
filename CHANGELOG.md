@@ -27,6 +27,14 @@ date. Deviations already in the history below are recorded, not rewritten, in th
   HUB-S1 punctuation, HUB-S24 `Tunnel::MAX_PENDING_BYTES` docblock, HUB-S32 bind-host comment and
   HUB-S48 `/api/v1/themes` 429 verified already present at the tip.
 
+### Chore [HUB-S46] — adopt `@phlix/ui` v1.0.2 + `/app` SPA regen (HUB-14, HUB-50) — 2026-11-13
+
+- Pin tarball `v1.0.0` -> `v1.0.2` (lock rotated). v1.0.2 ships the federation localization + refresh
+  affordances: `FederationPage` add/remove toasts now localize registered wire codes via `wireErrorLine`
+  (raw server text never renders), and `FederationPage` / `HubDashboardPage` gain a Refresh button.
+  `/app` rebuilt deterministic x2 (identical per-file md5); `web-ui` tests 230/230; docblock pin
+  coordinates and the hashed-chunk test pin rotated. Zero hub PHP edits.
+
 ### Chore [HUB-S46] — adopt `@phlix/ui` v1.0.0 + `/app` SPA regen — 2026-11-13
 
 - Pin tarball `v0.99.28` -> `v1.0.0` (tag peels to 5901e055; requests `@phlix/contracts` #v0.5.8).
