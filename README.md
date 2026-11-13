@@ -1256,6 +1256,21 @@ retain logs across upgrades.
 All settings are environment variables, read in [`config/`](config). Defaults shown are the
 development fallbacks.
 
+
+**Portal asset compression.** The hub gzips its hashed (immutable) text assets —
+`.css`, `.js`, `.mjs`, `.json`, `.svg` under `/assets/…` — in-process whenever the client
+sends `Accept-Encoding: gzip` (replies carry `Content-Encoding: gzip` and
+`Vary: Accept-Encoding`; the compressed bytes are cached per worker, keyed on path + mtime
++ size). This saves roughly 3 MB on a cold portal load. If your proxy already compresses,
+it is safe to leave both on (the proxy passes an already-encoded body through), but to
+compress at the edge instead, e.g. in HAProxy:
+
+```haproxy
+frontend fe_https
+    compression algo gzip
+    compression type text/css application/javascript application/json image/svg+xml
+```
+
 ### Server ([`config/server.php`](config/server.php))
 
 | Variable | Default | Description |

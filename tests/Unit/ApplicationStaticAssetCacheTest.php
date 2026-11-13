@@ -589,4 +589,79 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         // The old inline classifier must not survive beside the extracted one.
         $this->assertStringNotContainsString('$isHashedAsset = (bool) preg_match(', $source);
     }
+
+    // ---- HUB-39: gzip tier for hashed text assets ----------------------------
+
+    public function testAcceptsGzipParsesTokensAndQValues(): void
+    {
+        $this->assertTrue(Application::acceptsGzip('gzip'));
+        $this->assertTrue(Application::acceptsGzip('br, gzip;q=0.5, deflate'));
+        $this->assertTrue(Application::acceptsGzip('GZIP'));
+        $this->assertFalse(Application::acceptsGzip('gzip;q=0'));
+        $this->assertFalse(Application::acceptsGzip('br, deflate'));
+        $this->assertFalse(Application::acceptsGzip(''));
+        $this->assertFalse(Application::acceptsGzip(null));
+    }
+
+    public function testHashedJsGzipWireLegCarriesContentEncodingAndVary(): void
+    {
+        $path = '/assets/app/assets/PlayerPage-Ba8zltA4-BYANVuIW.js';
+        $file = $this->staticFileShape($path);
+        $wire = (string) Application::buildStaticFastPathResponse('body', $path, $file, null, null, 'gzip, br');
+
+        $this->assertStringContainsString("Content-Encoding: gzip\r\n", $wire);
+        $this->assertStringContainsString("Vary: Accept-Encoding\r\n", $wire);
+        $this->assertStringContainsString('immutable', $wire);
+        $this->assertStringContainsString("\x1f\x8b", $wire);
+
+        $head = (string) Application::buildStaticFastPathResponse('head', $path, $file, null, null, 'gzip');
+        $gz = Application::gzipStaticVariant($file);
+        $this->assertNotNull($gz);
+        $this->assertStringContainsString('Content-Length: ' . strlen($gz) . "\r\n", $head);
+        $this->assertStringContainsString("Content-Encoding: gzip\r\n", $head);
+    }
+
+    public function testHashedJsWithoutGzipAcceptIsIdentityButStillVaries(): void
+    {
+        $path = '/assets/app/assets/PlayerPage-Ba8zltA4-BYANVuIW.js';
+        $file = $this->staticFileShape($path);
+        $wire = (string) Application::buildStaticFastPathResponse('body', $path, $file, null, null, null);
+
+        $this->assertStringNotContainsString('Content-Encoding', $wire);
+        $this->assertStringContainsString("Vary: Accept-Encoding\r\n", $wire);
+    }
+
+    public function testBinaryAndNonHashedAssetsAreNeverGzipped(): void
+    {
+        $font = '/assets/app/assets/jetbrains-mono-var-latin-6fWv1k7M.woff2';
+        $fontFile = $this->staticFileShape($font);
+        $wire = (string) Application::buildStaticFastPathResponse('body', $font, $fontFile, null, null, 'gzip');
+        $this->assertStringNotContainsString('Content-Encoding', $wire);
+        $this->assertStringNotContainsString('Vary:', $wire);
+
+        $wire = (string) Application::buildStaticFastPathResponse(
+            'body',
+            self::NON_HASHED_ASSET,
+            $this->staticFileShape(self::NON_HASHED_ASSET),
+            null,
+            null,
+            'gzip',
+        );
+        $this->assertStringNotContainsString('Content-Encoding', $wire);
+    }
+
+    public function testGzipSavesAtLeastTwoMegabytesAcrossCommittedHashedTextAssets(): void
+    {
+        $root = dirname(__DIR__, 2) . '/public/assets/app/assets';
+        $raw = 0;
+        $packed = 0;
+        foreach (glob($root . '/*.{js,css}', GLOB_BRACE) ?: [] as $f) {
+            $real = (string) realpath($f);
+            $size = (int) filesize($real);
+            $raw += $size;
+            $gz = Application::gzipStaticVariant(['real' => $real, 'mtime' => (int) filemtime($real), 'size' => $size]);
+            $packed += $gz === null ? $size : strlen($gz);
+        }
+        $this->assertGreaterThan(2_000_000, $raw - $packed, "raw={$raw} gz={$packed}");
+    }
 }

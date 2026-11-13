@@ -496,6 +496,62 @@ final class Application
         );
     }
 
+    /** HUB-39: extensions worth gzip-ing (text-typed; images/fonts are already packed). */
+    public static function isCompressibleStaticExt(string $ext): bool
+    {
+        return in_array($ext, ['css', 'js', 'mjs', 'json', 'svg', 'txt', 'xml'], true);
+    }
+
+    /** HUB-39: true when Accept-Encoding lists gzip (or x-gzip) with a non-zero q. */
+    public static function acceptsGzip(?string $acceptEncoding): bool
+    {
+        if ($acceptEncoding === null || $acceptEncoding === '') {
+            return false;
+        }
+        foreach (explode(',', strtolower($acceptEncoding)) as $part) {
+            $bits = array_map('trim', explode(';', $part));
+            if ($bits[0] !== 'gzip' && $bits[0] !== 'x-gzip') {
+                continue;
+            }
+            foreach (array_slice($bits, 1) as $param) {
+                if (preg_match('/^q=([0-9.]+)$/', $param, $m) === 1 && (float) $m[1] <= 0.0) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * HUB-39: gzip bytes for a file, memoized per worker on real path +
+     * mtime + size (the ext+encoding tier). Null when the file is below the
+     * 1 KiB floor, unreadable, zlib is absent, or gzip would not shrink it.
+     *
+     * @param array{real: string, mtime: int, size: int} $file
+     */
+    public static function gzipStaticVariant(array $file): ?string
+    {
+        /** @var array<string, string|null> $cache */
+        static $cache = [];
+        if ($file['size'] < 1024 || !function_exists('gzencode')) {
+            return null;
+        }
+        $key = $file['real'] . '|' . $file['mtime'] . '|' . $file['size'];
+        if (array_key_exists($key, $cache)) {
+            return $cache[$key];
+        }
+        if (count($cache) >= 256) {
+            $cache = [];
+        }
+        $raw = @file_get_contents($file['real']);
+        $gz = $raw === false ? false : gzencode($raw, 9);
+
+        return $cache[$key] = ($gz !== false && strlen($gz) < $file['size']) ? $gz : null;
+    }
+
     /**
      * SH-071: build the fast-path reply for an admitted static file — the
      * whole MIME-map + cache-decision + response-shape sequence, extracted
@@ -510,6 +566,8 @@ final class Application
      * @param string      $disposition      'body' | 'head'.
      * @param string|null $ifNoneMatch      Raw If-None-Match header.
      * @param string|null $ifModifiedSince  Raw If-Modified-Since header.
+     * @param string|null $acceptEncoding   Raw Accept-Encoding header (HUB-39:
+     *                                      gzip tier for hashed text assets).
      */
     public static function buildStaticFastPathResponse(
         string $disposition,
@@ -517,6 +575,7 @@ final class Application
         array $file,
         ?string $ifNoneMatch,
         ?string $ifModifiedSince,
+        ?string $acceptEncoding = null,
     ): \Workerman\Protocols\Http\Response {
         $real = $file['real'];
         // Extension-first MIME map — mime_content_type() sniffs content via
@@ -564,6 +623,26 @@ final class Application
 
         if ($decision['status'] === 304) {
             return new \Workerman\Protocols\Http\Response(304, $decision['headers']);
+        }
+
+        // HUB-39: hashed (immutable) text-typed assets are compressed in-app
+        // behind Accept-Encoding. Hashed bodies never change under a given
+        // URL, so the (path+mtime+size)-keyed gzip cache is variant-safe.
+        if (self::isHashedAssetPath($path) && self::isCompressibleStaticExt($ext)) {
+            $decision['headers']['Vary'] = 'Accept-Encoding';
+            $gz = self::acceptsGzip($acceptEncoding) ? self::gzipStaticVariant($file) : null;
+            if ($gz !== null) {
+                $decision['headers']['Content-Encoding'] = 'gzip';
+                if ($disposition === 'head') {
+                    return new BodylessResponse(
+                        200,
+                        $decision['headers'] + ['Content-Length' => (string) strlen($gz)],
+                        '',
+                    );
+                }
+
+                return new \Workerman\Protocols\Http\Response(200, $decision['headers'], $gz);
+            }
         }
 
         if ($disposition === 'head') {
@@ -2449,12 +2528,15 @@ final class Application
                         $ifNoneMatch = $request->header('if-none-match');
                         /** @var string|null $ifModifiedSince */
                         $ifModifiedSince = $request->header('if-modified-since');
+                        /** @var string|null $acceptEncoding */
+                        $acceptEncoding = $request->header('accept-encoding');
                         $resp = self::buildStaticFastPathResponse(
                             $fastPathMethod,
                             $path,
                             $file,
                             is_string($ifNoneMatch) ? $ifNoneMatch : null,
                             is_string($ifModifiedSince) ? $ifModifiedSince : null,
+                            is_string($acceptEncoding) ? $acceptEncoding : null,
                         );
                         $status = $resp->getStatusCode();
                         $connection->send($resp);
