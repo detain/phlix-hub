@@ -65,10 +65,25 @@ final class HubSettingsController
             'int' => [is_int($value), gettype($value)],
             'bool' => [is_bool($value), gettype($value)],
             'float' => [is_float($value) || is_int($value), gettype($value)],
-            'json' => [is_array($value), gettype($value)],
+            'json' => [is_array($value) && self::isJsonEncodable($value), gettype($value)],
             'string' => [is_string($value), gettype($value)],
             default => [false, gettype($value)],
         };
+    }
+
+    /**
+     * True when the value survives json_encode (rejects NAN/INF, invalid
+     * UTF-8, over-deep nesting) so persistence cannot hit an encode failure.
+     */
+    private static function isJsonEncodable(mixed $value): bool
+    {
+        try {
+            json_encode($value, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return false;
+        }
+
+        return true;
     }
 
     /**

@@ -270,4 +270,36 @@ final class HubSettingsBoundsAndMetaTest extends TestCase
         self::assertSame(30, $settings['server.metrics.retention_days']);
         self::assertSame(5, $settings['server.max_users_per_server']);
     }
+
+    public function testJsonKeyWithUnencodableValueIsRejected400(): void
+    {
+        $response = $this->put(['server.rate_limit' => ['bad' => NAN]]);
+
+        self::assertSame(400, $response->statusCode);
+    }
+
+    public function testJsonKeyWithInvalidUtf8IsRejected400(): void
+    {
+        $response = $this->put(['server.rate_limit' => ['bad' => "\xB1\x31"]]);
+
+        self::assertSame(400, $response->statusCode);
+    }
+
+    public function testRepositorySetThrowsOnUnencodableJson(): void
+    {
+        $repo = new HubSettingsRepository($this->db);
+
+        $this->expectException(\JsonException::class);
+        $repo->set('server.rate_limit', ['bad' => NAN], 'json');
+    }
+
+    public function testRepositorySetPersistsEncodableJson(): void
+    {
+        $repo = new HubSettingsRepository($this->db);
+        $repo->set('server.rate_limit', ['a' => 1], 'json');
+
+        $row = $repo->getOverride('server.rate_limit');
+        self::assertNotNull($row);
+        self::assertSame(['a' => 1], $row['value']);
+    }
 }

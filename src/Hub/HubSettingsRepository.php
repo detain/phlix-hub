@@ -464,6 +464,9 @@ class HubSettingsRepository
      * @param string $valueType One of string|int|bool|float|json.
      *
      * @return string Text form suitable for the `setting_value` column.
+     *
+     * @throws \JsonException When the value cannot be JSON-encoded (never
+     *                        persists an empty string for an unencodable value).
      */
     private static function encode(mixed $value, string $valueType): string
     {
@@ -471,8 +474,8 @@ class HubSettingsRepository
             'bool'  => ($value ? '1' : '0'),
             'int'   => (string) (int) (is_numeric($value) ? $value : 0),
             'float' => (string) (float) (is_numeric($value) ? $value : 0),
-            'json'  => (string) json_encode($value),
-            default => is_scalar($value) ? (string) $value : (string) json_encode($value),
+            'json'  => json_encode($value, JSON_THROW_ON_ERROR),
+            default => is_scalar($value) ? (string) $value : json_encode($value, JSON_THROW_ON_ERROR),
         };
     }
 
