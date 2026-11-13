@@ -300,11 +300,12 @@ final class ServerClaimControllerTest extends TestCase
             $request->path = '/api/v1/server-claims/new';
             $request->headers['Accept-Phlix-Protocol'] = 'v1';
             $request->body = [
-                // Exactly the shape that trips the handler's bounds today:
-                // empty strings pass the shared parser (type-check only) and
-                // meet the private validateClaimRequest refusal.
-                'serverName' => '',
-                'version' => '',
+                // A shape the shared parser accepts (since shared 0.55 the
+                // parser itself refuses empty strings, so they never reach
+                // the handler); the mocked handler then raises the legacy
+                // marker, exercising the mapError arm under test.
+                'serverName' => 'nas',
+                'version' => '1.0.0',
                 'publicKeysJwk' => [
                     'kty' => 'OKP',
                     'crv' => 'Ed25519',

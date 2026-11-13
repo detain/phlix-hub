@@ -693,19 +693,25 @@ class RequestManager
     }
 
     /**
-     * Inspect Sonarr to pick a sensible root-folder index, falling back to 0.
+     * Inspect Sonarr to pick a sensible root folder path, falling back to `/tv`.
+     *
+     * shared >= 0.55 takes the root folder as a PATH string (never an index).
      */
-    private function getSonarrRootFolder(SonarrClient $sonarrClient): int
+    private function getSonarrRootFolder(SonarrClient $sonarrClient): string
     {
         try {
             $series = $sonarrClient->getSeries();
-            if (!empty($series) && isset($series[0]['path'])) {
-                return 0;
+            $path = $series[0]['path'] ?? null;
+            if (is_string($path) && $path !== '') {
+                $parent = dirname($path);
+                if ($parent !== '.' && $parent !== '') {
+                    return $parent;
+                }
             }
         } catch (\Throwable) {
             // Fall through to default
         }
-        return 0;
+        return '/tv';
     }
 
     /**

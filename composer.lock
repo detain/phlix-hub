@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "3424bd61999a63e7509bb0caa5772cb3",
+    "content-hash": "76299ab3afa1fae99ba167b6dc96e5df",
     "packages": [
         {
             "name": "crell/attributeutils",
@@ -284,16 +284,16 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "v0.54.0",
+            "version": "v0.55.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/detain/phlix-shared.git",
-                "reference": "55f3e680b100a9cb40a40e9a270c3675ddd3cbe1"
+                "reference": "eba4a2167021f40fd26e60a92994775ce018a27d"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/55f3e680b100a9cb40a40e9a270c3675ddd3cbe1",
-                "reference": "55f3e680b100a9cb40a40e9a270c3675ddd3cbe1",
+                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/eba4a2167021f40fd26e60a92994775ce018a27d",
+                "reference": "eba4a2167021f40fd26e60a92994775ce018a27d",
                 "shasum": ""
             },
             "require": {
@@ -327,9 +327,9 @@
             "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O by charter — bundled I/O is confined to the Arr/ namespace: the blocking CurlArrTransport default (CLI/test posture) and TrashGuidesProvider's own blocking stream fetches (no transport seam there); event-loop consumers should inject an async ArrTransportInterface unless their runtime hooks curl (phlix-hub's S425 position).",
             "support": {
                 "issues": "https://github.com/detain/phlix-shared/issues",
-                "source": "https://github.com/detain/phlix-shared/tree/v0.54.0"
+                "source": "https://github.com/detain/phlix-shared/tree/v0.55.1"
             },
-            "time": "2026-11-07T01:09:50+00:00"
+            "time": "2026-11-13T04:40:36+00:00"
         },
         {
             "name": "doctrine/inflector",
