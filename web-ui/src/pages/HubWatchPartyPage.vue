@@ -32,7 +32,7 @@
  * All frame parsing/building, link math and refusal sentences live in
  * `utils/watchPartyWire.ts` (pure, node-tested); this file only binds them.
  *
- * Package-boundary posture: the vendored @phlix/ui at the pin (v0.99.27, the
+ * Package-boundary posture: the vendored @phlix/ui at the pin (v0.99.28, the
  * tag web-ui/package.json names — kept current by tests/ui-pin-currency.test.ts)
  * DOES export the pure dial primitives at its package entry (`buildHubRelayUrl`,
  * `HUB_SYNC_PLAY_PORT` — dist/index.d.ts:16), but its socket API

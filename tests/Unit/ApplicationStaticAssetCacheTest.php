@@ -508,7 +508,11 @@ final class ApplicationStaticAssetCacheTest extends TestCase
 
     public function testGetOfHashedChunkCarriesImmutableYear(): void
     {
-        $relative = '/assets/app/assets/AdminLayout-DeZOGC0--DAyU1OvF.js';
+        // Resolve the live committed chunk by prefix: the content hash rotates on every
+        // /app regen, so a literal name would rot at each ui re-vendor.
+        $found = glob(dirname(__DIR__, 2) . '/public/assets/app/assets/AdminLayout-*.js');
+        $this->assertNotEmpty($found, 'committed /app bundle carries an AdminLayout chunk');
+        $relative = '/assets/app/assets/' . basename($found[0]);
         $file = $this->staticFileShape($relative);
         $response = Application::buildStaticFastPathResponse('body', $relative, $file, null, null);
         $wire = (string) $response;

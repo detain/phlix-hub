@@ -12,6 +12,19 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Chore [HUB-S46] — re-vendor `@phlix/ui` #v0.99.28 + `/app` SPA regen — 2026-11-12
+
+- Pin tarball `v0.99.27` -> `v0.99.28` (tag obj 29b6a8c5, peel dfe8fc65). package.json 1+/1-;
+  lock surgical 4+/4-, computed under node 24.22.3 / npm 11.19.1 with
+  `NPM_CONFIG_USERCONFIG=/dev/null`. Fresh `npm ci`; `/app` rebuilt deterministic x2 (mutual
+  per-file md5 identical), 198 files, version stamp `0.99.28` on `index-CbxDfQ7M.js`, zero `.27`
+  residue. Five M-HUB-12 docblock coordinates rotated `.27` -> `.28` (the `dist/index.d.ts`
+  line coordinates :16/:30/:220 re-executed byte-equal at the new install).
+- Scope note: the `.28` tag carries UI-4/UI-53 and the UI-S-series fixes only; the HUB-14/HUB-50
+  upstream edits (`FederationPage.vue` wireErrorLine at the add/remove toasts, Refresh
+  affordances on `FederationPage` / `HubDashboardPage`) are NOT in `.28` and remain gated on a
+  later ui tag. Zero PHP src, zero new wire codes, no migrations.
+
 ### Fixed [HUB-S29] — trusted-client-IP parity in logout/device markers (HUB-40) — 2026-11-12
 
 - `AuthController` logout audit line and the fallback device-id marker now use
