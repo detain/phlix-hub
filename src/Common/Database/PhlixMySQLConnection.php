@@ -202,6 +202,7 @@ final class PhlixMySQLConnection extends Connection
             // (default: row alias), which is WRONG on MariaDB — so it is logged.
             try {
                 $stmt = $this->pdo->query('SELECT VERSION()');
+                /** @var mixed $version */
                 $version = $stmt !== false ? $stmt->fetchColumn() : false;
                 if (is_string($version)) {
                     UpsertSyntax::detect($version);
