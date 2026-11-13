@@ -12,6 +12,15 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Chore [HUB-S46] — adopt `@phlix/ui` v1.0.0 + `/app` SPA regen — 2026-11-13
+
+- Pin tarball `v0.99.28` -> `v1.0.0` (tag peels to 5901e055; requests `@phlix/contracts` #v0.5.8).
+  package.json 1+/1-; lock rotated (ui 1.0.0 integrity, transitive `@phlix/contracts` 0.5.7 -> 0.5.8
+  at e5a33809), computed under node 24.22.3 / npm 11.19.1. Fresh `npm ci`; `web-ui` tests 230/230;
+  `/app` rebuilt deterministic x2 (identical per-file md5), 198 files. Five M-HUB-12 docblock
+  coordinates rotated `.28` -> `v1.0.0`. Zero hub PHP edits. UI Pin Skew (S181) job is report-only
+  over server/windows/tizen manifests; hub's own pin now equals the latest ui tag.
+
 ### Chore [HUB-S52] — closeout: `/app` SPA bundle freshness regen — 2026-11-12
 
 - Pin stays `@phlix/ui` v0.99.28 (latest tag; no newer ui tag landed). Fresh `npm@11 ci`, `/app`
