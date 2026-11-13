@@ -1693,12 +1693,20 @@ class FederationPeerManager
     /**
      * Handle an incoming WebSocket message (text JSON or binary frame).
      *
-     * @param string $data Raw frame payload.
+     * @param string                    $data    Raw frame payload.
+     * @param array<string, mixed>|null $decoded Already-parsed text frame handed down by the shape gate
+     *                                           (single decode per frame, HUB-58); null re-derives it.
      *
      * @return void
      */
-    private function handleMessage(string $data): void
+    private function handleMessage(string $data, ?array $decoded = null): void
     {
+        if ($decoded !== null) {
+            $this->dispatchTextMessage($decoded);
+
+            return;
+        }
+
         // Detect text vs binary frame by checking for valid JSON UTF-8
         if ($this->isTextFrame($data)) {
             $this->handleTextFrame($data);
@@ -1736,7 +1744,8 @@ class FederationPeerManager
      */
     public function handleInboundLeafFrame(string $data): void
     {
-        if (!$this->isProtocolShapedFrame($data)) {
+        $decoded = null;
+        if (!$this->isProtocolShapedFrame($data, $decoded)) {
             return;
         }
 
@@ -1745,7 +1754,7 @@ class FederationPeerManager
         }
 
         try {
-            $this->handleMessage($data);
+            $this->handleMessage($data, $decoded);
         } catch (Throwable $e) {
             $this->containLeafCallback($e, 'inbound frame handler');
         }
@@ -1771,8 +1780,14 @@ class FederationPeerManager
      *
      * Vacuous inputs (empty string, non-UTF-8 junk, short bodies, wrong
      * head) are all refused here, before any parse or charge.
+     *
+     * HUB-58: the depth-4 parse of an accepted text frame is surfaced via
+     * `$parsed` so the dispatch path never re-decodes it.
+     *
+     * @param string                    $data   Raw frame payload.
+     * @param array<string, mixed>|null $parsed Out: the parsed text frame when it is text-shaped.
      */
-    private function isProtocolShapedFrame(string $data): bool
+    private function isProtocolShapedFrame(string $data, ?array &$parsed = null): bool
     {
         if ($this->isTextFrame($data)) {
             try {
@@ -1782,7 +1797,14 @@ class FederationPeerManager
                 return false;
             }
 
-            return is_array($decoded) && is_string($decoded['type'] ?? null);
+            if (is_array($decoded) && is_string($decoded['type'] ?? null)) {
+                /** @var array<string, mixed> $decoded */
+                $parsed = $decoded;
+
+                return true;
+            }
+
+            return false;
         }
 
         return strlen($data) >= 7 && $data[0] === "\x00";
@@ -1913,6 +1935,18 @@ class FederationPeerManager
             return;
         }
 
+        $this->dispatchTextMessage($msg);
+    }
+
+    /**
+     * Route an already-parsed text frame by its `type`.
+     *
+     * @param array<string, mixed> $msg Parsed frame.
+     *
+     * @return void
+     */
+    private function dispatchTextMessage(array $msg): void
+    {
         /** @var string $type */
         $type = is_string($msg['type'] ?? null) ? $msg['type'] : '';
 

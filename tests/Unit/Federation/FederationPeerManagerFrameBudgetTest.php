@@ -161,7 +161,7 @@ final class FederationPeerManagerFrameBudgetTest extends TestCase
                 + 1,
         ));
         $guardAt = strpos($seamText, '$this->guardIncomingFrame($data)');
-        $handleAt = strpos($seamText, '$this->handleMessage($data)');
+        $handleAt = strpos($seamText, '$this->handleMessage($data, $decoded)');
 
         self::assertIsInt(
             $guardAt,
@@ -181,6 +181,32 @@ final class FederationPeerManagerFrameBudgetTest extends TestCase
     }
 
     // ---------------------------------------------------------- behaviour
+
+    /**
+     * HUB-58: the shape gate hands its single depth-4 parse down, so the
+     * dispatch path never re-decodes a text frame.
+     */
+    public function testShapeGateSurfacesSingleParseForTextFrames(): void
+    {
+        $manager = $this->peerManager();
+        $gate = new ReflectionMethod($manager, 'isProtocolShapedFrame');
+        $gate->setAccessible(true);
+
+        $parsed = null;
+        $args = ['{"type":"hub_hello_ack","n":1}', &$parsed];
+        self::assertTrue($gate->invokeArgs($manager, $args));
+        self::assertSame(['type' => 'hub_hello_ack', 'n' => 1], $parsed);
+
+        $parsed = null;
+        $args = ['{"foo":"bar"}', &$parsed];
+        self::assertFalse($gate->invokeArgs($manager, $args));
+        self::assertSame(null, $args[1]);
+
+        $parsed = null;
+        $args = ['{"type":{"a":{"b":{"c":{"d":1}}}}}', &$parsed];
+        self::assertFalse($gate->invokeArgs($manager, $args), 'depth parity with the old depth-4 decode');
+        self::assertSame(null, $args[1]);
+    }
 
     /**
      * Under budget: the guard passes the frame and consumes exactly one hit,
