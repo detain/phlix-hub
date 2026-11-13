@@ -1316,6 +1316,49 @@ final class SyncPlayRelayWorkerTest extends TestCase
         self::assertSame(0, SyncPlayRelayWorker::getActiveConnectionCount());
     }
 
+    /**
+     * HUB-57 — group_leave for a client whose room bucket is already gone
+     * (swept) must not raise an undefined-key warning.
+     */
+    public function testGroupLeaveWithSweptRoomBucketRaisesNoWarning(): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $sinkA = [];
+        $connA = $this->makeRecordingConnection($sinkA);
+        $this->connect($worker, $connA, '/syncplay/server-a', 'token-a');
+        $worker->onMessage($connA, $this->joinFrame('movie-night', 'Alice'));
+
+        $roomsProp = new \ReflectionProperty(SyncPlayRelayWorker::class, 'rooms');
+        $roomsProp->setAccessible(true);
+        $roomsProp->setValue(null, []);
+
+        $clientsProp = new \ReflectionProperty(SyncPlayRelayWorker::class, 'clients');
+        $clientsProp->setAccessible(true);
+        /** @var array<mixed, \Phlix\Hub\SyncPlay\SyncPlayClient> $clients */
+        $clients = $clientsProp->getValue();
+        $client = reset($clients);
+        self::assertNotFalse($client);
+        // Legacy dialect: handleGroupLeave is the unit under test.
+        $client->canonical = false;
+
+        $leave = new \ReflectionMethod(SyncPlayRelayWorker::class, 'handleGroupLeave');
+        $leave->setAccessible(true);
+
+        set_error_handler(static function (int $no, string $str): bool {
+            throw new \ErrorException($str, 0, $no);
+        });
+        try {
+            $leave->invoke($worker, $client);
+        } finally {
+            restore_error_handler();
+        }
+        self::assertNull($client->room);
+    }
+
     // ---- Helpers ---------------------------------------------------------
 
     private function connect(

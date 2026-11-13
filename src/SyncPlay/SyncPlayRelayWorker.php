@@ -1785,7 +1785,7 @@ final class SyncPlayRelayWorker
         // position. The emptied member bucket KEEPS its existing lifecycle — the
         // 60s sweep reaps it (pinned by the round-trip suite's timer proof),
         // and the anchor unset here is idempotent with that sweep.
-        if (self::$rooms[$room] === []) {
+        if ((self::$rooms[$room] ?? null) === []) {
             unset(self::$roomPlayback[$room]);
         }
 
