@@ -8,6 +8,7 @@ use Phlix\Hub\Mcp\McpScopes;
 use Phlix\Hub\Mcp\McpTokenService;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function hash;
 use function str_contains;
@@ -138,9 +139,7 @@ final class McpTokenServiceTest extends TestCase
         self::assertFalse($token->hasScope(McpScopes::PLAYBACK_READ));
     }
 
-    /**
-     * @dataProvider unusableRowProvider
-     */
+    #[DataProvider('unusableRowProvider')]
     public function testValidateFailsClosed(mixed $rows): void
     {
         $db = $this->createMock(Connection::class);

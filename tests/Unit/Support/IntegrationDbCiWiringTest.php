@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Support;
 
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S173 — the real-database CI wiring must not be one deletable line away from
@@ -143,9 +144,7 @@ final class IntegrationDbCiWiringTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider dbEnvVarProvider
-     */
+    #[DataProvider('dbEnvVarProvider')]
     public function testThePhpunitStepSuppliesEveryTestDbVariable(string $variable): void
     {
         self::assertMatchesRegularExpression(

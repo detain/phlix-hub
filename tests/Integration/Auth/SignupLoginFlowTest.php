@@ -15,6 +15,8 @@ use Phlix\Shared\Events\Auth\UserLoggedOut;
 use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
 use Phlix\Shared\Auth\JwtClaims;
+use PHPUnit\Framework\Attributes\Group;
+use Phlix\Hub\Tests\Support\Narrow;
 
 /**
  * End-to-end signup → login → protected → logout flow against a real DB.
@@ -30,8 +32,8 @@ use Phlix\Shared\Auth\JwtClaims;
  *
  * @package Phlix\Hub\Tests\Integration\Auth
  *
- * @group integration
  */
+#[Group('integration')]
 final class SignupLoginFlowTest extends RealDatabaseTestCase
 {
     use DecodedJsonAssertions;
@@ -80,7 +82,7 @@ final class SignupLoginFlowTest extends RealDatabaseTestCase
         self::assertCount(1, $rows);
         $row = $rows[0];
         self::assertIsArray($row);
-        self::assertSame(1, (int) ($row['is_admin'] ?? 0));
+        self::assertSame(1, Narrow::castInt($row['is_admin'] ?? 0));
 
         // 3. Login with the same creds returns valid tokens.
         $loginResult = $this->auth->login('alice', 'correct-horse-battery', '1.2.3.4');
@@ -119,7 +121,7 @@ final class SignupLoginFlowTest extends RealDatabaseTestCase
         self::assertIsArray($rows);
         $row = $rows[0];
         self::assertIsArray($row);
-        self::assertSame(0, (int) ($row['is_admin'] ?? 1));
+        self::assertSame(0, Narrow::castInt($row['is_admin'] ?? 1));
     }
 
     public function testLogoutCompletesWithoutThrowing(): void
@@ -170,10 +172,10 @@ final class SignupLoginFlowTest extends RealDatabaseTestCase
             'SELECT is_admin FROM users WHERE id = :id',
             ['id' => $userId],
         );
-        self::assertIsArray($rows);
+        $rows = Narrow::rows($rows);
         self::assertSame(
             0,
-            (int) $rows[0]['is_admin'],
+            Narrow::castInt($rows[0]['is_admin']),
             'the guard holder is the election — a newcomer must not self-elect',
         );
 
@@ -182,8 +184,8 @@ final class SignupLoginFlowTest extends RealDatabaseTestCase
             'SELECT user_id FROM auth_signup_guard WHERE guard_key = :k',
             ['k' => 'first-admin-election'],
         );
-        self::assertIsArray($guard);
-        self::assertSame('u-ancestor', (string) $guard[0]['user_id']);
+        $guard = Narrow::rows($guard);
+        self::assertSame('u-ancestor', Narrow::castString($guard[0]['user_id']));
     }
 
     /**

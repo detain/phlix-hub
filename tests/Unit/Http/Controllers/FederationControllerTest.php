@@ -1062,7 +1062,7 @@ final class FederationControllerTest extends TestCase
         $this->hubRepo->expects(self::once())
             ->method('createPeer')
             ->with(
-                self::isType('string'),
+                self::isString(),
                 'New Peer Hub',
                 'https://new-peer.example.com',
                 'new-peer-key',

@@ -12,6 +12,7 @@ use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Http\Router;
 use PHPUnit\Framework\TestCase;
+use Phlix\Hub\Tests\Support\Narrow;
 
 /**
  * Contract tests for the shared-admin-console log routes wired by
@@ -132,8 +133,10 @@ final class AdminLogRoutesTest extends TestCase
         $payload = json_decode((string) $res->body, true);
         self::assertIsArray($payload);
         self::assertArrayHasKey('files', $payload);
-        self::assertIsArray($payload['files']);
-        $names = array_map(static fn (array $f): string => (string) $f['name'], $payload['files']);
+        $names = array_map(
+            static fn (mixed $f): string => Narrow::castString(Narrow::arr($f)['name']),
+            Narrow::arr($payload['files']),
+        );
         self::assertContains('app.log', $names);
     }
 
@@ -162,7 +165,7 @@ final class AdminLogRoutesTest extends TestCase
 
         $payload = json_decode((string) $res->body, true);
         self::assertIsArray($payload);
-        self::assertContains('app.log', $payload['files'] ?? []);
+        self::assertContains('app.log', Narrow::arr($payload['files'] ?? []));
         self::assertIsArray($payload['lines'] ?? null);
         self::assertNotEmpty($payload['lines']);
     }

@@ -9,6 +9,7 @@ use Phlix\Hub\Http\Controllers\HubSettingsController;
 use Phlix\Hub\Http\Request;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use Phlix\Hub\Tests\Support\Narrow;
 
 /**
  * Unit tests for {@see HubSettingsController}.
@@ -83,8 +84,9 @@ final class HubSettingsControllerTest extends TestCase
         self::assertIsArray($body);
         self::assertTrue($body['success']);
         self::assertArrayHasKey('data', $body);
-        self::assertArrayHasKey('meta', $body['data']);
-        self::assertIsArray($body['data']['meta']);
+        $data = Narrow::arr($body['data']);
+        self::assertArrayHasKey('meta', $data);
+        self::assertIsArray($data['meta']);
     }
 
     public function testSchemaMetaReturnsNonEmptyMap(): void

@@ -8,6 +8,7 @@ use Phlix\Hub\Hub\ClaimRequestHandler;
 use Phlix\Hub\Http\Controllers\ServerClaimController;
 use Phlix\Hub\Http\Request;
 use PHPUnit\Framework\TestCase;
+use Phlix\Hub\Tests\Support\Narrow;
 
 /**
  * Unit tests for {@see ServerClaimController}.
@@ -147,7 +148,7 @@ final class ServerClaimControllerTest extends TestCase
         $frame = json_decode($response->body, true);
         self::assertIsArray($frame);
         self::assertSame('invalid_payload', $frame['code']);
-        self::assertStringContainsString('exceeds 16384 bytes', $frame['message']);
+        self::assertStringContainsString('exceeds 16384 bytes', Narrow::string($frame['message']));
     }
 
     public function testBodyCapBoundaryIsInclusiveAtTheMax(): void
@@ -172,7 +173,7 @@ final class ServerClaimControllerTest extends TestCase
         $frame = json_decode($response->body, true);
         self::assertIsArray($frame);
         self::assertSame('invalid_payload', $frame['code']);
-        self::assertStringNotContainsString('exceeds', (string) $frame['message']);
+        self::assertStringNotContainsString('exceeds', Narrow::castString($frame['message']));
     }
 
     public function testProtocolGuardStillPrecedesTheBodyCap(): void
@@ -271,13 +272,13 @@ final class ServerClaimControllerTest extends TestCase
         self::assertIsArray($frame);
         self::assertSame('invalid_payload', $frame['code']);
         self::assertSame('Bad Request', $frame['error']);
-        self::assertStringContainsString('Hostname candidates', $frame['message']);
+        self::assertStringContainsString('Hostname candidates', Narrow::string($frame['message']));
         // Review hub__copywriter: the refusal must state its numbers — and
         // they are the handler's constants, interpolated, never re-typed.
         self::assertStringContainsString(
             'max ' . ClaimRequestHandler::MAX_HOSTNAME_CANDIDATES . ' candidates, '
             . ClaimRequestHandler::MAX_HOSTNAME_LENGTH . ' bytes each',
-            $frame['message'],
+            Narrow::string($frame['message']),
         );
     }
 
@@ -322,8 +323,9 @@ final class ServerClaimControllerTest extends TestCase
             self::assertIsArray($frame);
             self::assertSame('invalid_payload', $frame['code'], $marker);
             self::assertSame('Bad Request', $frame['error'], $marker);
-            self::assertStringContainsString('Server name must be 1-255 bytes', $frame['message'], $marker);
-            self::assertStringContainsString('version must be 1-32 bytes', $frame['message'], $marker);
+            $message = Narrow::string($frame['message']);
+            self::assertStringContainsString('Server name must be 1-255 bytes', $message, $marker);
+            self::assertStringContainsString('version must be 1-32 bytes', $message, $marker);
         }
     }
 

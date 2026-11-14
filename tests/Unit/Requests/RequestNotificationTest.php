@@ -33,7 +33,7 @@ final class RequestNotificationTest extends TestCase
         $logger = $this->createMock(StructuredLogger::class);
         $logger->expects(self::once())
             ->method('info')
-            ->with('Request approved — logged, not delivered', self::isType('array'));
+            ->with('Request approved — logged, not delivered', self::isArray());
 
         (new RequestNotification($logger))->notifyApproved('u1', 'My Movie');
     }
@@ -59,7 +59,7 @@ final class RequestNotificationTest extends TestCase
         $logger = $this->createMock(StructuredLogger::class);
         $logger->expects(self::once())
             ->method('info')
-            ->with('Request available — logged, not delivered', self::isType('array'));
+            ->with('Request available — logged, not delivered', self::isArray());
 
         (new RequestNotification($logger))->notifyAvailable('u1', 'My Movie');
     }

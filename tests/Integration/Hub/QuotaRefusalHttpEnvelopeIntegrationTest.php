@@ -13,6 +13,7 @@ use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * M-HUB-16 real-MySQL round-trip: a bandwidth-quota denial stored in the REAL
@@ -33,8 +34,8 @@ use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
  *
  * @package Phlix\Hub\Tests\Integration\Hub
  *
- * @group integration
  */
+#[Group('integration')]
 final class QuotaRefusalHttpEnvelopeIntegrationTest extends RealDatabaseTestCase
 {
     private const USER_ID = '11111111-2222-3333-4444-555555555555';

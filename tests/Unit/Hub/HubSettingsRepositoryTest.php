@@ -178,7 +178,7 @@ final class HubSettingsRepositoryTest extends TestCase
             ->method('query')
             ->with(
                 self::stringStartsWith('INSERT INTO hub_settings'),
-                self::isType('array')
+                self::isArray()
             );
 
         $repo = $this->repo($db);

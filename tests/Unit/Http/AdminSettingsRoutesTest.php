@@ -14,6 +14,7 @@ use Phlix\Hub\Http\Response;
 use Phlix\Hub\Http\Router;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use Phlix\Hub\Tests\Support\Narrow;
 
 /**
  * Contract tests for the shared-admin-console settings routes wired by
@@ -405,9 +406,9 @@ final class AdminSettingsRoutesTest extends TestCase
         self::assertIsArray($payload);
         self::assertSame(false, $payload['success'] ?? null);
         self::assertSame('Validation failed', $payload['error'] ?? null);
-        self::assertIsArray($payload['errors'] ?? null);
-        self::assertArrayHasKey('server.enrollment_ttl', $payload['errors']);
-        self::assertStringContainsString('int', (string) $payload['errors']['server.enrollment_ttl']);
+        $errors = Narrow::arr($payload['errors'] ?? null);
+        self::assertArrayHasKey('server.enrollment_ttl', $errors);
+        self::assertStringContainsString('int', Narrow::castString($errors['server.enrollment_ttl']));
     }
 
     /**

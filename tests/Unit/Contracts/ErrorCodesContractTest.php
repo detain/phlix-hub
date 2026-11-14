@@ -15,6 +15,7 @@ use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use SplFileInfo;
+use Phlix\Hub\Tests\Support\Narrow;
 
 use function array_column;
 use function array_diff;
@@ -384,7 +385,8 @@ final class ErrorCodesContractTest extends TestCase
             'FLOOR: the fixture must carry at least ' . self::CODE_FLOOR
             . ' codes (205 as of ' . self::CONTRACT_TAG . ')',
         );
-        self::assertSame(count($codes), count(array_unique($codes)), 'FLOOR: the fixture carries duplicate codes');
+        $unique = array_unique(array_map(Narrow::castString(...), $codes));
+        self::assertSame(count($codes), count($unique), 'FLOOR: the fixture carries duplicate codes');
     }
 
     /**

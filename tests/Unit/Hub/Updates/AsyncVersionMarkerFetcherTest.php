@@ -12,6 +12,7 @@ use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use Workerman\Http\Client;
 use Workerman\Timer;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * {@see AsyncVersionMarkerFetcher} — the only class in S75 that touches the
@@ -482,9 +483,7 @@ final class AsyncVersionMarkerFetcherTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider refProvider
-     */
+    #[DataProvider('refProvider')]
     public function testTheFallbackPreservesRefAndPath(string $primary, string $expectedFallback): void
     {
         $client  = $this->client();

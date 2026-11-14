@@ -17,6 +17,7 @@ use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Shared\Hub\ServerInfoDto;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function sprintf;
 
@@ -154,8 +155,8 @@ final class McpToolContextTest extends TestCase
      * tests stayed green. Each of these must get PAST the allowlist and reach
      * the uninitialised bridge, which throws.
      *
-     * @dataProvider shippedToolPathProvider
      */
+    #[DataProvider('shippedToolPathProvider')]
     public function testThePathsTheShippedToolsForwardAreInsideTheBrowseAllowlist(
         string $path,
     ): void {
@@ -230,8 +231,8 @@ final class McpToolContextTest extends TestCase
      * a fully-anchored per-action pattern. If a write could reach the tunnel by
      * any other route, that whole design would be decoration.
      *
-     * @dataProvider deniedWritePathProvider
      */
+    #[DataProvider('deniedWritePathProvider')]
     public function testAPostOutsideTheWriteAllowlistIsRefused(string $path): void
     {
         $outcome = $this->context()->proxyPost(self::SERVER_OF_A, $path, ['position_ms' => 1]);
@@ -267,8 +268,8 @@ final class McpToolContextTest extends TestCase
      * refused everything, and the tool would be dead while its tests stayed
      * green.
      *
-     * @dataProvider playbackControlWritePathProvider
      */
+    #[DataProvider('playbackControlWritePathProvider')]
     public function testThePathsPlaybackControlWritesAreInsideTheWriteAllowlist(string $path): void
     {
         try {

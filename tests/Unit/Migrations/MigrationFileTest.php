@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Migrations;
 
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Static checks on the migration files themselves: every `*.sql` file
@@ -86,9 +87,7 @@ final class MigrationFileTest extends TestCase
         self::assertSame($expected, $files);
     }
 
-    /**
-     * @dataProvider migrationFileProvider
-     */
+    #[DataProvider('migrationFileProvider')]
     public function testFileIsNonEmpty(string $file): void
     {
         $contents = file_get_contents($file);
@@ -96,9 +95,7 @@ final class MigrationFileTest extends TestCase
         self::assertNotSame('', trim($contents), basename($file) . ' must not be empty');
     }
 
-    /**
-     * @dataProvider migrationFileProvider
-     */
+    #[DataProvider('migrationFileProvider')]
     public function testFileStartsWithMigrationHeader(string $file): void
     {
         $contents = file_get_contents($file);
@@ -110,9 +107,7 @@ final class MigrationFileTest extends TestCase
         );
     }
 
-    /**
-     * @dataProvider migrationFileProvider
-     */
+    #[DataProvider('migrationFileProvider')]
     public function testFileDeclaresInnodbAndUtf8mb4(string $file): void
     {
         $contents = file_get_contents($file);
@@ -134,9 +129,7 @@ final class MigrationFileTest extends TestCase
         );
     }
 
-    /**
-     * @dataProvider migrationFileProvider
-     */
+    #[DataProvider('migrationFileProvider')]
     public function testFileUsesCreateTableIfNotExists(string $file): void
     {
         $contents = file_get_contents($file);
@@ -153,9 +146,7 @@ final class MigrationFileTest extends TestCase
         );
     }
 
-    /**
-     * @dataProvider migrationFileProvider
-     */
+    #[DataProvider('migrationFileProvider')]
     public function testParenthesesAreBalanced(string $file): void
     {
         $contents = file_get_contents($file);
@@ -169,9 +160,7 @@ final class MigrationFileTest extends TestCase
         );
     }
 
-    /**
-     * @dataProvider migrationFileProvider
-     */
+    #[DataProvider('migrationFileProvider')]
     public function testFileUsesCharThirtySixForPrimaryKeys(string $file): void
     {
         $contents = file_get_contents($file);
@@ -215,8 +204,8 @@ final class MigrationFileTest extends TestCase
      * (007, 036) and index-only guards (034, 049, 051) each cover exactly what their
      * statement creates and are exempt.
      *
-     * @dataProvider migrationFileProvider
      */
+    #[DataProvider('migrationFileProvider')]
     public function testGuardedDdlProbesEveryObjectKindItCreates(string $file): void
     {
         $contents = file_get_contents($file);

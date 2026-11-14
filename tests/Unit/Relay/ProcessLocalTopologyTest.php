@@ -19,6 +19,7 @@ use Phlix\Hub\SyncPlay\SyncPlayRelayWorker;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use RuntimeException;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * C6 — process-local topology fail-loud law (review hub__srphp cluster).
@@ -59,9 +60,7 @@ final class ProcessLocalTopologyTest extends TestCase
         return ['zero' => [0], 'two' => [2], 'negative' => [-1]];
     }
 
-    /**
-     * @dataProvider provideForeignCounts
-     */
+    #[DataProvider('provideForeignCounts')]
     public function testHelperRejectsForeignCountNamingWorkerAndCount(int $count): void
     {
         $this->expectException(RuntimeException::class);

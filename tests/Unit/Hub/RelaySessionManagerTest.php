@@ -8,6 +8,7 @@ use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Hub\RelaySessionManager;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use Phlix\Hub\Tests\Support\Narrow;
 
 /**
  * Unit tests for {@see RelaySessionManager}.
@@ -988,12 +989,12 @@ final class RelaySessionManagerTest extends TestCase
                 }
                 if (str_contains($sql, 'INSERT INTO relay_user_settings')) {
                     self::assertIsArray($params);
-                    $store[(string) $params['user_id']] = (int) $params['throttle_bps'];
+                    $store[Narrow::castString($params['user_id'])] = Narrow::castInt($params['throttle_bps']);
                     return null;
                 }
                 if (str_contains($sql, 'SELECT throttle_bps FROM relay_user_settings')) {
                     self::assertIsArray($params);
-                    $uid = (string) $params['user_id'];
+                    $uid = Narrow::castString($params['user_id']);
                     return array_key_exists($uid, $store)
                         ? [['throttle_bps' => (string) $store[$uid]]]
                         : [];

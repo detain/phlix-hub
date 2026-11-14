@@ -39,6 +39,7 @@ use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use Workerman\Connection\TcpConnection;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function array_keys;
 use function hash;
@@ -307,8 +308,8 @@ final class McpControllerTest extends TestCase
      * cosmetic omission: JSON-RPC 2.0 §4 makes the member mandatory precisely so
      * a 1.0 client cannot be silently served 2.0 semantics.
      *
-     * @dataProvider badJsonRpcMemberProvider
      */
+    #[DataProvider('badJsonRpcMemberProvider')]
     public function testABadJsonrpcMemberIsAnInvalidRequest(string $body): void
     {
         $decoded = self::body($this->controller()->handle($this->request($body, self::GOOD_TOKEN)));
@@ -345,8 +346,8 @@ final class McpControllerTest extends TestCase
      * anything it had outstanding — and waited for a response that had already
      * been sent.
      *
-     * @dataProvider badIdProvider
      */
+    #[DataProvider('badIdProvider')]
     public function testAnIdThatIsNotAStringOrIntegerIsAnInvalidRequest(string $idJson): void
     {
         $decoded = self::body($this->controller()->handle($this->request(
@@ -383,8 +384,8 @@ final class McpControllerTest extends TestCase
      * Without these a validator that refused every id would satisfy the failing
      * rows perfectly.
      *
-     * @dataProvider usableIdProvider
      */
+    #[DataProvider('usableIdProvider')]
     public function testAUsableIdIsEchoedVerbatim(string $idJson, string|int|null $expected): void
     {
         $decoded = self::body($this->controller()->handle($this->request(
@@ -419,8 +420,8 @@ final class McpControllerTest extends TestCase
      * `id`-absence is knowable even when everything else is broken, which is why
      * the controller settles that question first.
      *
-     * @dataProvider malformedNotificationProvider
      */
+    #[DataProvider('malformedNotificationProvider')]
     public function testAMalformedNotificationIsStillAnsweredWithSilence(string $body): void
     {
         $response = $this->controller()->handle($this->request($body, self::GOOD_TOKEN));
@@ -697,8 +698,8 @@ final class McpControllerTest extends TestCase
      * unterminated stream to every generic HTTP client, whose failure mode is a
      * hang rather than an error.
      *
-     * @dataProvider unacceptableAcceptProvider
      */
+    #[DataProvider('unacceptableAcceptProvider')]
     public function testAGetWithoutAnEventStreamAcceptIs406(?string $accept): void
     {
         $headers = $accept === null ? [] : ['ACCEPT' => $accept];
@@ -728,8 +729,8 @@ final class McpControllerTest extends TestCase
      * The SUCCEEDING control: an `Accept` that DOES list `text/event-stream`
      * opens the stream — including the shapes a real client sends it in.
      *
-     * @dataProvider acceptableAcceptProvider
      */
+    #[DataProvider('acceptableAcceptProvider')]
     public function testAGetWithAnEventStreamAcceptOpensAStream(string $accept): void
     {
         $response = $this->controller()->stream(
@@ -841,8 +842,8 @@ final class McpControllerTest extends TestCase
      * behaviour it described was deliberately replaced, which is what this step
      * is for.
      *
-     * @dataProvider supportedRevisionProvider
      */
+    #[DataProvider('supportedRevisionProvider')]
     public function testASupportedRevisionIsEchoedBack(string $revision): void
     {
         $body = self::body($this->controller()->handle($this->request(
@@ -880,8 +881,8 @@ final class McpControllerTest extends TestCase
      * is an echo or a substitute — so `_meta` says which, and lists what the hub
      * can speak, so the client can retry without a second round trip.
      *
-     * @dataProvider unsupportedRevisionProvider
      */
+    #[DataProvider('unsupportedRevisionProvider')]
     public function testAnUnsupportedRevisionIsDowngradedAndDeclared(string $revision): void
     {
         $body = self::body($this->controller()->handle($this->request(
@@ -924,8 +925,8 @@ final class McpControllerTest extends TestCase
      * client sending `"protocolVersion": 20250618` was told it had negotiated
      * successfully. It had not — nothing had been compared.
      *
-     * @dataProvider unusableProtocolVersionProvider
      */
+    #[DataProvider('unusableProtocolVersionProvider')]
     public function testAProtocolVersionOfTheWrongTypeIsInvalidParams(string $json): void
     {
         $body = self::body($this->controller()->handle($this->request(
@@ -1003,8 +1004,8 @@ final class McpControllerTest extends TestCase
      * Without this row a controller that 400-ed every request carrying the
      * header would satisfy the test above perfectly.
      *
-     * @dataProvider supportedRevisionProvider
      */
+    #[DataProvider('supportedRevisionProvider')]
     public function testASupportedProtocolVersionHeaderIsAccepted(string $revision): void
     {
         $response = $this->controller()->handle($this->request(
@@ -1354,8 +1355,8 @@ final class McpControllerTest extends TestCase
      * The `calls === 0` assertion is load-bearing: without it a controller that
      * ran the tool with an empty map AND returned an error would pass.
      *
-     * @dataProvider unusableArgumentsProvider
      */
+    #[DataProvider('unusableArgumentsProvider')]
     public function testArgumentsThatAreNotAnObjectAreInvalidParams(string $argumentsJson): void
     {
         $probe = new RecordingMcpTool();

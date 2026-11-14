@@ -29,6 +29,7 @@ use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use ReflectionProperty;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function dirname;
 use function file_put_contents;
@@ -143,8 +144,8 @@ final class McpContainerWiringTest extends TestCase
      * comparison, so every one of them leaves the write tool unregistered. A
      * truthiness test would publish it for the first four.
      *
-     * @dataProvider notTrueProvider
      */
+    #[DataProvider('notTrueProvider')]
     public function testAFlagValueThatIsNotExactlyTrueLeavesTheToolUnregistered(mixed $value): void
     {
         $registry = $this->container(playbackControl: $value)->get(McpToolRegistry::class);

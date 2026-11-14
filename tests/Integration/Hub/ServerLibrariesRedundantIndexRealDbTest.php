@@ -13,14 +13,15 @@ namespace Phlix\Hub\Tests\Integration\Hub;
 
 use Phlix\Hub\Common\Database\MigrationRunner;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * HUB-S11 (HUB-23) against a real InnoDB: migration 058 drops 031's redundant
  * standalone `(server_id)` key, leaving UNIQUE (server_id, library_id) and the
  * FK intact, and both arms of its replay guard behave.
  *
- * @group integration
  */
+#[Group('integration')]
 final class ServerLibrariesRedundantIndexRealDbTest extends RealDatabaseTestCase
 {
     private const MIGRATION = '058_drop_redundant_server_libraries_index.sql';

@@ -15,13 +15,15 @@ use Phlix\Hub\Common\Database\UpsertSyntax;
 use Phlix\Hub\Hub\HubSettingsRepository;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * HUB-S14: the upsert SQL is portable across MySQL 8.0.19+ (row alias) and
  * MariaDB / older MySQL (VALUES()).
  *
- * @group unit
  */
+#[Group('unit')]
 final class UpsertSyntaxTest extends TestCase
 {
     private const SQL = "INSERT INTO t (a, b) VALUES (:a, :b)\n   AS new_row\n   ON DUPLICATE KEY UPDATE "
@@ -51,9 +53,7 @@ final class UpsertSyntaxTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider versions
-     */
+    #[DataProvider('versions')]
     public function testFlavorDetection(string $version, bool $alias): void
     {
         self::assertSame($alias, UpsertSyntax::supportsAlias($version));

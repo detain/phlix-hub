@@ -7,6 +7,7 @@ namespace Phlix\Hub\Tests\Unit;
 use Phlix\Hub\Application;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
+use Phlix\Hub\Tests\Support\Narrow;
 
 /**
  * Unit tests for {@see Application}'s static-asset caching: the hashed-immutable
@@ -510,8 +511,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
     {
         // Resolve the live committed chunk by prefix: the content hash rotates on every
         // /app regen, so a literal name would rot at each ui re-vendor.
-        $found = glob(dirname(__DIR__, 2) . '/public/assets/app/assets/AdminLayout-*.js');
-        $this->assertNotEmpty($found, 'committed /app bundle carries an AdminLayout chunk');
+        $found = Narrow::globFiles(dirname(__DIR__, 2) . '/public/assets/app/assets/AdminLayout-*.js');
         $relative = '/assets/app/assets/' . basename($found[0]);
         $file = $this->staticFileShape($relative);
         $response = Application::buildStaticFastPathResponse('body', $relative, $file, null, null);
@@ -609,10 +609,9 @@ final class ApplicationStaticAssetCacheTest extends TestCase
      */
     private function hashedPlayerChunkPath(): string
     {
-        $found = glob(dirname(__DIR__, 2) . '/public/assets/app/assets/PlayerPage-*.js');
-        $this->assertNotEmpty($found, 'the committed SPA bundle must carry a hashed PlayerPage chunk');
+        $found = Narrow::globFiles(dirname(__DIR__, 2) . '/public/assets/app/assets/PlayerPage-*.js');
 
-        return '/assets/app/assets/' . basename((string) $found[0]);
+        return '/assets/app/assets/' . basename($found[0]);
     }
 
     public function testHashedJsGzipWireLegCarriesContentEncodingAndVary(): void

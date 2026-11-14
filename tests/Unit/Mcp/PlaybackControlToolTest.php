@@ -19,6 +19,7 @@ use Phlix\Hub\Mcp\Tools\PlaybackControlTool;
 use Phlix\Shared\Hub\ServerInfoDto;
 use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function base64_decode;
 use function json_decode;
@@ -160,8 +161,8 @@ final class PlaybackControlToolTest extends TestCase
      *
      * @param array<string, mixed> $arguments
      *
-     * @dataProvider forwardedCallProvider
      */
+    #[DataProvider('forwardedCallProvider')]
     public function testEachActionForwardsTheExpectedVerbAndPath(
         array $arguments,
         string $method,
@@ -186,8 +187,8 @@ final class PlaybackControlToolTest extends TestCase
      * a converter that emitted the same number for both would satisfy either row
      * alone. Getting this wrong is a silent wrong-position seek, not an error.
      *
-     * @dataProvider seekUnitProvider
      */
+    #[DataProvider('seekUnitProvider')]
     public function testSeekConvertsSecondsIntoTheTargetsOwnUnit(
         string $target,
         int $seconds,
@@ -287,8 +288,8 @@ final class PlaybackControlToolTest extends TestCase
      *
      * @param array<string, mixed> $arguments
      *
-     * @dataProvider unusableArgumentProvider
      */
+    #[DataProvider('unusableArgumentProvider')]
     public function testUnusableArgumentsAreRefused(array $arguments): void
     {
         $this->expectException(McpInvalidArgumentsException::class);

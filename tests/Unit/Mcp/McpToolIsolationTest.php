@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Mcp;
 
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function array_map;
 use function basename;
@@ -134,8 +135,8 @@ final class McpToolIsolationTest extends TestCase
     /**
      * No tool file may name a forbidden symbol in code.
      *
-     * @dataProvider toolFileProvider
      */
+    #[DataProvider('toolFileProvider')]
     public function testAToolReachesAServerOnlyThroughTheContext(string $file): void
     {
         $found = self::forbiddenSymbolsIn(self::strippedSource($file));
@@ -172,8 +173,8 @@ final class McpToolIsolationTest extends TestCase
      * every literal be a whole path. It bans the three streaming roots at the
      * START of a literal instead, which is the only position that can open one.
      *
-     * @dataProvider toolFileProvider
      */
+    #[DataProvider('toolFileProvider')]
     public function testNoToolTargetsAByteStreamingPrefix(string $file): void
     {
         $code = self::strippedSource($file);
@@ -217,8 +218,8 @@ final class McpToolIsolationTest extends TestCase
      * Control for the check above: the ban must actually fire on a literal that
      * DOES open a streaming family, or it is asserting nothing.
      *
-     * @dataProvider streamingRootProvider
      */
+    #[DataProvider('streamingRootProvider')]
     public function testTheStreamingPrefixBanActuallyFires(string $root): void
     {
         $literal = $root . '/job-1/seg-00001.ts';
@@ -266,8 +267,8 @@ final class McpToolIsolationTest extends TestCase
      * The detector must fire on a source that DOES contain a banned symbol —
      * once per banned symbol, so no rule is quietly unreachable.
      *
-     * @dataProvider forbiddenSymbolProvider
      */
+    #[DataProvider('forbiddenSymbolProvider')]
     public function testTheDetectorActuallyFires(string $symbol): void
     {
         $synthetic = '<?php class Bad { public function go(' . $symbol . ' $x) { return $x; } }';
@@ -322,8 +323,8 @@ final class McpToolIsolationTest extends TestCase
      * Every tool file must implement the interface — otherwise a file could sit
      * in `src/Mcp/Tools/` passing this suite while never being a tool at all.
      *
-     * @dataProvider toolFileProvider
      */
+    #[DataProvider('toolFileProvider')]
     public function testEveryFileInTheToolsDirectoryIsATool(string $file): void
     {
         self::assertStringContainsString(

@@ -17,6 +17,7 @@ use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use SplFileInfo;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function array_keys;
 use function count;
@@ -199,8 +200,8 @@ final class RelayWorkerQueryStringCredentialTest extends TestCase
      * single- and double-quoted forms of the working `->get()` spelling. A guard
      * validated by one plant is a guard validated against one spelling.
      *
-     * @dataProvider plantedViolations
      */
+    #[DataProvider('plantedViolations')]
     public function testTheDetectorFiresOnEachPlantedShape(string $shape, string $expectedLabel): void
     {
         $matched = [];
@@ -222,8 +223,8 @@ final class RelayWorkerQueryStringCredentialTest extends TestCase
      * patterns are not so broad that they would be deleted as noise the first
      * time a container lookup trips them.
      *
-     * @dataProvider innocentShapes
      */
+    #[DataProvider('innocentShapes')]
     public function testTheDetectorStaysSilentOnInnocentShapes(string $shape): void
     {
         foreach (self::FORBIDDEN as $label => $pattern) {

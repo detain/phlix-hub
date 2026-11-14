@@ -54,6 +54,7 @@ use RuntimeException;
 use Workerman\Events\Select;
 use Workerman\Timer;
 use Workerman\Worker;
+use Phlix\Hub\Tests\Support\Narrow;
 
 /**
  * @package Phlix\Hub\Tests\Unit\Federation
@@ -273,11 +274,13 @@ final class FederationMasterTlsDialTest extends TestCase
         // The leaf's own push rode back DOWN the TLS channel; the child saved
         // the payload frame verbatim.
         $written = json_decode((string) file_get_contents($this->dir . '/leaf-data.json'), true);
-        self::assertIsArray($written);
-        self::assertSame('share-out-1', $written['shares'][0]['id'] ?? null);
+        $written = Narrow::arr($written);
+        $shares = Narrow::arr($written['shares'] ?? null);
+        $share = Narrow::arr($shares[0] ?? null);
+        self::assertSame('share-out-1', $share['id'] ?? null);
         // M-5 ORIGIN law: outbound offers carry THIS hub's id, not a row id —
         // proven with two independent keypairs and a foreign process.
-        self::assertSame(self::LEAF_HUB_ID, $written['shares'][0]['peer_id'] ?? null);
+        self::assertSame(self::LEAF_HUB_ID, $share['peer_id'] ?? null);
 
         // The ceremony really flipped the leaf's verified/session state.
         self::assertTrue($manager->isConnected());

@@ -51,6 +51,8 @@ use Phlix\Hub\Tests\Support\Container\FixedConnectionProvider;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
 use Psr\Container\ContainerInterface;
 use ReflectionProperty;
+use PHPUnit\Framework\Attributes\Group;
+use Phlix\Hub\Tests\Support\Narrow;
 
 use function bin2hex;
 use function file_put_contents;
@@ -64,8 +66,8 @@ use function unlink;
 /**
  * @package Phlix\Hub\Tests\Integration\Container
  *
- * @group integration
  */
+#[Group('integration')]
 final class AuthTokenSessionWiringGuardTest extends RealDatabaseTestCase
 {
     use ConnectionPoolTestControl;
@@ -198,7 +200,7 @@ final class AuthTokenSessionWiringGuardTest extends RealDatabaseTestCase
 
         /** @var mixed $mintedRows */
         $mintedRows = $this->db->query('SELECT id, user_id, status FROM auth_token_sessions');
-        self::assertIsArray($mintedRows);
+        $mintedRows = Narrow::rows($mintedRows);
         self::assertCount(1, $mintedRows, 'the ceremony must open exactly one family');
         self::assertSame('active', $mintedRows[0]['status']);
 

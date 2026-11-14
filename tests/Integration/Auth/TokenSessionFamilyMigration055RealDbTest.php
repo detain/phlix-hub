@@ -38,6 +38,8 @@ use Phlix\Hub\Auth\TokenSessionRepository;
 use Phlix\Hub\Common\Database\MigrationRunner;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
 use Phlix\Hub\Common\Support\Ids;
+use PHPUnit\Framework\Attributes\Group;
+use Phlix\Hub\Tests\Support\Narrow;
 
 use function array_column;
 use function array_map;
@@ -50,8 +52,8 @@ use function trim;
 /**
  * @package Phlix\Hub\Tests\Integration\Auth
  *
- * @group integration
  */
+#[Group('integration')]
 final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCase
 {
     /** Mirrors AuthManager::ROTATION_GRACE_SECONDS — kept as a literal here
@@ -79,12 +81,13 @@ final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCas
             . 'WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (:t1, :t2) ORDER BY TABLE_NAME, ORDINAL_POSITION',
             ['t1' => 'auth_token_sessions', 't2' => 'auth_refresh_grants'],
         );
-        self::assertIsArray($columns);
+        $columns = Narrow::rows($columns);
 
         $shape = [];
         foreach ($columns as $row) {
-            $descriptor = $row['COLUMN_NAME'] . ':' . $row['COLUMN_TYPE'] . ':' . $row['IS_NULLABLE'];
-            $shape[(string) $row['TABLE_NAME']][] = $descriptor;
+            $descriptor = Narrow::castString($row['COLUMN_NAME']) . ':' . Narrow::castString($row['COLUMN_TYPE'])
+                . ':' . Narrow::castString($row['IS_NULLABLE']);
+            $shape[Narrow::castString($row['TABLE_NAME'])][] = $descriptor;
         }
 
         // The query orders by TABLE_NAME (alphabetical: auth_refresh_grants
@@ -121,13 +124,17 @@ final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCas
             . 'AND SEQ_IN_INDEX = 1 ORDER BY TABLE_NAME, INDEX_NAME',
             ['t1' => 'auth_token_sessions', 't2' => 'auth_refresh_grants'],
         );
-        self::assertIsArray($indexes);
+        $indexes = Narrow::rows($indexes);
         self::assertSame(
             ['auth_refresh_grants:idx_arg_consumed', 'auth_refresh_grants:idx_arg_expires_at',
                 'auth_refresh_grants:idx_arg_session',
                 'auth_refresh_grants:PRIMARY', 'auth_token_sessions:idx_ats_user',
                 'auth_token_sessions:idx_ats_user_status', 'auth_token_sessions:PRIMARY'],
-            array_map(static fn (array $r): string => $r['TABLE_NAME'] . ':' . $r['INDEX_NAME'], $indexes),
+            array_map(
+                static fn (array $r): string => Narrow::castString($r['TABLE_NAME']) . ':'
+                    . Narrow::castString($r['INDEX_NAME']),
+                $indexes,
+            ),
         );
 
         /** @var mixed $fks */
@@ -138,7 +145,7 @@ final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCas
             . 'WHERE k.TABLE_SCHEMA = DATABASE() AND k.TABLE_NAME IN (:t1, :t2) ORDER BY k.TABLE_NAME',
             ['t1' => 'auth_token_sessions', 't2' => 'auth_refresh_grants'],
         );
-        self::assertIsArray($fks);
+        $fks = Narrow::rows($fks);
         self::assertSame([
             [
                 'TABLE_NAME' => 'auth_refresh_grants',
@@ -414,7 +421,7 @@ final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCas
         self::assertSame($stamp, $this->revokedAtOf($familyOne));
         /** @var mixed $rows */
         $rows = $this->db->query('SELECT revoke_reason FROM auth_token_sessions WHERE id = :id', ['id' => $familyOne]);
-        self::assertIsArray($rows);
+        $rows = Narrow::rows($rows);
         self::assertSame('twin_probe', $rows[0]['revoke_reason']);
     }
 
@@ -454,10 +461,10 @@ final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCas
     {
         /** @var mixed $rows */
         $rows = $this->db->query('SELECT consumed_at FROM auth_refresh_grants WHERE jti = :jti', ['jti' => $jti]);
-        self::assertIsArray($rows);
+        $rows = Narrow::rows($rows);
         self::assertCount(1, $rows);
 
-        return $rows[0]['consumed_at'] === null ? null : (string) $rows[0]['consumed_at'];
+        return $rows[0]['consumed_at'] === null ? null : Narrow::castString($rows[0]['consumed_at']);
     }
 
     /**
@@ -492,9 +499,9 @@ final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCas
     {
         /** @var mixed $rows */
         $rows = $this->db->query('SELECT COUNT(*) AS c FROM auth_refresh_grants WHERE jti = :jti', ['jti' => $jti]);
-        self::assertIsArray($rows);
+        $rows = Narrow::rows($rows);
 
-        return (int) $rows[0]['c'] > 0;
+        return Narrow::castInt($rows[0]['c']) > 0;
     }
 
     /** expires_at read back as a UNIX stamp (both directions on the DB clock). */
@@ -505,7 +512,7 @@ final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCas
             'SELECT UNIX_TIMESTAMP(expires_at) AS x FROM auth_refresh_grants WHERE jti = :jti',
             ['jti' => $jti],
         );
-        self::assertIsArray($rows);
+        $rows = Narrow::rows($rows);
         self::assertCount(1, $rows);
         $raw = $rows[0]['x'] ?? null;
 
@@ -516,18 +523,18 @@ final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCas
     {
         /** @var mixed $rows */
         $rows = $this->db->query('SELECT revoked_at FROM auth_token_sessions WHERE id = :id', ['id' => $family]);
-        self::assertIsArray($rows);
+        $rows = Narrow::rows($rows);
         self::assertCount(1, $rows);
 
-        return $rows[0]['revoked_at'] === null ? null : (string) $rows[0]['revoked_at'];
+        return $rows[0]['revoked_at'] === null ? null : Narrow::castString($rows[0]['revoked_at']);
     }
 
     private function countRows(string $table): int
     {
         /** @var mixed $rows */
         $rows = $this->db->query('SELECT COUNT(*) AS c FROM ' . $table);
-        self::assertIsArray($rows);
+        $rows = Narrow::rows($rows);
 
-        return (int) $rows[0]['c'];
+        return Narrow::castInt($rows[0]['c']);
     }
 }

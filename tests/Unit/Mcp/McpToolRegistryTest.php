@@ -17,6 +17,7 @@ use Phlix\Hub\Mcp\Tools\SearchMediaTool;
 use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function array_column;
 use function count;
@@ -146,8 +147,8 @@ final class McpToolRegistryTest extends TestCase
      * Every shipped tool must declare a schema that names its required
      * arguments, or the model is guessing.
      *
-     * @dataProvider shippedToolProvider
      */
+    #[DataProvider('shippedToolProvider')]
     public function testEveryShippedToolDeclaresAUsableSchema(McpToolInterface $tool): void
     {
         $schema = $tool->inputSchema();

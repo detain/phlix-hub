@@ -23,6 +23,7 @@ use Psr\Container\ContainerInterface;
 use ReflectionProperty;
 use RuntimeException;
 use Workerman\Worker;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * M22 — bind-time TLS posture law for the :8805 federation listener.
@@ -150,8 +151,8 @@ final class FederationWorkerTlsPostureTest extends TestCase
      * @param bool $requireTls federation_require_tls mandate.
      * @param string $expected Posture the machine must decide.
      *
-     * @dataProvider postureProvider
      */
+    #[DataProvider('postureProvider')]
     public function testBootPostureTruthTable(bool $useTls, bool $requireTls, string $expected): void
     {
         self::assertSame(

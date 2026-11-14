@@ -36,6 +36,7 @@ use Workerman\Connection\TcpConnection;
 use Workerman\Events\Fiber;
 use Workerman\Events\Select;
 use Workerman\Worker;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function array_keys;
 use function array_pop;
@@ -783,9 +784,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'GET admin music denied' => ['GET', '/api/v1/admin/music/scan', false];
     }
 
-    /**
-     * @dataProvider musicBrowseScopeProvider
-     */
+    #[DataProvider('musicBrowseScopeProvider')]
     public function testMusicBrowseScopeGate(string $method, string $path, bool $expected): void
     {
         $controller = $this->controller(
@@ -937,9 +936,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'POST music scan via double slash' => ['POST', 'api/v1/music//scan'];
     }
 
-    /**
-     * @dataProvider deniedMusicScopeProvider
-     */
+    #[DataProvider('deniedMusicScopeProvider')]
     public function testDeniedMusicPathsReturn403AndAreNotForwarded(string $method, string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -988,9 +985,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'bare description.xml' => ['/description.xml'];
     }
 
-    /**
-     * @dataProvider dlnaStillDeniedProvider
-     */
+    #[DataProvider('dlnaStillDeniedProvider')]
     public function testDlnaPathsRemainOutOfBrowseScope(string $path): void
     {
         $controller = $this->controller(
@@ -1239,9 +1234,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'band called Scan. with a trailing dot' => ['api/v1/music/artists/Scan./albums'];
     }
 
-    /**
-     * @dataProvider legitimateMusicReadProvider
-     */
+    #[DataProvider('legitimateMusicReadProvider')]
     public function testLegitimateMusicReadsStillPassTheHardenedGuard(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -1318,8 +1311,8 @@ final class ServerProxyControllerTest extends TestCase
      * for the byte stream, pinned end-to-end through the real router by
      * {@see self::testHeadIsRoutedOnlyForTheDirectPlayByteStream()}.
      *
-     * @dataProvider acceptedStreamingScopeProvider
      */
+    #[DataProvider('acceptedStreamingScopeProvider')]
     public function testStreamingReadsPassScopeGateAndAreForwarded(string $method, string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -1697,8 +1690,8 @@ final class ServerProxyControllerTest extends TestCase
      * Non-GET/HEAD methods must never reach a streaming path: the browse-scope
      * gate returns 403 `proxy.scope_denied` and nothing is forwarded.
      *
-     * @dataProvider deniedMutatingStreamingProvider
      */
+    #[DataProvider('deniedMutatingStreamingProvider')]
     public function testMutatingMethodsOnStreamingPathsReturn403AndAreNotForwarded(
         string $method,
         string $path,
@@ -1746,9 +1739,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'transcodeX sibling of /api/v1/transcode' => ['api/v1/transcodeX/job/status'];
     }
 
-    /**
-     * @dataProvider siblingStreamingPrefixProvider
-     */
+    #[DataProvider('siblingStreamingPrefixProvider')]
     public function testSiblingStreamingPrefixesAreDenied(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -1891,8 +1882,8 @@ final class ServerProxyControllerTest extends TestCase
      * bridge with the exact server route + POST method intact (the server's
      * `TranscodeController::start` is `POST /api/v1/media/{id}/transcode`).
      *
-     * @dataProvider acceptedTranscodeStartProvider
      */
+    #[DataProvider('acceptedTranscodeStartProvider')]
     public function testTranscodeStartPostPassesScopeGateAndIsForwarded(
         string $id,
         string $expectedPath,
@@ -2018,8 +2009,8 @@ final class ServerProxyControllerTest extends TestCase
      * A music NAME carried in the query string reaches the relay bridge
      * byte-for-byte, including separators the PATH guard refuses.
      *
-     * @dataProvider musicNameInQueryStringProvider
      */
+    #[DataProvider('musicNameInQueryStringProvider')]
     public function testMusicNameInTheQueryStringSurvivesThePathTraversalGuard(string $queryString): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -2120,9 +2111,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'media merge (admin)' => ['media/merge'];
     }
 
-    /**
-     * @dataProvider stillDeniedSiblingMediaPostProvider
-     */
+    #[DataProvider('stillDeniedSiblingMediaPostProvider')]
     public function testSiblingMediaPostRoutesStillDenied(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -2170,9 +2159,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'poster' => ['/api/v1/media/item-123/poster'];
     }
 
-    /**
-     * @dataProvider allowedSiblingMediaPutProvider
-     */
+    #[DataProvider('allowedSiblingMediaPutProvider')]
     public function testSiblingMediaPutRoutesAreAllowed(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -2213,9 +2200,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'unwatched' => ['/api/v1/media/item-123/unwatched'];
     }
 
-    /**
-     * @dataProvider allowedSiblingMediaPostWatchedProvider
-     */
+    #[DataProvider('allowedSiblingMediaPostWatchedProvider')]
     public function testSiblingMediaPostWatchedUnwatchedAreAllowed(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -2258,9 +2243,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'create playlist' => ['/api/v1/playlists'];
     }
 
-    /**
-     * @dataProvider allowedMediaPostWriteProvider
-     */
+    #[DataProvider('allowedMediaPostWriteProvider')]
     public function testPostWriteActionsFavoriteAndPlaylistAreAllowed(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -2303,9 +2286,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'clear rating' => ['/api/v1/media/item-123/rating'];
     }
 
-    /**
-     * @dataProvider allowedMediaDeleteProvider
-     */
+    #[DataProvider('allowedMediaDeleteProvider')]
     public function testDeleteWriteActionsAreAllowed(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -2364,9 +2345,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'PUT playlists sub-path' => ['PUT', '/api/v1/playlists/pl-1'];
     }
 
-    /**
-     * @dataProvider deniedNonListedWriteProvider
-     */
+    #[DataProvider('deniedNonListedWriteProvider')]
     public function testNonListedWriteActionsAreDenied(string $method, string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -2413,9 +2392,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'browse read' => ['/api/v1/libraries'];
     }
 
-    /**
-     * @dataProvider patchAlwaysDeniedProvider
-     */
+    #[DataProvider('patchAlwaysDeniedProvider')]
     public function testPatchIsAlwaysDenied(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -2649,9 +2626,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'transcode-prefixed longer segment' => ['api/v1/media/x/transcodeX'];
     }
 
-    /**
-     * @dataProvider deniedTranscodeEdgeProvider
-     */
+    #[DataProvider('deniedTranscodeEdgeProvider')]
     public function testTranscodeRegexEdgePathsAreDenied(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -2896,9 +2871,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'album named a single dot' => ['api/v1/music/albums/.'];
     }
 
-    /**
-     * @dataProvider knownUnreachableMusicNameProvider
-     */
+    #[DataProvider('knownUnreachableMusicNameProvider')]
     public function testKnownUnreachableMusicNamesAreDeniedByDesign(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -2937,8 +2910,8 @@ final class ServerProxyControllerTest extends TestCase
      * proxy.scope_denied BEFORE the allowlist runs and must never be forwarded
      * over the relay bridge.
      *
-     * @dataProvider traversalPathProvider
      */
+    #[DataProvider('traversalPathProvider')]
     public function testTraversalPathsReturn403AndAreNotForwarded(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -3097,8 +3070,8 @@ final class ServerProxyControllerTest extends TestCase
      * the end-to-end, public-surface proof: drive `proxy()` and capture the
      * `timeout` field of the forwarded envelope.
      *
-     * @dataProvider forwardedTimeoutProvider
      */
+    #[DataProvider('forwardedTimeoutProvider')]
     public function testReplyTimeoutIsForwardedToTheRelayBridge(
         string $method,
         string $path,
@@ -3188,9 +3161,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'POST transcode-start' => ['POST', '/api/v1/media/item-123/transcode', 30.0];
     }
 
-    /**
-     * @dataProvider replyTimeoutClassifierProvider
-     */
+    #[DataProvider('replyTimeoutClassifierProvider')]
     public function testReplyTimeoutForPathClassifier(string $method, string $path, float $expected): void
     {
         $controller = $this->controller(
@@ -3589,8 +3560,8 @@ final class ServerProxyControllerTest extends TestCase
      * that the prefix forwarded, leaving phlix-server's POST-only registration as
      * the only thing standing between the relay and a scan trigger.
      *
-     * @dataProvider s107DeniedActionEvasionProvider
      */
+    #[DataProvider('s107DeniedActionEvasionProvider')]
     public function testS107WriteActionPathsAreDeniedUnderAReadVerb(string $route, string $path): void
     {
         $controller = $this->controller(
@@ -3624,8 +3595,8 @@ final class ServerProxyControllerTest extends TestCase
      * for every verb, so no future widening of a write map can re-expose one of
      * these action routes.
      *
-     * @dataProvider s107DeniedActionMethodProvider
      */
+    #[DataProvider('s107DeniedActionMethodProvider')]
     public function testS107WriteActionPathsAreDeniedForEveryMethod(string $method, string $path): void
     {
         $controller = $this->controller(
@@ -3666,9 +3637,7 @@ final class ServerProxyControllerTest extends TestCase
         }
     }
 
-    /**
-     * @dataProvider s107DeniedEndToEndProvider
-     */
+    #[DataProvider('s107DeniedEndToEndProvider')]
     public function testS107DeniedActionPaths403AndAreNotForwarded(string $method, string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -3772,8 +3741,8 @@ final class ServerProxyControllerTest extends TestCase
      * Each legitimate read still clears every gate, reaches the relay bridge and
      * is forwarded BYTE-IDENTICALLY (deny normalisation never rewrites the path).
      *
-     * @dataProvider s107LegitimateReadProvider
      */
+    #[DataProvider('s107LegitimateReadProvider')]
     public function testS107LegitimateReadsUnderTheSweptPrefixesStillForward(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -3865,9 +3834,7 @@ final class ServerProxyControllerTest extends TestCase
         }
     }
 
-    /**
-     * @dataProvider s107DispositionProvider
-     */
+    #[DataProvider('s107DispositionProvider')]
     public function testS107UnpinnedWriteRoutesKeepTheirDisposition(
         string $method,
         string $path,
@@ -3915,9 +3882,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'DELETE rating' => ['DELETE', '/api/v1/media/item-1/rating'];
     }
 
-    /**
-     * @dataProvider s107AllowedWriteStillAllowedProvider
-     */
+    #[DataProvider('s107AllowedWriteStillAllowedProvider')]
     public function testS107SweepDoesNotBreakTheAllowedWrites(string $method, string $path): void
     {
         $controller = $this->controller(
@@ -4225,8 +4190,8 @@ final class ServerProxyControllerTest extends TestCase
      * (action + a trailing non-separator character) stays browsable — the
      * exact/anchored compare, never a substring one.
      *
-     * @dataProvider s332ManifestDerivedInScopeProvider
      */
+    #[DataProvider('s332ManifestDerivedInScopeProvider')]
     public function testS332DerivedInScopeRoutesAreDeniedInEverySpelling(string $method, string $path): void
     {
         $controller = $this->controller(
@@ -4274,8 +4239,8 @@ final class ServerProxyControllerTest extends TestCase
      * The near-miss sibling check — kept separate so the no-`{param}` route
      * (`/api/v1/music/scan`) still gets it.
      *
-     * @dataProvider s332ManifestDerivedInScopeProvider
      */
+    #[DataProvider('s332ManifestDerivedInScopeProvider')]
     public function testS332DerivedRouteSiblingIsNotAbsorbed(string $method, string $path): void
     {
         $controller = $this->controller(
@@ -4564,9 +4529,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'sibling prefix' => ['/media-secret/item-123/stream', false];
     }
 
-    /**
-     * @dataProvider s247ByteStreamMatcherProvider
-     */
+    #[DataProvider('s247ByteStreamMatcherProvider')]
     public function testS247ByteStreamIsMatchedExactlyNotByPrefix(string $path, bool $expected): void
     {
         $controller = $this->controller(
@@ -4618,9 +4581,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'artwork' => ['/api/v1/artwork/item-123'];
     }
 
-    /**
-     * @dataProvider s247HeadDeniedProvider
-     */
+    #[DataProvider('s247HeadDeniedProvider')]
     public function testS247HeadScopeIsOnlyTheByteStream(string $path): void
     {
         $controller = $this->controller(
@@ -4713,8 +4674,8 @@ final class ServerProxyControllerTest extends TestCase
      * because the entries were removed from that key as well and a partial
      * re-add (GET only, or HEAD only) must not slip through.
      *
-     * @dataProvider s107FollowupDeadPrefixProvider
      */
+    #[DataProvider('s107FollowupDeadPrefixProvider')]
     public function testS107FollowupDeadPrefixesAreOutOfBrowseScope(string $path): void
     {
         $controller = $this->controller(
@@ -4739,8 +4700,8 @@ final class ServerProxyControllerTest extends TestCase
      * End-to-end through `proxy()`: a removed prefix 403s `proxy.scope_denied`
      * and never reaches the relay bridge.
      *
-     * @dataProvider s107FollowupDeadPrefixProvider
      */
+    #[DataProvider('s107FollowupDeadPrefixProvider')]
     public function testS107FollowupDeadPrefixes403AndAreNotForwarded(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -4810,9 +4771,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'music browse' => ['/api/v1/music/artists'];
     }
 
-    /**
-     * @dataProvider s107FollowupSurvivingReadProvider
-     */
+    #[DataProvider('s107FollowupSurvivingReadProvider')]
     public function testS107FollowupRemovalDoesNotBreakSurvivingReads(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -4977,8 +4936,8 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * The gate itself: each image read is in browse scope under GET.
      *
-     * @dataProvider s238ImageReadProvider
      */
+    #[DataProvider('s238ImageReadProvider')]
     public function testS238ImageReadsAreWithinBrowseScope(string $path): void
     {
         $controller = $this->controller(
@@ -5006,8 +4965,8 @@ final class ServerProxyControllerTest extends TestCase
      * assertion stayed green. The payload carries a NUL byte and a `\r\n` on
      * purpose.
      *
-     * @dataProvider s238ImageReadProvider
      */
+    #[DataProvider('s238ImageReadProvider')]
     public function testS238ImageReadsForwardAndReturnImageBytes(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -5075,9 +5034,7 @@ final class ServerProxyControllerTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider s238ImageQueryStringProvider
-     */
+    #[DataProvider('s238ImageQueryStringProvider')]
     public function testS238ImageQueryStringReachesTheBridgeByteForByte(
         string $path,
         string $queryString,
@@ -5174,9 +5131,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'admin users' => ['/api/v1/admin/users'];
     }
 
-    /**
-     * @dataProvider s238MustStayDeniedProvider
-     */
+    #[DataProvider('s238MustStayDeniedProvider')]
     public function testS238WideningAdmitsNothingBeyondTheTwoImageReads(string $path): void
     {
         $controller = $this->controller(
@@ -5204,8 +5159,8 @@ final class ServerProxyControllerTest extends TestCase
      * here is provably "the scope gate refused it" and not "the harness never got
      * anywhere".
      *
-     * @dataProvider s238MustStayDeniedProvider
      */
+    #[DataProvider('s238MustStayDeniedProvider')]
     public function testS238DeniedNeighbours403AndAreNotForwarded(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -5263,9 +5218,7 @@ final class ServerProxyControllerTest extends TestCase
         }
     }
 
-    /**
-     * @dataProvider s238NonGetVerbProvider
-     */
+    #[DataProvider('s238NonGetVerbProvider')]
     public function testS238ImageReadsAreGetOnly(string $method, string $path): void
     {
         $controller = $this->controller(
@@ -5341,9 +5294,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'trickplay two-segment job id' => ['/trickplay/a/b/sprite.jpg', false];
     }
 
-    /**
-     * @dataProvider s350TrickplayScopeProvider
-     */
+    #[DataProvider('s350TrickplayScopeProvider')]
     public function testS350TrickplayScopeMatchesTheSurvivingServerRoutes(
         string $path,
         bool $expected,
@@ -5384,8 +5335,8 @@ final class ServerProxyControllerTest extends TestCase
      * the server — relying on the peer's route table for a path the hub itself
      * had decided to admit. After the prune the hub's own gate is the refusal.
      *
-     * @dataProvider s350TrickplayDeadFamilyProvider
      */
+    #[DataProvider('s350TrickplayDeadFamilyProvider')]
     public function testS350TrickplayDeadFamilies403AndAreNotForwarded(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -5576,8 +5527,8 @@ final class ServerProxyControllerTest extends TestCase
      * a NAMED test that says which one — rather than one aggregate assertion
      * whose message has to be read to find out.
      *
-     * @dataProvider s63ExpectedPatternProvider
      */
+    #[DataProvider('s63ExpectedPatternProvider')]
     public function testS63CastPatternsArePresentInTheRealConstant(string $method, string $pattern): void
     {
         $raw = (new ReflectionClass(ServerProxyController::class))
@@ -5638,9 +5589,7 @@ final class ServerProxyControllerTest extends TestCase
         yield 'dlna seek' => ['POST', '/api/v1/dlna/renderers/uuid:5f9ec1b3-ed59-79bb/seek'];
     }
 
-    /**
-     * @dataProvider s63AllowedPathProvider
-     */
+    #[DataProvider('s63AllowedPathProvider')]
     public function testS63CastPathsAreWithinBrowseScope(string $method, string $path): void
     {
         $controller = $this->controller(
@@ -5815,9 +5764,7 @@ final class ServerProxyControllerTest extends TestCase
         }
     }
 
-    /**
-     * @dataProvider s63MustStayDeniedProvider
-     */
+    #[DataProvider('s63MustStayDeniedProvider')]
     public function testS63WideningAdmitsNothingBeyondTheNamedActions(string $method, string $path): void
     {
         $controller = $this->controller(
@@ -5842,8 +5789,8 @@ final class ServerProxyControllerTest extends TestCase
      * here is provably "the scope gate refused it" and not "the harness never
      * got anywhere".
      *
-     * @dataProvider s63MustStayDeniedProvider
      */
+    #[DataProvider('s63MustStayDeniedProvider')]
     public function testS63DeniedNeighbours403AndAreNotForwarded(string $method, string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
@@ -5896,9 +5843,7 @@ final class ServerProxyControllerTest extends TestCase
         }
     }
 
-    /**
-     * @dataProvider s63WrongVerbProvider
-     */
+    #[DataProvider('s63WrongVerbProvider')]
     public function testS63EachActionIsOpenedForExactlyOneVerb(string $method, string $path): void
     {
         $controller = $this->controller(
@@ -6243,8 +6188,8 @@ final class ServerProxyControllerTest extends TestCase
      * media rather than a proxy defect. The body is md5'd against the file on
      * disk for the same reason.
      *
-     * @dataProvider s247RangeProvider
      */
+    #[DataProvider('s247RangeProvider')]
     public function testS247RangedDirectPlayMatchesDiskByteForByte(?string $range, int $expectedStatus): void
     {
         $size = 362807;

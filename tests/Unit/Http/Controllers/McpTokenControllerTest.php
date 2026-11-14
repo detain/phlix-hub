@@ -12,6 +12,7 @@ use Phlix\Hub\Mcp\McpScopes;
 use Phlix\Hub\Mcp\McpTokenService;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function is_array;
 use function json_decode;
@@ -30,9 +31,7 @@ final class McpTokenControllerTest extends TestCase
 {
     private const string USER_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
-    /**
-     * @dataProvider unauthenticatedCallProvider
-     */
+    #[DataProvider('unauthenticatedCallProvider')]
     public function testEveryRouteRefusesAnUnauthenticatedCaller(string $method): void
     {
         $db = $this->createMock(Connection::class);
@@ -304,10 +303,10 @@ final class McpTokenControllerTest extends TestCase
      * unusable scope to try `mcp:playback:control` next would be a second wrong
      * answer.
      *
-     * @dataProvider flagProvider
      *
      * @param list<string> $expected
      */
+    #[DataProvider('flagProvider')]
     public function testTheNoValidScopesErrorAdvertisesTheFlagFilteredList(
         bool $flag,
         array $expected,

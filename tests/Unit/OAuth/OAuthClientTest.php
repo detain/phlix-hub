@@ -9,6 +9,7 @@ use Phlix\Hub\Mcp\McpScopes;
 use Phlix\Hub\OAuth\OAuthClient;
 use Phlix\Hub\OAuth\OAuthScopes;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function hash;
 
@@ -83,9 +84,7 @@ final class OAuthClientTest extends TestCase
         yield 'null byte appended'        => [self::REDIRECT . "\0"];
     }
 
-    /**
-     * @dataProvider nearMissRedirectUriProvider
-     */
+    #[DataProvider('nearMissRedirectUriProvider')]
     public function testANearMissRedirectUriIsRefused(string $candidate): void
     {
         $client = self::client();

@@ -922,7 +922,7 @@ final class FederationPeerManagerTest extends TestCase
         $this->boundPeerRow('master-hub-uuid');
 
         $this->adminDel->expects(self::once())->method('grant')
-            ->with(self::isType('string'), 'peer-master-1', 'u-1');
+            ->with(self::isString(), 'peer-master-1', 'u-1');
         $this->audit->expects(self::never())->method('logFailedAuth');
         $this->audit->expects(self::once())->method('logAdminDelegation')
             ->with('peer-master-1', 'u-1', 'grant');

@@ -16,6 +16,7 @@ use Phlix\Hub\Http\Controllers\ServerManageController;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * End-to-end My Servers dashboard flow:
@@ -31,8 +32,8 @@ use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
  *
  * @package Phlix\Hub\Tests\Integration\Hub
  *
- * @group integration
  */
+#[Group('integration')]
 final class MyServersFlowTest extends RealDatabaseTestCase
 {
     use DecodedJsonAssertions;

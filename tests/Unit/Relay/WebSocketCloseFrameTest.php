@@ -135,7 +135,7 @@ final class WebSocketCloseFrameTest extends TestCase
         // ($connection, $request)); the armed rejection must now fire.
         ($connection->onWebSocketConnected)(
             $connection,
-            $this->createMock(\Workerman\Protocols\Http\Request::class),
+            new \Workerman\Protocols\Http\Request("GET / HTTP/1.1\r\n\r\n"),
         );
 
         self::assertCount(1, $closed, 'the armed rejection must close exactly once');
@@ -174,7 +174,7 @@ final class WebSocketCloseFrameTest extends TestCase
 
         ($connection->onWebSocketConnected)(
             $connection,
-            $this->createMock(\Workerman\Protocols\Http\Request::class),
+            new \Workerman\Protocols\Http\Request("GET / HTTP/1.1\r\n\r\n"),
         );
 
         $lines = (string) file_get_contents($this->logFile);

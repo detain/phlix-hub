@@ -16,6 +16,7 @@ use PDO;
 use PDOException;
 use PHPUnit\Framework\MockObject\MockObject;
 use RuntimeException;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * SH-049 live proof for the `claim_code_hash` regime (migration 052) against
@@ -44,8 +45,8 @@ use RuntimeException;
  * Skipped when `HUB_TEST_DB_*` env vars are not set (CI runs them against a
  * MySQL service; scripts/assert-integration-tests-ran.php reds on skips).
  *
- * @group integration
  */
+#[Group('integration')]
 final class ClaimCodeHashRealDbTest extends RealDatabaseTestCase
 {
     private string $tmpDir;
@@ -59,6 +60,13 @@ final class ClaimCodeHashRealDbTest extends RealDatabaseTestCase
 
     protected function tearDown(): void
     {
+        if (!isset($this->tmpDir)) {
+            // setUp() skipped before provisioning (no test database configured).
+            parent::tearDown();
+
+            return;
+        }
+
         parent::tearDown();
         $files = glob($this->tmpDir . '/*');
         if (is_array($files)) {

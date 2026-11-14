@@ -29,6 +29,7 @@ use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function array_keys;
 use function base64_encode;
@@ -122,9 +123,7 @@ final class ErrorPromotionFramesTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider claimMapErrorProvider
-     */
+    #[DataProvider('claimMapErrorProvider')]
     public function testClaimErrorFrameCarriesDottedCodeAndLegacyText(
         int $status,
         string $code,
@@ -220,9 +219,7 @@ final class ErrorPromotionFramesTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider serverMapErrorProvider
-     */
+    #[DataProvider('serverMapErrorProvider')]
     public function testServerErrorFrameCarriesDottedCodeAndLegacyText(
         int $status,
         string $code,

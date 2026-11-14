@@ -10,6 +10,7 @@ use Phlix\Hub\Hub\InviteLinkHandler;
 use Phlix\Hub\Hub\LibrarySharingHandler;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
 use PHPUnit\Framework\MockObject\MockObject;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * Migration 049 against the REAL MySQL venue (R19-08).
@@ -28,8 +29,8 @@ use PHPUnit\Framework\MockObject\MockObject;
  *
  * Skipped when `HUB_TEST_DB_*` env vars are not set.
  *
- * @group integration
  */
+#[Group('integration')]
 final class InviteTokenHashUniqueRealDbTest extends RealDatabaseTestCase
 {
     public function testTokenHashColumnIsChar64NotNull(): void

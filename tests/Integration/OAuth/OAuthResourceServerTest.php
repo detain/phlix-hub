@@ -32,6 +32,7 @@ use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
 use Psr\Container\ContainerInterface;
 use ReflectionClass;
 use ReflectionMethod;
+use PHPUnit\Framework\Attributes\Group;
 
 use function bin2hex;
 use function glob;
@@ -95,8 +96,8 @@ use const PHP_URL_QUERY;
  *
  * @package Phlix\Hub\Tests\Integration\OAuth
  *
- * @group integration
  */
+#[Group('integration')]
 final class OAuthResourceServerTest extends RealDatabaseTestCase
 {
     private const string USERINFO_PATH = '/oauth/userinfo';

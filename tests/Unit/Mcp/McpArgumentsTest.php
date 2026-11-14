@@ -7,6 +7,7 @@ namespace Phlix\Hub\Tests\Unit\Mcp;
 use Phlix\Hub\Mcp\McpArguments;
 use Phlix\Hub\Mcp\McpInvalidArgumentsException;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for {@see McpArguments}.
@@ -20,9 +21,7 @@ final class McpArgumentsTest extends TestCase
         self::assertSame('dune', McpArguments::requiredString(['query' => '  dune  '], 'query'));
     }
 
-    /**
-     * @dataProvider unusableStringProvider
-     */
+    #[DataProvider('unusableStringProvider')]
     public function testRequiredStringThrowsOnAnythingUnusable(mixed $value): void
     {
         $this->expectException(McpInvalidArgumentsException::class);
@@ -59,8 +58,8 @@ final class McpArgumentsTest extends TestCase
      * The single-segment rule. Each of these would otherwise let a tool address
      * a DIFFERENT endpoint than the one it advertises.
      *
-     * @dataProvider multiSegmentIdProvider
      */
+    #[DataProvider('multiSegmentIdProvider')]
     public function testIdRejectsAnythingThatIsNotOnePathSegment(string $value): void
     {
         $this->expectException(McpInvalidArgumentsException::class);
@@ -93,8 +92,8 @@ final class McpArgumentsTest extends TestCase
      * Control for the rejections above: a plainly legitimate id is NOT rejected,
      * so the rule is discriminating rather than "reject everything".
      *
-     * @dataProvider legitimateIdProvider
      */
+    #[DataProvider('legitimateIdProvider')]
     public function testIdAcceptsLegitimateIdentifiers(string $value): void
     {
         self::assertSame($value, McpArguments::id(['media_id' => $value], 'media_id'));
@@ -153,8 +152,8 @@ final class McpArgumentsTest extends TestCase
      * warning rather than a failure — so the tool's tests could not see the
      * guard at all. The guard is tested where it lives.
      *
-     * @dataProvider notInTheSetProvider
      */
+    #[DataProvider('notInTheSetProvider')]
     public function testOneOfRejectsAValueOutsideTheSet(mixed $value): void
     {
         $this->expectException(McpInvalidArgumentsException::class);
@@ -223,8 +222,8 @@ final class McpArgumentsTest extends TestCase
      * ...and REJECTS rather than clamping. A clamped seek is a silent jump to a
      * timestamp nobody asked for; an error is the better answer.
      *
-     * @dataProvider unusablePositionProvider
      */
+    #[DataProvider('unusablePositionProvider')]
     public function testNonNegativeIntRejectsRatherThanClamping(mixed $value): void
     {
         $this->expectException(McpInvalidArgumentsException::class);

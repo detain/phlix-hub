@@ -57,8 +57,8 @@ use PHPUnit\Framework\Attributes\Group;
  *
  * @package Phlix\Hub\Tests\Integration\Common\RateLimit
  *
- * @group integration
  */
+#[Group('integration')]
 #[Group('integration')]
 final class DbRateLimiterIntegrationTest extends RealDatabaseTestCase
 {
@@ -251,8 +251,8 @@ final class DbRateLimiterIntegrationTest extends RealDatabaseTestCase
      * KEY UPDATE attempts = … attempts + 1` must lose NO increment under real
      * InnoDB row-lock contention, so the final counter equals writers × hits.
      *
-     * @group slow
      */
+    #[Group('slow')]
     public function testConcurrentHitsDoNotLoseIncrements(): void
     {
         $writers = 6;

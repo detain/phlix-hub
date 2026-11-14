@@ -22,6 +22,7 @@ use Psr\Container\ContainerInterface;
 use ReflectionProperty;
 use Throwable;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\Group;
 
 use function bin2hex;
 use function file_put_contents;
@@ -71,8 +72,8 @@ use function unlink;
  *
  * @package Phlix\Hub\Tests\Integration\Container
  *
- * @group integration
  */
+#[Group('integration')]
 final class RegistrationTransactionWiringTest extends RealDatabaseTestCase
 {
     use ConnectionPoolTestControl;
@@ -126,6 +127,13 @@ final class RegistrationTransactionWiringTest extends RealDatabaseTestCase
 
     protected function tearDown(): void
     {
+        if (!isset($this->db)) {
+            // setUp() skipped before provisioning (no test database configured).
+            parent::tearDown();
+
+            return;
+        }
+
         $this->dropFailureTrigger();
         LoggerFactory::reset();
         foreach (glob($this->tmpDir . '/*') ?: [] as $file) {

@@ -8,6 +8,7 @@ use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Http\Router;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Guards the trailing-slash contract on `/me/*` collection endpoints.
@@ -107,8 +108,8 @@ final class CollectionRouteSlashTest extends TestCase
      * a live database, and the alternative — re-declaring the routes in the test —
      * would guard a copy rather than the thing that ships.
      *
-     * @dataProvider collectionGroups
      */
+    #[DataProvider('collectionGroups')]
     public function testApplicationRegistersBothFormsForUserCollections(string $group, string $verb): void
     {
         $src = file_get_contents(__DIR__ . '/../../../src/Application.php');

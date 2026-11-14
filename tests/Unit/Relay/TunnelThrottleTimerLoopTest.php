@@ -626,7 +626,9 @@ final class TunnelThrottleTimerLoopTest extends TestCase
             $mean += $ratio;
         }
         $mean /= max(count($ratios), 1);
-        self::assertNotEmpty($ratios, 'the cadence sample must contain at least one batch');
+        if ($ratios === []) {
+            self::fail('the cadence sample must contain at least one batch');
+        }
 
         fwrite(STDERR, sprintf(
             "  batch-to-batch ratio min=%.4f max=%.4f mean=%.4f spread=%.4f (n=%d)\n",

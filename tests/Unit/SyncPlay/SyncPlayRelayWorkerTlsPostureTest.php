@@ -22,6 +22,7 @@ use Psr\Container\ContainerInterface;
 use ReflectionProperty;
 use RuntimeException;
 use Workerman\Worker;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * SH-064 (review hub__secnet#1) — bind-time TLS posture + bind-host law for
@@ -113,9 +114,7 @@ final class SyncPlayRelayWorkerTlsPostureTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider postureProvider
-     */
+    #[DataProvider('postureProvider')]
     public function testBootPostureTruthTable(bool $useTls, bool $requireTls, string $expected): void
     {
         self::assertSame($expected, SyncPlayRelayWorker::tlsBootPosture($useTls, $requireTls));

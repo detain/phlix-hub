@@ -13,6 +13,7 @@ namespace Phlix\Hub\Tests\Unit\Http;
 
 use Phlix\Hub\Http\Response;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * Review hub Minor 48: every hub JSON response carries a Cache-Control.
@@ -30,8 +31,8 @@ use PHPUnit\Framework\TestCase;
  *     session-scoped data (stricter than the shell's `no-cache`, which is
  *     right for a revalidatable document but not for authenticated payloads).
  *
- * @group unit
  */
+#[Group('unit')]
 final class ResponseJsonCacheControlTest extends TestCase
 {
     public function testJsonSeedsNoStoreWhenCallerSetNothing(): void

@@ -16,6 +16,7 @@ use Phlix\Hub\Common\Database\KeySweeper;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * The two-phase keyed-sweep kernel behind review hub Minor 42.
@@ -26,8 +27,8 @@ use Workerman\MySQL\Connection;
  * a deadlocked attempt re-runs the pair (the victim committed nothing), any
  * other PDO failure propagates, and identifiers fail fast at the constructor.
  *
- * @group unit
  */
+#[Group('unit')]
 final class KeySweeperTest extends TestCase
 {
     public function testSweepSelectsThenDeletesByPrimaryKeyInOrder(): void

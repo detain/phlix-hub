@@ -8,6 +8,7 @@ use Phlix\Hub\Common\Database\PooledMySQLConnection;
 use Phlix\Hub\Tests\Support\SwooleFixtureProcess;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * Unit coverage for the parts of {@see PooledMySQLConnection} that DON'T need a
@@ -269,8 +270,8 @@ final class PooledMySQLConnectionTest extends TestCase
      * RuntimeException instead of deadlocking. ~10 s (the hardcoded
      * idle->pop(10.0) timeout) — grouped 'slow' so it can be excluded.
      *
-     * @group slow
      */
+    #[Group('slow')]
     public function testExhaustedPoolThrowsBoundedInsteadOfHanging(): void
     {
         $out = $this->runHarness('exhaust_throw');

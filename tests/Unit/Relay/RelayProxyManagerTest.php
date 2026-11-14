@@ -25,6 +25,7 @@ use ReflectionMethod;
 use ReflectionProperty;
 use Workerman\Connection\TcpConnection;
 use Workerman\Timer;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function array_key_last;
 use function array_sum;
@@ -1677,9 +1678,7 @@ final class RelayProxyManagerTest extends TestCase
         yield 'array' => [[60], 30.0];
     }
 
-    /**
-     * @dataProvider timeoutCoercionProvider
-     */
+    #[DataProvider('timeoutCoercionProvider')]
     public function testAsTimeoutCoercesThePayloadField(mixed $value, float $expected): void
     {
         $manager = new RelayProxyManager(

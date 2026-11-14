@@ -6,6 +6,8 @@ namespace Phlix\Hub\Tests\Integration\Migrations;
 
 use Phlix\Hub\Common\Database\MigrationRunner;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
+use PHPUnit\Framework\Attributes\Group;
+use Phlix\Hub\Tests\Support\Narrow;
 
 /**
  * Integration tests for the migration runner against a real MySQL test
@@ -48,8 +50,8 @@ use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
  *
  * @package Phlix\Hub\Tests\Integration\Migrations
  *
- * @group integration
  */
+#[Group('integration')]
 final class MigrationRunnerIntegrationTest extends RealDatabaseTestCase
 {
     private MigrationRunner $runner;
@@ -255,7 +257,7 @@ final class MigrationRunnerIntegrationTest extends RealDatabaseTestCase
 
         foreach ($rows as $row) {
             self::assertIsArray($row);
-            $filename = (string) ($row['filename'] ?? '');
+            $filename = Narrow::castString($row['filename'] ?? '');
             $recorded = $row['checksum'] ?? null;
 
             self::assertIsString(
@@ -331,7 +333,7 @@ final class MigrationRunnerIntegrationTest extends RealDatabaseTestCase
         $row = $rows[0] ?? null;
         self::assertIsArray($row);
         self::assertNotSame($stale, $row['checksum'] ?? null, 'The stale checksum must be refreshed');
-        self::assertMatchesRegularExpression('/^[0-9a-f]{32}$/', (string) ($row['checksum'] ?? ''));
+        self::assertMatchesRegularExpression('/^[0-9a-f]{32}$/', Narrow::castString($row['checksum'] ?? ''));
     }
 
     public function testNullChecksumBackfillsWithoutReapplying(): void

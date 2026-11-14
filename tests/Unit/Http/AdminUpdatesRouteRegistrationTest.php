@@ -26,6 +26,7 @@ use Psr\Container\ContainerInterface;
 use ReflectionClass;
 use ReflectionMethod;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
+use Phlix\Hub\Tests\Support\Narrow;
 
 /**
  * S75 acceptance criterion #1, end to end: **the status endpoint correctly
@@ -605,9 +606,9 @@ final class AdminUpdatesRouteRegistrationTest extends TestCase
         // if the body had failed to parse at all.
         $payload = $this->decode((string) $response->body);
         self::assertSame('Validation failed', $payload['error'] ?? null);
-        self::assertIsArray($payload['errors']);
-        self::assertArrayHasKey('checkEnabled', $payload['errors']);
-        self::assertStringContainsString('bool', (string) $payload['errors']['checkEnabled']);
+        $errors = Narrow::arr($payload['errors']);
+        self::assertArrayHasKey('checkEnabled', $errors);
+        self::assertStringContainsString('bool', Narrow::castString($errors['checkEnabled']));
 
         // And nothing was written: the effective value is still the default.
         $status = $this->decode(

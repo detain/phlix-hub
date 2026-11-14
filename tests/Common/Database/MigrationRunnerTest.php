@@ -7,6 +7,7 @@ namespace Phlix\Hub\Tests\Common\Database;
 use Phlix\Hub\Common\Database\MigrationRunner;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Pure-PHP unit tests for {@see MigrationRunner}.
@@ -614,8 +615,8 @@ final class MigrationRunnerTest extends TestCase
      * forgotten `DEALLOCATE` would only ever show up here, not in a regex over the
      * file. No database is touched.
      *
-     * @dataProvider pairedGuardMigrationProvider
      */
+    #[DataProvider('pairedGuardMigrationProvider')]
     public function testPairedGuardsExecuteAsTwoIndependentProbeBlocks(
         string $migrationFile,
         string $columnName,

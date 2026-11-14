@@ -14,6 +14,7 @@ namespace Phlix\Hub\Tests\Integration\Hub;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\ServerReaper;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * M-HUB-26 (review hub__asphp minor #6): `federation_sessions` closed rows
@@ -32,8 +33,8 @@ use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
  * Skipped when `HUB_TEST_DB_*` env vars are not set (CI runs them against a
  * MySQL service; scripts/assert-integration-tests-ran.php reds on skips).
  *
- * @group integration
  */
+#[Group('integration')]
 final class FederationSessionSweepRealDbTest extends RealDatabaseTestCase
 {
     private const PEER_ID = '11111111-2222-4333-8444-555555555555';

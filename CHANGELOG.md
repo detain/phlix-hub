@@ -12,6 +12,19 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Chore [HUB-DEPS] — dev-toolchain upgrade: PHPUnit 12, PHP_CodeSniffer 4, current GitHub Actions — 2026-11-13
+
+- `phpunit/phpunit` `^10.0` -> `^12.5` (12.5.44), `squizlabs/php_codesniffer` `^3.10` -> `^4.0` (4.0.4);
+  `composer.lock` refreshed (every other direct dependency was already at its newest compatible
+  release; the Webman/Workerman line is unchanged). The PHP floor stays `^8.3`.
+- PHPUnit 12 migration: `@group` docblocks became `#[Group]` attributes, `isType('array'|'string')`
+  constraints became `isArray()` / `isString()`, `phpunit.xml` points at the 12.5 schema. PHPUnit 12
+  annotates `assertIsArray()` as `array<mixed>`, so the level-9 PHPStan corpus is kept clean by real
+  narrowing through the new `Phlix\Hub\Tests\Support\Narrow` helpers, not by suppressions;
+  `ParallelTestRunner` now rejects an empty coverage target path.
+- CI: `actions/checkout` v7.0.1 (SHA-pinned), `actions/setup-node` v7, `codecov/codecov-action` v7.
+  Psalm 6.x already needs PHP >= 8.3.16, which the CI runner image provides.
+
 ### Fix [HUB-MINORS] — accumulated review minors: copy, live regions, banner offset, portability, tests — 2026-11-13
 
 - Watch party (HUB-S3): the relay-unreachable sentence now reads "unreachable or refused the

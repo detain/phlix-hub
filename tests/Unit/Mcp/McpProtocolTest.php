@@ -7,6 +7,7 @@ namespace Phlix\Hub\Tests\Unit\Mcp;
 use Phlix\Hub\Http\Controllers\McpController;
 use Phlix\Hub\Mcp\McpProtocol;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function array_unique;
 use function array_values;
@@ -91,9 +92,7 @@ final class McpProtocolTest extends TestCase
         self::assertSame(McpProtocol::LATEST, McpController::PROTOCOL_VERSION);
     }
 
-    /**
-     * @dataProvider negotiationProvider
-     */
+    #[DataProvider('negotiationProvider')]
     public function testNegotiateEchoesWhatItSupportsAndDowngradesTheRest(
         string $requested,
         string $expected,

@@ -19,6 +19,7 @@ use Phlix\Hub\Http\Response;
 use Phlix\Shared\Hub\ClaimResponse;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * M-HUB-12 r2 (review hub__exploiter M1, envelope law): the SERVER_CLAIMS
@@ -172,13 +173,11 @@ final class ServerClaimEnvelopeByteIdentityTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider denialArms
-     */
+    #[DataProvider('denialArms')]
     public function testEachMapErrorDenialArmIsByteIdenticalUnderTheGuard(string $handlerCode): void
     {
         $this->assertEnvelopeByteIdenticalToPreM12(
-            static function (MockObject&ClaimRequestHandler $handler) use ($handlerCode): void {
+            function (MockObject&ClaimRequestHandler $handler) use ($handlerCode): void {
                 $handler->method('handleClaimCode')
                     ->willThrowException(new \InvalidArgumentException($handlerCode));
             },
@@ -190,7 +189,7 @@ final class ServerClaimEnvelopeByteIdentityTest extends TestCase
     public function testClaimSuccessTrioIsByteIdenticalUnderTheGuard(): void
     {
         $this->assertEnvelopeByteIdenticalToPreM12(
-            static function (MockObject&ClaimRequestHandler $handler): void {
+            function (MockObject&ClaimRequestHandler $handler): void {
                 $handler->method('handleClaimCode')->willReturn([
                     'enrollment_jwt' => 'jwt-one',
                     'hub_jwks_url' => 'https://hub.example/.well-known/jwks.json',
@@ -204,7 +203,7 @@ final class ServerClaimEnvelopeByteIdentityTest extends TestCase
 
     public function testClaimAuthAndMissingCode400sAreByteIdenticalUnderTheGuard(): void
     {
-        $configure = static function (MockObject&ClaimRequestHandler $handler): void {
+        $configure = function (MockObject&ClaimRequestHandler $handler): void {
             $handler->expects(self::never())->method('handleClaimCode');
         };
 
@@ -227,7 +226,7 @@ final class ServerClaimEnvelopeByteIdentityTest extends TestCase
 
     public function testNewClaimSuccessAndGuardsAreByteIdenticalUnderTheBudget(): void
     {
-        $ok = static function (MockObject&ClaimRequestHandler $handler): void {
+        $ok = function (MockObject&ClaimRequestHandler $handler): void {
             $handler->method('handleNewClaim')->willReturn(
                 new ClaimResponse('ABCD-1234', 600, 'claim-env-1', 'https://hub.example.com')
             );
@@ -241,7 +240,7 @@ final class ServerClaimEnvelopeByteIdentityTest extends TestCase
         // Wrong protocol: guard never even consulted (free 400 arm) — still
         // pinned, so a reordering mutation cannot silently front-load the
         // budget onto free frames and change this answer.
-        $wrongProto = static function (MockObject&ClaimRequestHandler $handler): void {
+        $wrongProto = function (MockObject&ClaimRequestHandler $handler): void {
             $handler->expects(self::never())->method('handleNewClaim');
         };
         $badProto = $this->newClaimRequest();
@@ -260,7 +259,7 @@ final class ServerClaimEnvelopeByteIdentityTest extends TestCase
             'newClaim invalid_payload 400'
         );
 
-        $boom = static function (MockObject&ClaimRequestHandler $handler): void {
+        $boom = function (MockObject&ClaimRequestHandler $handler): void {
             $handler->method('handleNewClaim')
                 ->willThrowException(new \InvalidArgumentException('SERVER_CAP_REACHED'));
         };
@@ -274,7 +273,7 @@ final class ServerClaimEnvelopeByteIdentityTest extends TestCase
     public function testStatusPollArmsAreByteIdenticalUnderTheBudget(): void
     {
         $this->assertEnvelopeByteIdenticalToPreM12(
-            static function (MockObject&ClaimRequestHandler $handler): void {
+            function (MockObject&ClaimRequestHandler $handler): void {
                 $handler->method('getClaimStatus')->willReturn(['status' => 'pending']);
             },
             fn (ServerClaimController $c): Response => $c->status($this->statusRequest(), ['claimId' => 'claim-env-1']),
@@ -282,7 +281,7 @@ final class ServerClaimEnvelopeByteIdentityTest extends TestCase
         );
 
         $this->assertEnvelopeByteIdenticalToPreM12(
-            static function (MockObject&ClaimRequestHandler $handler): void {
+            function (MockObject&ClaimRequestHandler $handler): void {
                 $handler->expects(self::never())->method('getClaimStatus');
             },
             fn (ServerClaimController $c): Response => $c->status($this->statusRequest(), []),

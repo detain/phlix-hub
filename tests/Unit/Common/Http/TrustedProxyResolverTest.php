@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Common\Http;
 
 use Phlix\Hub\Common\Http\TrustedProxyResolver;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Trusted-proxy-aware client-IP resolution used to build spoof-resistant
@@ -174,9 +175,7 @@ final class TrustedProxyResolverTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider cidrCases
-     */
+    #[DataProvider('cidrCases')]
     public function testIpMatches(string $ip, string $range, bool $expected): void
     {
         self::assertSame($expected, TrustedProxyResolver::ipMatches($ip, $range));

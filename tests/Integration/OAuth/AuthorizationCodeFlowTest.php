@@ -20,6 +20,9 @@ use Phlix\Hub\OAuth\OAuthTokenService;
 use Phlix\Hub\OAuth\Pkce;
 use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Group;
+use Phlix\Hub\Tests\Support\Narrow;
 
 use function hash;
 use function json_decode;
@@ -60,8 +63,8 @@ use const PHP_URL_QUERY;
  *
  * @package Phlix\Hub\Tests\Integration\OAuth
  *
- * @group integration
  */
+#[Group('integration')]
 final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
 {
     use DecodedJsonAssertions;
@@ -316,7 +319,7 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
 
         // Nothing that can be presented to an endpoint was written down.
         $rows = $this->db->query('SELECT token_hash FROM oauth_tokens ORDER BY kind ASC');
-        self::assertIsArray($rows);
+        $rows = Narrow::rows($rows);
         self::assertCount(2, $rows);
         self::assertSame(hash('sha256', self::stringNode($payload['access_token'])), $rows[0]['token_hash']);
         self::assertSame(hash('sha256', self::stringNode($payload['refresh_token'])), $rows[1]['token_hash']);
@@ -666,9 +669,7 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
         yield 'userinfo injected'   => ['https://layla.amazon.com@evil.test/api/skill/link/M2ABCDEFG'];
     }
 
-    /**
-     * @dataProvider unregisteredRedirectUriProvider
-     */
+    #[DataProvider('unregisteredRedirectUriProvider')]
     public function testAnUnregisteredRedirectUriIsRefusedAndNeverRedirectedTo(string $candidate): void
     {
         $response = $this->controller->authorize($this->authorizeRequest(['redirect_uri' => $candidate]));
@@ -1218,10 +1219,9 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
     {
         // The table name is a literal from this file, never input.
         $rows = $this->db->query('SELECT COUNT(*) AS n FROM `' . $table . '`');
-        self::assertIsArray($rows);
+        $rows = Narrow::rows($rows);
         self::assertArrayHasKey(0, $rows);
-        self::assertIsArray($rows[0]);
 
-        return (int) $rows[0]['n'];
+        return Narrow::castInt($rows[0]['n']);
     }
 }

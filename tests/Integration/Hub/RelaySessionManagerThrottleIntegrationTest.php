@@ -7,6 +7,7 @@ namespace Phlix\Hub\Tests\Integration\Hub;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * Real-MySQL round-trip for the DURABLE per-user relay THROTTLE (S42 review fix,
@@ -32,8 +33,8 @@ use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
  *
  * @package Phlix\Hub\Tests\Integration\Hub
  *
- * @group integration
  */
+#[Group('integration')]
 final class RelaySessionManagerThrottleIntegrationTest extends RealDatabaseTestCase
 {
     private RelaySessionManager $manager;

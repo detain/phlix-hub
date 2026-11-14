@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Support;
 
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * S258 — the PHP extensions the hub's security path calls into must be
@@ -119,9 +120,7 @@ final class RequiredPhpExtensionsTest extends TestCase
         return $cases;
     }
 
-    /**
-     * @dataProvider requiredExtensionProvider
-     */
+    #[DataProvider('requiredExtensionProvider')]
     public function testEveryRequiredExtensionIsLoaded(string $extension): void
     {
         [$symbol, $source] = self::REQUIRED[$extension];
@@ -147,8 +146,8 @@ final class RequiredPhpExtensionsTest extends TestCase
      * build can register the module and still not export the symbol the hub
      * calls. The gate is on the symbol, so that case is red too.
      *
-     * @dataProvider requiredExtensionProvider
      */
+    #[DataProvider('requiredExtensionProvider')]
     public function testEveryRequiredSymbolIsCallableHere(string $extension): void
     {
         [$symbol, $source] = self::REQUIRED[$extension];
@@ -175,8 +174,8 @@ final class RequiredPhpExtensionsTest extends TestCase
      * this machine has installed" and cannot keep requiring an extension whose
      * last call site was deleted.
      *
-     * @dataProvider requiredExtensionProvider
      */
+    #[DataProvider('requiredExtensionProvider')]
     public function testEveryRequiredExtensionIsStillCalledByTheSource(string $extension): void
     {
         [$symbol, $source] = self::REQUIRED[$extension];
@@ -361,9 +360,7 @@ final class RequiredPhpExtensionsTest extends TestCase
         return implode("\n", $block);
     }
 
-    /**
-     * @dataProvider phpJobProvider
-     */
+    #[DataProvider('phpJobProvider')]
     public function testEveryPhpJobNamesEveryRequiredExtension(string $job): void
     {
         $block = $this->job($job);
@@ -408,8 +405,8 @@ final class RequiredPhpExtensionsTest extends TestCase
      * script is therefore what turns an absence into a failure, and every PHP
      * job has to run it.
      *
-     * @dataProvider phpJobProvider
      */
+    #[DataProvider('phpJobProvider')]
     public function testEveryPhpJobRunsTheExtensionGate(string $job): void
     {
         $block = $this->job($job);

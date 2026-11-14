@@ -16,6 +16,7 @@ use Phlix\Hub\Http\Request;
 use Phlix\Hub\Tests\Support\TempLoggerCapture;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * R12-03 / R12-05 / R12-02 coverage for the hub SPA shell.
@@ -436,9 +437,7 @@ final class SharedUiControllerCspTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider socketUrlProvider
-     */
+    #[DataProvider('socketUrlProvider')]
     public function testConfiguredSocketBaseUrlGrammar(string $env, ?string $expected): void
     {
         putenv('HUB_WS_URL=' . $env);
@@ -501,9 +500,7 @@ final class SharedUiControllerCspTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider socketPathProvider
-     */
+    #[DataProvider('socketPathProvider')]
     public function testConfiguredSocketBasePathGrammar(string $env, ?string $expected): void
     {
         putenv('HUB_WS_PATH=' . $env);

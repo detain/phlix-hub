@@ -998,6 +998,10 @@ final class ParallelTestRunner
             throw new RuntimeException('no coverage parts to merge');
         }
 
+        if ($finalPath === '') {
+            throw new RuntimeException('coverage merge needs a non-empty target path');
+        }
+
         (new Clover())->process($combined, $finalPath, 'phlix-hub');
 
         return $finalPath;

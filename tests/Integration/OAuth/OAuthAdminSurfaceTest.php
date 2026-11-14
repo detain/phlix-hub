@@ -25,6 +25,7 @@ use Phlix\Hub\OAuth\Pkce;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
+use PHPUnit\Framework\Attributes\Group;
 
 use function bin2hex;
 use function is_string;
@@ -70,8 +71,8 @@ use const PHP_URL_QUERY;
  *
  * @package Phlix\Hub\Tests\Integration\OAuth
  *
- * @group integration
  */
+#[Group('integration')]
 final class OAuthAdminSurfaceTest extends RealDatabaseTestCase
 {
     private const string CLIENT_ID = 'alexa-skill';

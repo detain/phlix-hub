@@ -12,6 +12,7 @@ use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Http\Controllers\HubJwksController;
 use Phlix\Hub\Http\Request;
 use PHPUnit\Framework\TestCase;
+use Phlix\Hub\Tests\Support\Narrow;
 
 /**
  * Unit tests for {@see HubJwksController}.
@@ -66,9 +67,10 @@ final class JwksControllerTest extends TestCase
         $body = json_decode($response->body, true);
         self::assertIsArray($body);
         self::assertArrayHasKey('keys', $body);
-        self::assertCount(1, $body['keys']);
+        $keys = Narrow::arr($body['keys']);
+        self::assertCount(1, $keys);
 
-        $key = $body['keys'][0];
+        $key = Narrow::arr($keys[0]);
         self::assertSame('OKP', $key['kty']);
         self::assertSame('Ed25519', $key['crv']);
         self::assertSame('sig', $key['use']);
@@ -110,16 +112,18 @@ final class JwksControllerTest extends TestCase
         // During overlap: two keys, both kids.
         $body = json_decode($controller(new Request())->body, true);
         self::assertIsArray($body);
-        self::assertCount(2, $body['keys']);
-        $kids = array_map(static fn (array $k): string => (string) $k['kid'], $body['keys']);
+        $bodyKeys = Narrow::arr($body['keys']);
+        self::assertCount(2, $bodyKeys);
+        $kids = array_map(static fn (mixed $k): string => Narrow::castString(Narrow::arr($k)['kid']), $bodyKeys);
         self::assertEqualsCanonicalizing([$newKid, $oldKid], $kids);
 
         // After the overlap window lapses: only the current kid.
         $now += Ed25519KeyManager::OVERLAP_TTL_SECONDS + 1;
         $bodyAfter = json_decode($controller(new Request())->body, true);
         self::assertIsArray($bodyAfter);
-        self::assertCount(1, $bodyAfter['keys']);
-        self::assertSame($newKid, $bodyAfter['keys'][0]['kid']);
+        $keysAfter = Narrow::arr($bodyAfter['keys']);
+        self::assertCount(1, $keysAfter);
+        self::assertSame($newKid, Narrow::arr($keysAfter[0])['kid']);
     }
 
     /**

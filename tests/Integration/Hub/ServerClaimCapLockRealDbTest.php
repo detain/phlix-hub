@@ -19,6 +19,7 @@ use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
 use PDO;
 use PHPUnit\Framework\MockObject\MockObject;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * M-HUB-24 (review hub__exploiter minor #4): the per-user server cap must be
@@ -42,8 +43,8 @@ use PHPUnit\Framework\MockObject\MockObject;
  * Skipped when `HUB_TEST_DB_*` env vars are not set (CI runs them against a
  * MySQL service; scripts/assert-integration-tests-ran.php reds on skips).
  *
- * @group integration
  */
+#[Group('integration')]
 final class ServerClaimCapLockRealDbTest extends RealDatabaseTestCase
 {
     private string $tmpDir;
@@ -59,6 +60,13 @@ final class ServerClaimCapLockRealDbTest extends RealDatabaseTestCase
 
     protected function tearDown(): void
     {
+        if (!isset($this->tmpDir)) {
+            // setUp() skipped before provisioning (no test database configured).
+            parent::tearDown();
+
+            return;
+        }
+
         if ($this->holder !== null) {
             if ($this->holder->inTransaction()) {
                 $this->holder->rollBack();

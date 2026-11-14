@@ -14,6 +14,7 @@ namespace Phlix\Hub\Tests\Unit\Relay;
 use Phlix\Hub\Tests\Support\Federation\FederationTlsMaterial;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
+use Phlix\Hub\Tests\Support\Narrow;
 
 /**
  * The M21 posture laws (RelayWorkerTlsPostureTest) pin what the listener is
@@ -124,7 +125,7 @@ final class RelayWorkerTlsHandshakeE2ETest extends TestCase
         self::assertNotEmpty($crypto, 'a crypto section in the stream metadata is the TLS proof');
         self::assertMatchesRegularExpression(
             '/TLSv1\.[23]/',
-            $crypto['protocol'],
+            Narrow::string($crypto['protocol'] ?? null),
             'the upgrade+verdict must have ridden TLS1.2/1.3, never plaintext: ' . $this->diagnostics(),
         );
 

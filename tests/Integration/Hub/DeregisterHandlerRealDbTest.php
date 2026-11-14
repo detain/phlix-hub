@@ -10,6 +10,7 @@ use Phlix\Hub\Hub\DeregisterHandler;
 use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Hub\EnrollmentJwtService;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * Deregistration against the REAL MySQL venue.
@@ -22,8 +23,8 @@ use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
  *
  * Skipped when `HUB_TEST_DB_*` env vars are not set.
  *
- * @group integration
  */
+#[Group('integration')]
 final class DeregisterHandlerRealDbTest extends RealDatabaseTestCase
 {
     private string $tmpDir;
@@ -37,6 +38,13 @@ final class DeregisterHandlerRealDbTest extends RealDatabaseTestCase
 
     protected function tearDown(): void
     {
+        if (!isset($this->tmpDir)) {
+            // setUp() skipped before provisioning (no test database configured).
+            parent::tearDown();
+
+            return;
+        }
+
         parent::tearDown();
         $files = glob($this->tmpDir . '/*');
         if (is_array($files)) {

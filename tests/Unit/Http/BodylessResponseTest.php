@@ -8,6 +8,7 @@ use Phlix\Hub\Http\BodylessResponse;
 use Phlix\Hub\Http\Response;
 use PHPUnit\Framework\TestCase;
 use Workerman\Protocols\Http\Response as WorkermanResponse;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function preg_match_all;
 use function str_ends_with;
@@ -150,10 +151,10 @@ final class BodylessResponseTest extends TestCase
     }
 
     /**
-     * @dataProvider delegatedShapeProvider
      *
      * @param array<string, string> $headers
      */
+    #[DataProvider('delegatedShapeProvider')]
     public function testEveryOtherShapeIsByteIdenticalToTheParentEncoder(
         int $status,
         array $headers,

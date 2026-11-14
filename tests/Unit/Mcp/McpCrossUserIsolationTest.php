@@ -23,6 +23,7 @@ use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Shared\Hub\ServerInfoDto;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function is_array;
 use function json_decode;
@@ -98,10 +99,10 @@ final class McpCrossUserIsolationTest extends TestCase
      * tool object directly, because the registry is the production entry point
      * and a bypass would not prove the wiring.
      *
-     * @dataProvider serverScopedToolProvider
      *
      * @param array<string, mixed> $arguments
      */
+    #[DataProvider('serverScopedToolProvider')]
     public function testATokenForUserACannotReachAServerOwnedByUserB(
         string $tool,
         array $arguments,
@@ -133,10 +134,10 @@ final class McpCrossUserIsolationTest extends TestCase
      * tell a working gate from a blanket refusal; this pins the second branch
      * independently of the first.
      *
-     * @dataProvider serverScopedToolProvider
      *
      * @param array<string, mixed> $arguments
      */
+    #[DataProvider('serverScopedToolProvider')]
     public function testAnUnknownServerIsA404NotA403(string $tool, array $arguments): void
     {
         /** @var array<string, mixed> $unknownArguments */

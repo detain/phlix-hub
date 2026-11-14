@@ -22,6 +22,7 @@ use Workerman\Connection\TcpConnection;
 use Workerman\MySQL\Connection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 use Workerman\Protocols\Websocket;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function array_key_first;
 use function array_keys;
@@ -397,8 +398,8 @@ final class SyncPlayRelayWorkerTest extends TestCase
      * S237 — both sanctioned carriers authenticate, using the SAME token the
      * query-string case above is refused with.
      *
-     * @dataProvider sanctionedCarriers
      */
+    #[DataProvider('sanctionedCarriers')]
     public function testTheSanctionedCarriersAuthenticate(string $carrier): void
     {
         $this->grantToken('token-a', 'user-a', 'server-a');

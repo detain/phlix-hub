@@ -16,6 +16,8 @@ use Psr\Container\ContainerInterface;
 use ReflectionMethod;
 use ReflectionProperty;
 use Workerman\Timer;
+use PHPUnit\Framework\Attributes\Group;
+use Phlix\Hub\Tests\Support\Narrow;
 
 use function bin2hex;
 use function glob;
@@ -73,8 +75,8 @@ use function unlink;
  *
  * @package Phlix\Hub\Tests\Integration\OAuth
  *
- * @group integration
  */
+#[Group('integration')]
 final class OAuthPruneTimerTest extends RealDatabaseTestCase
 {
     use WorkermanTimerRuntimeControl;
@@ -578,9 +580,9 @@ final class OAuthPruneTimerTest extends RealDatabaseTestCase
     {
         /** @var mixed $rows */
         $rows = $this->db->query("SELECT COUNT(*) AS n FROM `{$table}` WHERE id = :id", ['id' => $id]);
-        self::assertIsArray($rows);
-        self::assertIsArray($rows[0] ?? null);
+        $rows = Narrow::rows($rows);
+        self::assertArrayHasKey(0, $rows);
 
-        return (int) ($rows[0]['n'] ?? -1);
+        return Narrow::castInt($rows[0]['n'] ?? -1);
     }
 }

@@ -10,7 +10,7 @@ php start.php start                           # HTTP :8800 + relay :8802/:8803 +
 php bin/phlix migrate                         # apply migrations/*.sql
 php bin/phlix smoke:jwt                        # JwtHandler<->JwtClaims roundtrip
 php bin/phlix oauth:client:register             # OAuth client admin (also oauth:client:list / oauth:client:disable)
-./vendor/bin/phpunit                           # tests (PHPUnit 10) — testsuites Unit, Integration, E2E
+./vendor/bin/phpunit                           # tests (PHPUnit 12) — testsuites Unit, Integration, E2E
 ./vendor/bin/phpstan analyze --no-progress     # level 9, no baseline
 ./vendor/bin/psalm --no-progress               # psalm.xml: src+scripts @ errorLevel 1, no baseline (S444)
 ./vendor/bin/psalm --no-progress --config=psalm-tests.xml  # psalm-tests.xml: tests/ @ measured errorLevel 5

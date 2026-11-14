@@ -8,6 +8,8 @@ use Phlix\Hub\Http\Controllers\LogController;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
+use Phlix\Hub\Tests\Support\Narrow;
 
 /**
  * Unit coverage for the hub admin log viewer: listing, tailing, line clamping,
@@ -82,9 +84,7 @@ final class LogControllerTest extends TestCase
         $this->assertSame(['e1', 'e2'], $body['lines']);
     }
 
-    /**
-     * @dataProvider maliciousFileNames
-     */
+    #[DataProvider('maliciousFileNames')]
     public function testTailRejectsTraversalAndNonLogNames(string $file, int $expectedStatus): void
     {
         $controller = new LogController($this->dir);
@@ -135,14 +135,14 @@ final class LogControllerTest extends TestCase
         $this->assertIsArray($gone);
         $this->assertSame('Log directory not available', $gone['error']);
         $this->assertSame('storage_unavailable', $gone['code']);
-        $this->assertStringContainsString('.logs/', $gone['message']);
+        $this->assertStringContainsString('.logs/', Narrow::string($gone['message']));
 
         $missing = json_decode($reachable->tail($this->req(['file' => 'nope.log']))->body, true);
         $this->assertIsArray($missing);
         $this->assertSame('Log file not found', $missing['error']);
         $this->assertSame('not_found', $missing['code']);
         // The actionable half of the finding: the answer names where to look.
-        $this->assertStringContainsString('GET /api/v1/me/logs', $missing['message']);
+        $this->assertStringContainsString('GET /api/v1/me/logs', Narrow::string($missing['message']));
     }
 
     public function testTailAllMergesEveryLogFileTaggedBySource(): void

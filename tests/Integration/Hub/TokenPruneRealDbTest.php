@@ -14,6 +14,7 @@ namespace Phlix\Hub\Tests\Integration\Hub;
 use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Mcp\McpTokenService;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * Review hub Minor 42 against a real InnoDB with the real 032/044 schemas and
@@ -39,8 +40,8 @@ use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
  * Skipped when `HUB_TEST_DB_*` env vars are not set (CI runs them against a
  * MySQL service; scripts/assert-integration-tests-ran.php reds on skips).
  *
- * @group integration
  */
+#[Group('integration')]
 final class TokenPruneRealDbTest extends RealDatabaseTestCase
 {
     private const USER_ID = '11111111-2222-4333-8444-aaaaaaaaaaaa';

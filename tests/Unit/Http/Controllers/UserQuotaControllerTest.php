@@ -11,6 +11,7 @@ use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Http\Controllers\UserQuotaController;
 use Phlix\Hub\Http\Request;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for {@see UserQuotaController} (HB-3.4 G5).
@@ -202,10 +203,10 @@ final class UserQuotaControllerTest extends TestCase
     }
 
     /**
-     * @dataProvider invalidQuotaBodies
      *
      * @param array<string, mixed> $body
      */
+    #[DataProvider('invalidQuotaBodies')]
     public function testSetUserQuotaReturns400OnInvalidBody(array $body): void
     {
         $this->users->method('findAdminById')->willReturn(['id' => 'admin', 'is_admin' => 1]);
@@ -343,10 +344,10 @@ final class UserQuotaControllerTest extends TestCase
     }
 
     /**
-     * @dataProvider invalidThrottleBodies
      *
      * @param array<string, mixed> $body
      */
+    #[DataProvider('invalidThrottleBodies')]
     public function testSetUserThrottleReturns400OnInvalidBody(array $body): void
     {
         $this->users->method('findAdminById')->willReturn(['id' => 'admin', 'is_admin' => 1]);
@@ -379,9 +380,7 @@ final class UserQuotaControllerTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider validThrottleLevels
-     */
+    #[DataProvider('validThrottleLevels')]
     public function testSetUserThrottleAcceptsEachAllowedLevelAndAudits(int $level): void
     {
         $this->users->method('findAdminById')->willReturn(['id' => 'admin', 'is_admin' => 1]);

@@ -13,6 +13,7 @@ namespace Phlix\Hub\Tests\Integration\Hub;
 
 use Phlix\Hub\Common\Database\MigrationRunner;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * HUB-S10 (HUB-1) against a real InnoDB: migration 057's leading `closed_at`
@@ -34,8 +35,8 @@ use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
  * Skipped when `HUB_TEST_DB_*` env vars are not set (CI runs them against a
  * MySQL service; scripts/assert-integration-tests-ran.php reds on skips).
  *
- * @group integration
  */
+#[Group('integration')]
 final class RelaySessionsClosedAtIndexRealDbTest extends RealDatabaseTestCase
 {
     private const MIGRATION = '057_relay_sessions_closed_at_index.sql';

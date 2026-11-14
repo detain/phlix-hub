@@ -8,6 +8,7 @@ use Phlix\Hub\Http\CorsPolicy;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Unit tests for {@see CorsPolicy} — the hub REST surface's default-deny
@@ -80,9 +81,7 @@ final class CorsPolicyTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider malformedOriginProvider
-     */
+    #[DataProvider('malformedOriginProvider')]
     public function testMalformedEntryFailsLoudAtConstruction(string $entry): void
     {
         $this->expectException(\InvalidArgumentException::class);

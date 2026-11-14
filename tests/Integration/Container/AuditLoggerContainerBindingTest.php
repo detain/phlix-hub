@@ -20,6 +20,7 @@ use Psr\Container\ContainerInterface;
 use ReflectionClass;
 use ReflectionMethod;
 use ReflectionProperty;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * S269 — proves the hub's `AuditLogger` actually persists, end to end.
@@ -60,8 +61,8 @@ use ReflectionProperty;
  *
  * @package Phlix\Hub\Tests\Integration\Container
  *
- * @group integration
  */
+#[Group('integration')]
 final class AuditLoggerContainerBindingTest extends RealDatabaseTestCase
 {
     /** A >=32-byte HS256 secret so the real JwtHandler accepts it. */

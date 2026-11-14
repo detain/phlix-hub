@@ -16,6 +16,7 @@ use Phlix\Hub\Tests\Support\Relay\ThrowingResponseSink;
 use ReflectionProperty;
 use RuntimeException;
 use Workerman\Coroutine\Channel;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 use function array_filter;
 use function array_key_last;
@@ -123,8 +124,8 @@ final class RelayProxyBridgeTest extends TestCase
      * elapsed. The value is threaded through the exact channel/publish seam the
      * existing envelope test uses.
      *
-     * @dataProvider forwardedTimeoutProvider
      */
+    #[DataProvider('forwardedTimeoutProvider')]
     public function testRequestForwardsTheTimeoutInThePublishedEnvelope(float $timeout): void
     {
         /** @var array<string, mixed>|null $publishedData */
