@@ -201,9 +201,13 @@ final class IdsTest extends TestCase
      * today (uppercase ids, non-4 version nibbles, non-[89ab] variants), so
      * the sites stay untouched and this test freezes both accept-sets
      * against a future silent "cleanup". The Application leg is pinned by
-     * behaviour: its regex arm is redundant with the letters-and-digits
-     * segment arm, so narrowing the regex alone would not change its
-     * answers — the federation sites are the sole-gate teeth.
+     * behaviour, and its regex arm is LOAD-BEARING — not redundant: an
+     * all-digit hyphenated v4-shape segment (below, with arm teeth proven
+     * by a removal plant) answers true only through that arm, since
+     * ctype_digit fails on the hyphens and the letters-and-digits arm
+     * requires a letter. r1 review cured the earlier "redundant" wording,
+     * which held only for the letter-bearing samples pinned here. The
+     * federation sites carry the sole-gate teeth.
      */
     public function testTheLiveShapeSitesStayPermissiveAgainstTheSharedValidator(): void
     {
@@ -253,5 +257,15 @@ final class IdsTest extends TestCase
             );
         }
         self::assertFalse((bool) $isVariable->invoke(null, 'health'));
+
+        // Arm-teeth counterexample (r1 review): this all-digit hyphenated
+        // v4-shape segment is accepted ONLY by the regex arm — arm 1 fails
+        // (hyphens break ctype_digit) and arm 3 fails (no letter). Deleting
+        // or narrowing the regex arm flips the answer for this input class;
+        // a plant proving exactly that is logged with the cure round.
+        self::assertTrue(
+            (bool) $isVariable->invoke(null, '12345678-1234-1234-1234-123456789012'),
+            'Application::isVariableSegment must still accept all-digit hyphenated v4-shape — the regex arm is load-bearing.',
+        );
     }
 }
