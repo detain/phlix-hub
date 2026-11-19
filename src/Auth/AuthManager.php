@@ -15,6 +15,8 @@ use InvalidArgumentException;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Shared\Auth\FamilyRefusalReason;
+use Phlix\Shared\Auth\SessionFamily;
 use Phlix\Shared\Events\Auth\UserCreated;
 use Phlix\Shared\Events\Auth\UserLoggedIn;
 use Phlix\Shared\Events\Auth\UserLoggedOut;
@@ -55,9 +57,11 @@ class AuthManager
      * stamp: a consumed grant replayed within this window is the benign
      * multi-tab race and rotates on; outside it, it is reuse and the family
      * dies. The hub has no in-process rotation memo (deviation from the
-     * server, recorded in the twin register), so this is store-scope only.
+     * server, recorded in the twin register). Single-sourced to the shared
+     * kernel at v0.56.0 ({@see SessionFamily::ROTATION_GRACE_SECONDS}) — the
+     * same literal 10, now shared-side SSOT so the twin ladder cannot drift.
      */
-    private const int ROTATION_GRACE_SECONDS = 10;
+    private const int ROTATION_GRACE_SECONDS = SessionFamily::ROTATION_GRACE_SECONDS;
 
     /**
      * Primary key of the one-row first-admin election guard
@@ -676,31 +680,31 @@ class AuthManager
         // adjudicated at all — fail closed (the store was wired when this
         // token was minted; an operator removed it underneath the fleet).
         if ($store === null) {
-            $this->refuseFamily($userId, $sessionId, $jti, 'token_store_unwired');
+            $this->refuseFamily($userId, $sessionId, $jti, FamilyRefusalReason::StoreUnwired->value);
         }
 
         // (b) A family token without a jti cannot name a grant — dead.
         if ($jti === null || $jti === '') {
-            $this->refuseFamily($userId, $sessionId, $jti, 'refresh_grant_jti_missing');
+            $this->refuseFamily($userId, $sessionId, $jti, FamilyRefusalReason::GrantJtiMissing->value);
         }
 
         // (c) Unknown grant (never minted here): fail closed.
         $grant = $store->findGrant($jti, self::ROTATION_GRACE_SECONDS);
         if ($grant === null) {
-            $this->refuseFamily($userId, $sessionId, $jti, 'refresh_grant_unknown');
+            $this->refuseFamily($userId, $sessionId, $jti, FamilyRefusalReason::GrantUnknown->value);
         }
 
         // (d) The family is already revoked: refuse WITHOUT re-revoking — a
         // replay must not rewrite the reason or the timestamp of the kill
         // that already happened.
         if ($grant['sessionStatus'] !== 'active') {
-            $this->refuseFamily($userId, $sessionId, $jti, 'token_session_revoked');
+            $this->refuseFamily($userId, $sessionId, $jti, FamilyRefusalReason::SessionRevoked->value);
         }
 
         // (e) A grant owned by a DIFFERENT family than the claim it rides is
         // forgery or corruption; nothing rotates on it.
         if ($grant['sessionId'] !== $sessionId) {
-            $this->refuseFamily($userId, $sessionId, $jti, 'refresh_grant_session_mismatch');
+            $this->refuseFamily($userId, $sessionId, $jti, FamilyRefusalReason::GrantSessionMismatch->value);
         }
 
         if ($grant['consumed']) {
@@ -714,8 +718,8 @@ class AuthManager
             // (f) Consumed OUTSIDE grace: reuse. The family dies — exactly
             // this device's chain, the watermark-free carrier layer
             // untouched, every other family of the account intact.
-            $store->revokeSession($sessionId, 'refresh_token_reuse');
-            $this->refuseFamily($userId, $sessionId, $jti, 'refresh_token_reuse');
+            $store->revokeSession($sessionId, FamilyRefusalReason::TokenReuse->value);
+            $this->refuseFamily($userId, $sessionId, $jti, FamilyRefusalReason::TokenReuse->value);
         }
 
         // (h) Live grant: consume BEFORE the caller mints (see the refresh()
@@ -736,7 +740,7 @@ class AuthManager
         // arbiter's audit reason — the literal admin surfaces read
         // side-by-side across hosts — behind the hub's collapsed wire text.
         if ($afterLostConsume) {
-            $this->refuseFamily($userId, $sessionId, $jti, 'refresh_grant_consume_lost');
+            $this->refuseFamily($userId, $sessionId, $jti, FamilyRefusalReason::GrantConsumeLost->value);
         }
 
         $this->adjudicateRefreshFamily($userId, $sessionId, $jti, true);

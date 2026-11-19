@@ -14,14 +14,38 @@ namespace Phlix\Hub\Stats\Metrics;
 /**
  * Per-worker in-memory metrics accumulator for the hub relay.
  *
- * Identical in structure to the server's MetricsRegistry but under the
- * `Phlix\Hub\Stats\Metrics` namespace. A single instance holds the current
- * window's request + per-route counters plus the map of active connections.
- * It performs NO I/O and makes NO clock calls of its own — every method
- * that needs "now" takes an explicit `$nowTs` argument so the class is fully
- * deterministic and unit-testable. {@see MetricsFlushService} periodically
- * calls {@see drainRollups()} to obtain the accumulated deltas (which resets the
- * counters) and {@see snapshotConnections()} to persist the live-connection map.
+ * The hub's mirror of the server's `Phlix\Stats\Metrics\MetricsRegistry`.
+ * What is genuinely SHARED LAW (measured and pinned by the same-named
+ * `MetricsVocabularyParityTest` in both repos, finding A-13): the bucket
+ * alignment `floor(ts/N)*N`, the drained-rollup key vocabulary
+ * (`bucket_started_at` + `request_count`/`error_count`/`duration_ms_sum`/
+ * `duration_ms_max`/`bytes_in`/`bytes_out`/`histogram`), the per-route key
+ * vocabulary (`method`/`route`), the `__other__` cardinality sentinel, the
+ * default bounds (10s buckets, 200-route cap, the latency histogram below),
+ * and the NO-I/O / explicit-`$nowTs` determinism law.
+ *
+ * What has DIVERGED (A-13): this class grew seven relay gauges and their
+ * mutators (`relayPendingRequests`, `relayReplyDrops`, `relayCancels`,
+ * `relayLatencyHistogram`, `relayError503`, `relayError504`,
+ * `relayDecodeBufferBytes`, drained via `drainRelayMetrics()`) plus the
+ * public `bucketStart()` accessor — all hub-only by design. The server
+ * instead carries `DEFAULT_LATENCY_BUCKETS_MS` (schema-locked SSOT) and the
+ * outage-merge path `restoreRollups()`/`trimRetainedBuckets()`, which its
+ * flush service uses to hand drained buckets back after a failed write;
+ * this class has NO restore path, so a failed hub flush loses its drained
+ * rows — an unratified reliability asymmetry banked for the shared lift.
+ * The default histogram bounds also arrive differently per side (hub inline
+ * constructor literal + `latency_buckets_ms` config knob vs server const +
+ * deliberately knob-less schema lock) — same values, divergent knob surface,
+ * likewise banked for the `Phlix\Shared\Stats\*` v0.57 lift.
+ *
+ * A single instance holds the current window's request + per-route counters
+ * plus the map of active connections. It performs NO I/O and makes NO clock
+ * calls of its own — every method that needs "now" takes an explicit
+ * `$nowTs` argument so the class is fully deterministic and unit-testable.
+ * {@see MetricsFlushService} periodically calls {@see drainRollups()} to
+ * obtain the accumulated deltas (which resets the counters) and
+ * {@see snapshotConnections()} to persist the live-connection map.
  *
  * Memory safety: the rollup maps are drained + reset on every flush, and the
  * per-route map is capped at `routeCardinalityCap` distinct routes per bucket
