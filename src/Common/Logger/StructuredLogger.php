@@ -53,14 +53,14 @@ class StructuredLogger
 
     private string $channel;
 
-    /** @var array<string, mixed> */
+    /** @var array<array-key, mixed> */
     private array $config;
 
     /**
      * Build a logger for the given channel using the loaded logger config.
      *
-     * @param string               $channel Channel name (see {@see LogChannels}).
-     * @param array<string, mixed> $config  The loaded logger config array.
+     * @param string                  $channel Channel name (see {@see LogChannels}).
+     * @param array<array-key, mixed> $config  The loaded logger config array.
      *
      */
     public function __construct(string $channel, array $config)

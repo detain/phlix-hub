@@ -86,10 +86,9 @@ class LoggerFactory
      * between cases, so swallowing the missing-file warning here is a
      * feature, not a bug. A config file that returns anything other
      * than an array is rejected the same way: the factory hands the
-     * constructor the documented `array<string, mixed>` shape, never a
-     * scalar.
+     * constructor an array (keys as PHP wrote them), never a scalar.
      *
-     * @return array<string, mixed>
+     * @return array<array-key, mixed>
      */
     private static function loadConfig(): array
     {
@@ -99,15 +98,15 @@ class LoggerFactory
 
         /**
          * @psalm-suppress UnresolvableInclude self::$configPath is set at runtime
-         * @var array<string, mixed> $config
+         * @var mixed $config
          */
         $config = include self::$configPath;
 
-        // The @var above states the contract; this check ENFORCES it at
-        // runtime (A-17: a scalar-returning config must fall back, not
-        // TypeError). Docblock-narrowed type makes the guard statically
-        // redundant, hence the suppression — the runtime is not.
-        /** @psalm-suppress RedundantConditionGivenDocblockType */
+        // is_array() is the runtime ENFORCEMENT of the config-file
+        // contract (A-17: a scalar-returning config must fall back, not
+        // TypeError). With $config honestly typed mixed the check is a
+        // real narrowing, not a docblock-narrowed redundancy — the
+        // guard and the types agree.
         return is_array($config) ? $config : [];
     }
 }
