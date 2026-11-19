@@ -184,7 +184,10 @@ final class CookiePolicy
      *  - production marker: the server keys on its single PHLIX_ENV; the
      *    hub's shipped config readers honour HUB_ENV, APP_ENV and PHLIX_ENV
      *    alike, so ANY of them strictly equal to 'production' marks the
-     *    deployment (unset/dev tiers stay silent — no warning theater);
+     *    deployment (unset/dev tiers stay silent — no warning theater).
+     *    The FIRST marker to match in that order names itself in the
+     *    warning text, so the operator hears which knob actually won
+     *    (MINOR-2, HUB-4.2 review);
      *  - latch key: hub-scoped (`__phlix_hub_...`) rather than the server's
      *    name, so if both hosts' classes are ever loaded in one process
      *    (integration harness) each keeps its own once-semantics.
@@ -196,10 +199,15 @@ final class CookiePolicy
      */
     private static function warnProductionInsecureOnce(string $source): void
     {
-        $markedProduction = getenv('HUB_ENV') === 'production'
-            || getenv('APP_ENV') === 'production'
-            || getenv('PHLIX_ENV') === 'production';
-        if (!$markedProduction) {
+        $marker = null;
+        foreach (['HUB_ENV', 'APP_ENV', 'PHLIX_ENV'] as $candidate) {
+            if (getenv($candidate) === 'production') {
+                $marker = $candidate;
+                break;
+            }
+        }
+
+        if ($marker === null) {
             return;
         }
 
@@ -210,7 +218,8 @@ final class CookiePolicy
         $GLOBALS['__phlix_hub_cookie_insecure_production_warn'] = true;
 
         trigger_error(
-            $source . ' is active while the hub is marked production (HUB_ENV=production) — hub auth '
+            $source . ' is active while the hub is marked production (' . $marker
+            . '=production) — hub auth '
             . 'cookies are issued WITHOUT the Secure attribute and are readable on plain HTTP. '
             . 'Terminate TLS at the front proxy and serve the hub over https, '
             . 'or turn the insecure-cookie opt-in off',

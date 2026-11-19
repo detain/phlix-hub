@@ -121,7 +121,9 @@ final class CookiePolicyProductionInsecureWarnTest extends TestCase
         self::assertTrue($result);
         self::assertCount(1, $warnings, 'the latch must fire exactly once per process');
         self::assertStringContainsString(CookiePolicy::INSECURE_ENV, $warnings[0]);
-        self::assertStringContainsString('production', $warnings[0]);
+        // MINOR-2 (HUB-4.2 review): the message names the marker that
+        // actually won, not a fixed HUB_ENV string.
+        self::assertStringContainsString('HUB_ENV=production', $warnings[0]);
         self::assertStringContainsString('Secure', $warnings[0]);
         self::assertArrayHasKey(self::LATCH, $GLOBALS, 'the latch is the documented once-marker');
     }
@@ -160,6 +162,10 @@ final class CookiePolicyProductionInsecureWarnTest extends TestCase
 
         self::assertTrue($result);
         self::assertCount(1, $warnings);
+        // The winning marker names itself: an APP_ENV-only deployment must
+        // not be told about HUB_ENV (MINOR-2, HUB-4.2 review).
+        self::assertStringContainsString('APP_ENV=production', $warnings[0]);
+        self::assertStringNotContainsString('HUB_ENV=production', $warnings[0]);
     }
 
     public function testProductionMarkedViaPhlixEnvAlsoWarns(): void
@@ -172,6 +178,27 @@ final class CookiePolicyProductionInsecureWarnTest extends TestCase
 
         self::assertTrue($result);
         self::assertCount(1, $warnings);
+        self::assertStringContainsString('PHLIX_ENV=production', $warnings[0]);
+        self::assertStringNotContainsString('HUB_ENV=production', $warnings[0]);
+    }
+
+    public function testMultipleMatchingMarkersNameTheFirstInOrder(): void
+    {
+        // Documented precedence: HUB_ENV, APP_ENV, PHLIX_ENV — the first
+        // match speaks, so an operator exporting all three hears the most
+        // hub-specific knob (MINOR-2, HUB-4.2 review).
+        $this->env('HUB_ENV', 'production');
+        $this->env('APP_ENV', 'production');
+        $this->env('PHLIX_ENV', 'production');
+        $this->env(CookiePolicy::INSECURE_ENV, '1');
+
+        [$result, $warnings] = $this->probe($this->policy());
+
+        self::assertTrue($result);
+        self::assertCount(1, $warnings);
+        self::assertStringContainsString('HUB_ENV=production', $warnings[0]);
+        self::assertStringNotContainsString('APP_ENV=production', $warnings[0]);
+        self::assertStringNotContainsString('PHLIX_ENV=production', $warnings[0]);
     }
 
     public function testDevTierWithEnvFlagStaysSilent(): void
