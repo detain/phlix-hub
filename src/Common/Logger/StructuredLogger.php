@@ -23,8 +23,27 @@ use Monolog\Processor\PsrLogMessageProcessor;
  *
  * Wraps a {@see Logger} with channel-aware configuration. Each instance
  * is bound to one log channel and writes to the handlers configured in
- * `config/logger.php`. The class is intentionally similar to the
- * `phlix-server` version so behaviour matches across the two repos.
+ * `config/logger.php`.
+ *
+ * The `phlix-server` sibling (`Phlix\Common\Logger\StructuredLogger`,
+ * roughly twice this file's size) is a fork, NOT a mirror — the old claim
+ * that behaviour matches across the two repos was never true of the whole
+ * class. What genuinely coincides: the per-Fiber recursion-guard comment
+ * driving `useLoggingLoopDetection(false)` (kept in lockstep — the one law
+ * that must stay byte-shared apart from hub's relay-reconnect tail
+ * sentence), the `mapLevel()` severity table, the `handlers.*` config
+ * slice shape (`type`/`path`/`level`/`max_files` and their defaults), and
+ * the automatic `$context['channel']` stamp on every record. What exists
+ * ONLY on the server: the PSR-3 `LoggerInterface` surface (`Stringable`
+ * messages, `mixed` levels normalised via `resolveLevel`), a
+ * `WhatFailureGroupHandler` wrapper around every routed handler (the
+ * PHP 8.5 + Swoole process-global `set_error_handler` disarm), the
+ * `size_rotating`/`error`/`audit` handler types, per-handler
+ * `channels`/`env` routing gates, a global `PHLIX_LOG_LEVEL` floor
+ * override, `request_id`/`user_id` processors, and numeric-string
+ * tolerance for integer options (here an int option must be a real
+ * `int`). Cross-repo logging changes must audit BOTH feature lists
+ * before assuming parity.
  *
  * @package Phlix\Hub\Common\Logger
  */
@@ -114,7 +133,11 @@ class StructuredLogger
     }
 
     /**
-     * Register the standard log processors (PSR message + request id).
+     * Register the standard log processors.
+     *
+     * Only the PSR message processor is wired here; `request_id` and
+     * `user_id` processors are server-only behaviour (see the class
+     * docblock's divergence list).
      *
      * @return void
      */

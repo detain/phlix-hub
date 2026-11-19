@@ -17,21 +17,24 @@ use ReflectionProperty;
  * ## Why this exists
  *
  * `LoggerFactory` memoises loggers in `private static array $loggers` and
- * resolves them by `include`-ing `private static string $configPath`
- * (`LoggerFactory.php:26`, `:28`, `:54`). Both survive for the life of the
- * process. A dozen test classes call `LoggerFactory::init()` with a config file
- * they write into a temp directory and then DELETE in `tearDown()` — and while
- * they do call `LoggerFactory::reset()` (which clears only the memo), none of
- * them ever restores `$configPath`. It is left pointing at a directory that no
- * longer exists.
+ * resolves them by reading `private static string $configPath` through
+ * `loadConfig()` (`LoggerFactory.php:37`, `:39`, `:94`). Both survive for
+ * the life of the process. A dozen test classes call
+ * `LoggerFactory::init()` with a config file they write into a temp
+ * directory and then DELETE in `tearDown()`.
  *
- * With `executionOrder="random"` that made a later test's behaviour depend on
- * which class happened to run before it: `$configPath` could be `''` (⇒
- * `include ''` raises `ValueError: Path cannot be empty`), a live path, or a
- * dangling one (⇒ `include` of a missing file warns, which `failOnWarning="true"`
- * turns into a failure). Same class of defect as the `Worker::$workers` latch
- * documented on {@see WorkermanTimerRuntimeControl}, and it is fixed the same
- * way.
+ * The raw-include failure modes that originally made this hazardous —
+ * `$configPath` left as `''` (⇒ `ValueError: Path cannot be empty`) or as
+ * a dangling pointer (⇒ `include` of a missing file warns, which
+ * `failOnWarning="true"` turns into a failure) — were closed at the source
+ * by the A-17 guard port: the factory now falls back to an empty config,
+ * and `reset()` clears the path as well as the memo. The trait remains
+ * load-bearing regardless: with `executionOrder="random"`, a suite that
+ * skips the reset still RESOLVES against whichever earlier suite's
+ * memoised instances the process happens to hold — a logger bound to a
+ * foreign config's handlers is as silent as it is wrong. Same class of
+ * defect as the `Worker::$workers` latch documented on
+ * {@see WorkermanTimerRuntimeControl}, and it is fixed the same way.
  *
  * ## Contract
  *
