@@ -541,6 +541,23 @@ final class Application
     }
 
     /**
+     * HUB-4.1 (review MINOR-1): HSTS eligibility from the raw
+     * `X-Forwarded-Proto` value — extracted from the onMessage closure so
+     * the wire contract is unit-pinnable, the same precedent as
+     * {@see self::computeStaticCacheDecision()}. The header->bool law is
+     * {@see CookiePolicy::isHttpsForwarded()} (first hop only, case
+     * folded); the `mixed` narrowing covers the header bag's untyped shape.
+     * The companion source pin in ApplicationStaticAssetCacheTest locks the
+     * closure to compute eligibility EXCLUSIVELY through this seam and to
+     * forward the result to every send site — flipping the wiring to a
+     * constant (the "HSTS on plaintext dev" regression) reddens the pin.
+     */
+    public static function hstsEligibleFromForwardedProto(mixed $forwardedProto): bool
+    {
+        return CookiePolicy::isHttpsForwarded(is_string($forwardedProto) ? $forwardedProto : null);
+    }
+
+    /**
      * HUB-39: gzip bytes for a file, memoized per worker on real path +
      * mtime + size (the ext+encoding tier). Null when the file is below the
      * 1 KiB floor, unreadable, zlib is absent, or gzip would not shrink it.
@@ -2522,9 +2539,8 @@ final class Application
             // https. HAProxy is this hub's only TLS terminator, so the https
             // first-hop limb of the hub's CookiePolicy scheme law is exactly
             // what the browser sees; plaintext dev/localhost ships no HSTS.
-            /** @var string|null $forwardedProto */
-            $forwardedProto = $request->header('x-forwarded-proto');
-            $hstsEligible = CookiePolicy::isHttpsForwarded(is_string($forwardedProto) ? $forwardedProto : null);
+            // The computation lives behind a pinnable seam (review MINOR-1).
+            $hstsEligible = self::hstsEligibleFromForwardedProto($request->header('x-forwarded-proto'));
             try {
                 // 1. Static-file fast path. Serve files under public/
                 //    directly (CSS, JS, images, fonts). GET and HEAD only —

@@ -763,4 +763,55 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         );
         self::assertStringNotContainsString('Strict-Transport', $without);
     }
+
+    public function testHstsSeamMapsForwardedProtoValuesToEligibility(): void
+    {
+        // Header->bool seam (review MINOR-1): the delegation matrix. The
+        // first hop is what HAProxy makes the browser-visible scheme; junk
+        // tiers mirror CookiePolicy::isHttpsForwarded's own pinned behavior.
+        self::assertTrue(Application::hstsEligibleFromForwardedProto('https'));
+        self::assertTrue(Application::hstsEligibleFromForwardedProto('  HTTPS  '));
+        self::assertTrue(Application::hstsEligibleFromForwardedProto('https, http'));
+        self::assertFalse(Application::hstsEligibleFromForwardedProto('http'));
+        self::assertFalse(Application::hstsEligibleFromForwardedProto('http, https'));
+        self::assertFalse(Application::hstsEligibleFromForwardedProto(''));
+        self::assertFalse(Application::hstsEligibleFromForwardedProto(null));
+        // The header bag is untyped (mixed); non-strings never opt in.
+        self::assertFalse(Application::hstsEligibleFromForwardedProto(123));
+        self::assertFalse(Application::hstsEligibleFromForwardedProto(true));
+    }
+
+    public function testOnMessageWiresHstsExclusivelyThroughTheSeam(): void
+    {
+        // Source pin, sibling of testFastPathClosureWiresTheExtractedGates:
+        // eligibility is computed once, ONLY via the seam, and forwarded at
+        // every respond site. Mutation teeth (review MINOR-1): replacing the
+        // assignment with a constant (the "HSTS on plaintext dev" flip)
+        // breaks the assignment count and the not-contains leg; dropping or
+        // renaming the arg at any send site drops that count below five.
+        $location = (new \ReflectionClass(Application::class))->getFileName();
+        if (!is_string($location)) {
+            $this->fail('Application must be loaded from a file for the source pin.');
+        }
+        $source = file_get_contents($location);
+        if (!is_string($source)) {
+            $this->fail('Could not read the Application source for the pin.');
+        }
+
+        $assignment = "\$hstsEligible = self::hstsEligibleFromForwardedProto(\$request->header('x-forwarded-proto'));";
+        $seamReads = substr_count($source, $assignment);
+        $this->assertSame(1, $seamReads, 'the seam must be the single eligibility computation');
+        $sendSites = substr_count($source, '->toWorkermanResponse($hstsEligible)');
+        $this->assertSame(5, $sendSites, 'all five send sites must forward the seam result');
+        // Two argument forwards: closure -> buildStaticFastPathResponse and
+        // builder -> computeStaticCacheDecision (parameter declarations read
+        // `$hstsEligible = false,` and never match this needle).
+        $staticLegs = substr_count($source, '$hstsEligible,');
+        $this->assertSame(2, $staticLegs, 'both static fast-path legs must forward it');
+        // Semicolon-terminated constants only: parameter declarations
+        // (`bool $hstsEligible = false,`) legitimately carry the comma form.
+        $this->assertStringNotContainsString('$hstsEligible = true;', $source);
+        $this->assertStringNotContainsString('$hstsEligible = false;', $source);
+        $this->assertStringNotContainsString('$hstsEligible = CookiePolicy::', $source, 'the closure must not compute eligibility inline beside the seam');
+    }
 }
