@@ -18,6 +18,14 @@ use Symfony\Component\Console\Tester\CommandTester;
  * and survives `--force`, so no combination can delete the sole administrator.
  * Deleting a non-admin never consults the admin count.
  *
+ * Cross-repo law note (A-15/H-04): this "guard precedes confirmation and
+ * survives `--force`" ordering law is asserted HUB-side only — the server twin
+ * (`phlix-server` tests/Unit/Console/Commands/UserDeleteCommandTest.php)
+ * exercises the gate through an `isLastAdmin` mock but carries no such
+ * docblock-law or precedence-survives-force pin. Porting the law to the server
+ * suite is a separate estate decision (tracked report-only by the HUB-CONSOLE
+ * lane; the server repo is intentionally untouched here).
+ *
  * @package Phlix\Hub\Tests\Unit\Console\Commands
  */
 final class UserDeleteCommandTest extends TestCase

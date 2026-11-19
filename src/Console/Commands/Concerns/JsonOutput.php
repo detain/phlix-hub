@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Console\Commands\Concerns;
 
+use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
@@ -38,6 +39,18 @@ use const JSON_UNESCAPED_UNICODE;
  * rather than pushed into the tagged `detain/phlix-shared` package, so neither
  * repo's CLI depends on a package release to land its contract. The key order is
  * what the per-command tests assert.
+ *
+ * Hub-side divergence (HUB-CONSOLE, A-06): this copy also owns
+ * {@see self::fail()}, the single failure renderer + exit-code chooser folded
+ * out of the three command-local `fail()` clones (`user:promote`,
+ * `user:create`, `user:delete`). The `phlix-server` copy still lacks that
+ * method — folding its clones (they exist on six commands there) is a separate
+ * estate decision, tracked report-only in the HUB-CONSOLE lane register.
+ * Adopting commands must not re-declare `fail()` locally; the census in
+ * `tests/Unit/Console/Concerns/JsonOutputTraitTest.php` pins the trait as the
+ * declaring class for every adopted command, and
+ * `tests/Unit/Console/Commands/UserCommandOutputByteMatrixTest.php` pins the
+ * exact bytes and exit codes the fold preserved.
  *
  * {@see self::JSON_OUTPUT_MARKER} is a code-resident identity marker for the
  * merge tooling (mirrors `SidecarWriter::GENERATOR_MARKER`): because every
@@ -84,6 +97,32 @@ trait JsonOutput
         ];
 
         $output->writeln($this->encode($payload));
+    }
+
+    /**
+     * Render an error in the active output mode and return the exit code.
+     *
+     * The single failure path for `user:*` commands: machine mode gets the
+     * error envelope, human mode gets the decorated line, and the caller's
+     * chosen exit code travels back untouched. The default mirrors what
+     * `user:promote` and `user:delete` returned from their folded clones;
+     * `user:create` passes `Command::INVALID` explicitly for input rejections.
+     * Bytes and exit codes are pinned byte-identical to the pre-fold renders
+     * by the byte-matrix suite.
+     */
+    protected function fail(
+        InputInterface $input,
+        OutputInterface $output,
+        string $error,
+        int $exitCode = Command::FAILURE,
+    ): int {
+        if ($this->isJsonMode($input)) {
+            $this->emitJsonError($output, $error);
+        } else {
+            $output->writeln('<error>' . $error . '</error>');
+        }
+
+        return $exitCode;
     }
 
     /**
