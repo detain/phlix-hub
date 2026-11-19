@@ -14,6 +14,7 @@ namespace Phlix\Hub\Http\Controllers;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Hub\Updates\CoreUpdateCheckService;
+use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 
@@ -149,8 +150,8 @@ final class AdminUpdatesController
      */
     private function requireAdmin(Request $request): ?Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return (new Response())->status(401)->json([
                 'error' => 'Unauthorized',
                 'code'  => 'auth.required',

@@ -13,6 +13,7 @@ namespace Phlix\Hub\Http\Controllers;
 
 use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 
@@ -42,8 +43,8 @@ final class MeController
      */
     public function __invoke(Request $request): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             // Defensive: middleware should have caught this. Return 401
             // so the surface is consistent.
             return (new Response())->status(401)->json([

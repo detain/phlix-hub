@@ -16,6 +16,7 @@ use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\ConnectionResponseSink;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyProtocol;
@@ -989,8 +990,8 @@ final class ServerProxyController
      */
     public function proxy(Request $request, array $params): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             // HB-4.6b LANDMINE: unauthenticated floods take this cheap 401 —
             // NOT a limiter write. The proxy limiter is deliberately placed
             // AFTER this auth gate so an unauthed request never mints a bucket.

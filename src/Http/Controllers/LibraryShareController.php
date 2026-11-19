@@ -14,6 +14,7 @@ namespace Phlix\Hub\Http\Controllers;
 use InvalidArgumentException;
 use Phlix\Hub\Hub\LibraryShare;
 use Phlix\Hub\Hub\LibrarySharingHandler;
+use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\QuotaFrames;
 use Phlix\Hub\Http\Response;
@@ -75,8 +76,8 @@ final class LibraryShareController
      */
     public function createShare(Request $request): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return $this->memberError(401, 'auth.required', 'Sign in to share your libraries');
         }
 
@@ -163,8 +164,8 @@ final class LibraryShareController
      */
     public function listShares(Request $request): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return $this->memberError(401, 'auth.required', 'Sign in to see your shares');
         }
 
@@ -184,8 +185,8 @@ final class LibraryShareController
      */
     public function deleteShare(Request $request, array $params): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return $this->memberError(401, 'auth.required', 'Sign in to remove a share');
         }
 
@@ -216,8 +217,8 @@ final class LibraryShareController
      */
     public function updateShare(Request $request, array $params): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return $this->memberError(401, 'auth.required', 'Sign in to update a share');
         }
 

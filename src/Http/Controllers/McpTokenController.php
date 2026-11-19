@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Http\Controllers;
 
 use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Mcp\McpScopes;
@@ -83,8 +84,8 @@ final class McpTokenController
      */
     public function index(Request $request, array $params = []): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return self::unauthorized();
         }
 
@@ -120,8 +121,8 @@ final class McpTokenController
      */
     public function create(Request $request, array $params = []): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return self::unauthorized();
         }
 
@@ -168,8 +169,8 @@ final class McpTokenController
      */
     public function revoke(Request $request, array $params): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return self::unauthorized();
         }
 

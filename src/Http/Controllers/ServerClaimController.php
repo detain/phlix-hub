@@ -15,6 +15,7 @@ use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Hub\ClaimRequestHandler;
+use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
 use Phlix\Hub\Http\QuotaFrames;
 use Phlix\Hub\Http\Request;
@@ -202,8 +203,8 @@ final class ServerClaimController
      */
     public function claim(Request $request): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             // Registry dual-placement note: `auth.unauthenticated` rode `code`
             // in SCREAMING form; this emit-wave flips the site to the dotted
             // forward form and parks the legacy literal byte-identical in the

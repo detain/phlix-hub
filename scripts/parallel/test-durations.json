@@ -112,6 +112,7 @@
         "tests/Unit/Http/CollectionRouteSlashTest.php": 0.002,
         "tests/Unit/Http/ConnectionResponseSinkTest.php": 0.008,
         "tests/Unit/Http/ConnectionResponseSinkThrottleLoadTest.php": 0,
+        "tests/Unit/Http/ControllerRequestsTest.php": 0.081,
         "tests/Unit/Http/Controllers/AlexaPlayInAppIntentTest.php": 0.009,
         "tests/Unit/Http/Controllers/AlexaSkillControllerTest.php": 0.025,
         "tests/Unit/Http/Controllers/AuthControllerTest.php": 0.231,

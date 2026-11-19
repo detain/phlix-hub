@@ -18,6 +18,7 @@ use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Hub\InviteLink;
 use Phlix\Hub\Hub\InviteLinkHandler;
 use Phlix\Hub\Hub\LibraryShare;
+use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\QuotaFrames;
 use Phlix\Hub\Http\Response;
@@ -157,8 +158,8 @@ final class InviteLinkController
      */
     public function createInviteLink(Request $request): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return $this->memberError(401, 'auth.required', 'Sign in to create invite links');
         }
 
@@ -232,8 +233,8 @@ final class InviteLinkController
      */
     public function listInviteLinks(Request $request): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return $this->memberError(401, 'auth.required', 'Sign in to see your invite links');
         }
 
@@ -251,8 +252,8 @@ final class InviteLinkController
      */
     public function deleteInviteLink(Request $request, array $params): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return $this->memberError(401, 'auth.required', 'Sign in to revoke an invite link');
         }
 
@@ -284,8 +285,8 @@ final class InviteLinkController
      */
     public function redeem(Request $request, array $params): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return $this->memberError(401, 'auth.required', 'Sign in to accept this invite');
         }
 

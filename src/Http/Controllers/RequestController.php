@@ -15,6 +15,7 @@ use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\QuotaFrames;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
@@ -65,8 +66,8 @@ final class RequestController
      */
     public function createRequest(Request $request, array $params): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return $this->unauthorized();
         }
 
@@ -173,8 +174,8 @@ final class RequestController
      */
     public function listMyRequests(Request $request, array $params): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return $this->unauthorized();
         }
 
@@ -201,8 +202,8 @@ final class RequestController
      */
     public function getMyRequest(Request $request, array $params): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return $this->unauthorized();
         }
 
@@ -238,8 +239,8 @@ final class RequestController
      */
     public function deleteMyRequest(Request $request, array $params): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return $this->unauthorized();
         }
 
@@ -454,8 +455,8 @@ final class RequestController
      */
     private function requireAdmin(Request $request): ?Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return $this->unauthorized();
         }
         $admin = $this->users->findAdminById($userId);

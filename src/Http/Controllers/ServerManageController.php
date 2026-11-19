@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Http\Controllers;
 
 use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Workerman\MySQL\Connection;
@@ -49,8 +50,8 @@ final class ServerManageController
      */
     public function deleteServer(Request $request, array $params): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return (new Response())->status(401)->json([
                 'error' => 'Unauthorized',
                 'code'  => 'auth.required',
@@ -93,8 +94,8 @@ final class ServerManageController
      */
     public function accessInfo(Request $request, array $params): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return (new Response())->status(401)->json([
                 'error' => 'Unauthorized',
                 'code'  => 'auth.required',

@@ -14,6 +14,7 @@ namespace Phlix\Hub\Http\Controllers;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Hub\RelaySessionManager;
+use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 
@@ -99,8 +100,8 @@ final class UserQuotaController
      */
     public function viewOwnBandwidth(Request $request): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return $this->unauthorized();
         }
 
@@ -326,8 +327,8 @@ final class UserQuotaController
      */
     private function requireAdmin(Request $request): ?Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             return $this->unauthorized();
         }
         if ($this->users->findAdminById($userId) === null) {
