@@ -23,10 +23,16 @@ use Phlix\Hub\Relay\WsTlsBoot;
 use Phlix\Hub\SyncPlay\SyncPlayRelayWorker;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
+use FilesystemIterator;
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
+use ReflectionException;
+use ReflectionMethod;
 use ReflectionProperty;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
+use SplFileInfo;
 use Workerman\Worker;
 
 /**
@@ -439,12 +445,47 @@ final class WsTlsBootTest extends TestCase
 
     // ---- 6. F-11 retirement: the duplicate builders are gone -----------------
 
+    /**
+     * Extinction pin for the retired :8802 duplicate builder, expressed as a
+     * ReflectionMethod resolution probe plus a src-wide definition-token scan
+     * — NOT as method_exists(RelayWorker::class, 'relayTlsContext'): the repo
+     * phpstan corpus resolves known class names, folds a method_exists on an
+     * absent constant method to always-false, and reddens CI under
+     * function.impossibleType (HUB-ENV r2 INFO-1). Same teeth, two ways: a
+     * resurrection anywhere in src/ — including one delivered through a trait,
+     * which ReflectionMethod flattens into the class — fails this leg, and
+     * the doctrine matches testNoWorkerFileCarriesAnInlineHardenedLiteral()
+     * below (source-text scans are this file's extinction idiom).
+     */
     public function testThePerWorkerDuplicateContextBuildersAreRetired(): void
     {
-        self::assertFalse(
-            method_exists(RelayWorker::class, 'relayTlsContext'),
-            'relayTlsContext() must not come back — the SSOT is WsTlsContext::forListener()',
+        $definitionHits = [];
+        $phpFiles = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator(dirname(__DIR__, 3) . '/src', FilesystemIterator::SKIP_DOTS),
         );
+        foreach ($phpFiles as $file) {
+            if (!$file instanceof SplFileInfo || $file->getExtension() !== 'php') {
+                continue;
+            }
+
+            $source = file_get_contents($file->getPathname());
+            if ($source !== false && str_contains($source, 'function relayTlsContext')) {
+                $definitionHits[] = $file->getPathname();
+            }
+        }
+
+        self::assertSame(
+            [],
+            $definitionHits,
+            'relayTlsContext() must not come back anywhere in src/ — the SSOT is WsTlsContext::forListener()',
+        );
+
+        try {
+            new ReflectionMethod(RelayWorker::class, 'relayTlsContext');
+            self::fail('relayTlsContext() resolves on RelayWorker — the retired duplicate builder returned');
+        } catch (ReflectionException $e) {
+            self::assertStringContainsString('relayTlsContext', $e->getMessage());
+        }
     }
 
     public function testNoWorkerFileCarriesAnInlineHardenedLiteral(): void
