@@ -76,6 +76,20 @@ final class WsTlsBootTest extends TestCase
     private const PORT_SYNCPLAY = 18804;
     private const PORT_FEDERATION = 18805;
 
+    /**
+     * Coverage floor for the src-wide extinction scan (HUB-TLS r2 MAJOR-1).
+     * Measured at cure time: 239 .php files under src/ at tip f06f2a03. 200 is
+     * a round number safely below the measurement — it absorbs ordinary file
+     * churn without becoming a maintenance tripwire, yet any scan covering
+     * less than five sixths of the tree cannot be an honest full sweep. WHY A
+     * FLOOR EXISTS: an assertSame([], $hits) over a recursive directory scan
+     * passes GREEN when the scan inspected ZERO files (root drifting to an
+     * existing-but-wrong directory is silent) — a vacuous extinction pin is
+     * worse than none, so the scan must prove it swept the tree before the
+     * law may rely on it.
+     */
+    private const MIN_SRC_PHP_FILES = 200;
+
     /** @var array<int, string> Scratch paths removed in tearDown(). */
     private array $scratchFiles = [];
 
@@ -456,23 +470,55 @@ final class WsTlsBootTest extends TestCase
      * which ReflectionMethod flattens into the class — fails this leg, and
      * the doctrine matches testNoWorkerFileCarriesAnInlineHardenedLiteral()
      * below (source-text scans are this file's extinction idiom).
+     *
+     * Scope is src/ BY DESIGN: the SSOT law this pin guards is about the
+     * worker class in src/; a duplicate delivered outside src/ (tests,
+     * vendor, scripts) is out of scope here — the pinned test-support
+     * builders legitimately name such methods and are not SSOT violations.
+     *
+     * The scan anchors its root explicitly from __DIR__ (never the cwd —
+     * phpunit's working directory is caller-controlled) and asserts its own
+     * COVERAGE (MIN_SRC_PHP_FILES floor) before the law: a guard that can
+     * pass while inspecting nothing is the silent-success anti-pattern, so a
+     * zero-or-partial sweep reddens in its own right rather than green-
+     * lighting a relocated duplicate (r2 MAJOR-1: vacuity mutations B1/B3).
      */
     public function testThePerWorkerDuplicateContextBuildersAreRetired(): void
     {
+        $srcRoot = dirname(__DIR__, 3) . '/src';
+        self::assertTrue(
+            is_dir($srcRoot),
+            'extinction scan root ' . $srcRoot . ' must exist (resolved from __DIR__, lane-anchored)',
+        );
+
         $definitionHits = [];
+        $scannedPhpFiles = 0;
         $phpFiles = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator(dirname(__DIR__, 3) . '/src', FilesystemIterator::SKIP_DOTS),
+            new RecursiveDirectoryIterator($srcRoot, FilesystemIterator::SKIP_DOTS),
         );
         foreach ($phpFiles as $file) {
             if (!$file instanceof SplFileInfo || $file->getExtension() !== 'php') {
                 continue;
             }
 
+            $scannedPhpFiles++;
             $source = file_get_contents($file->getPathname());
-            if ($source !== false && str_contains($source, 'function relayTlsContext')) {
+            self::assertIsString($source, $file->getPathname() . ' must be readable for the extinction scan');
+            if (str_contains($source, 'function relayTlsContext')) {
                 $definitionHits[] = $file->getPathname();
             }
         }
+
+        // Coverage BEFORE law: the scan must prove it swept the tree — a
+        // vacuous (zero/partial-file) sweep is RED in its own right, naming
+        // what it actually measured.
+        self::assertGreaterThanOrEqual(
+            self::MIN_SRC_PHP_FILES,
+            $scannedPhpFiles,
+            'src/ extinction scan covered only ' . $scannedPhpFiles . ' php files — below the '
+                . self::MIN_SRC_PHP_FILES . '-file floor (measured 239): a vacuous scan is worse '
+                . 'than none; the scan root or the sweep is broken, not the law satisfied',
+        );
 
         self::assertSame(
             [],
