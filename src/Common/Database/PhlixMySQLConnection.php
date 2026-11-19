@@ -512,6 +512,18 @@ final class PhlixMySQLConnection extends Connection
     public function commitTrans()
     {
         $cid = $this->currentCoroutineId();
+
+        // Not the holder: this coroutine has no transaction of its own here.
+        // Touching the shared PDO would commit (or interleave with) ANOTHER
+        // coroutine's open transaction, and the finally-block bookkeeping
+        // would clear the holder's liveness/poison markers — the stranger
+        // must be fully inert (server's guards at commitTrans/rollBackTrans
+        // have carried this shape all along; the hub mirrored it at
+        // TXMUTEX-A A2, 2026-11-21, closing §1.2's destructive half).
+        if ($cid >= 0 && $this->queryLockHolder !== $cid) {
+            return true;
+        }
+
         try {
             if ($this->txPoisoned) {
                 throw new \PDOException('Transaction was lost when the connection dropped; refusing to commit.');
@@ -547,6 +559,17 @@ final class PhlixMySQLConnection extends Connection
     public function rollBackTrans()
     {
         $cid = $this->currentCoroutineId();
+
+        // Not the holder: a STALE releaser (see the docblock above — the
+        // reentrant query path calls this AFTER execute()'s override already
+        // rolled back) must not end another coroutine's transaction by
+        // rolling it back, nor clear its txOpen/txPoisoned markers. Fully
+        // inert, mirroring commitTrans() and the server's guards (TXMUTEX-A
+        // A2, 2026-11-21).
+        if ($cid >= 0 && $this->queryLockHolder !== $cid) {
+            return true;
+        }
+
         try {
             // A dropped connection leaves no PDO handle to roll back.
             return $this->pdo instanceof \PDO ? (bool) parent::rollBackTrans() : true;

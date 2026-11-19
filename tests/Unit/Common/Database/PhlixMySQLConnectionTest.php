@@ -481,4 +481,39 @@ final class PhlixMySQLConnectionTest extends TestCase
         $this->assertStringContainsString('flavor detection', $out);
         $this->assertStringContainsString('probe boom', $out);
     }
+
+    /**
+     * TXMUTEX-A A2: a coroutine that never took the transaction-scoped mutex
+     * must be FULLY inert against another coroutine's open transaction.
+     * Pre-guard, its commitTrans()/rollBackTrans() reached the shared PDO
+     * handle (committing or erasing the holder's transaction — §1.2's
+     * destructive half) and its finally-block cleared the holder's
+     * txOpen/txPoisoned markers while the holder-guarded endTransaction()
+     * silently no-op'd. Child-process smoke (S179): the holder's transaction
+     * must survive BOTH stranger attempts untouched, and the holder must
+     * still be able to end it through the API.
+     */
+    public function testACoroutineThatNeverHeldTheMutexCannotEndTheHoldersTransaction(): void
+    {
+        if (!extension_loaded('swoole')) {
+            self::markTestSkipped('ext-swoole required for the stranger-transaction smoke.');
+        }
+
+        $result = SwooleFixtureProcess::run(__DIR__ . '/Fixtures/transaction_stranger_smoke.php');
+        $events = array_values(array_filter(explode("\n", trim($result['stdout']))));
+
+        self::assertSame([
+            'A:hold',
+            'B:commit:true',
+            'B:inTx:1',
+            'B:txOpen:1',
+            'B:holder:stays-A',
+            'B:rollback:true',
+            'B:inTx2:1',
+            'B:txOpen2:1',
+            'A:commit:true',
+            'A:inTx:0',
+            'A:holder:free',
+        ], $events, "child output (stranger inert, holder intact) was:\n" . $result['stdout']);
+    }
 }
