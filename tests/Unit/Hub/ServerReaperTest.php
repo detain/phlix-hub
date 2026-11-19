@@ -241,6 +241,42 @@ final class ServerReaperTest extends TestCase
         self::assertSame(2, $deleteAttempts, 'Expected exactly one retry after the deadlock');
     }
 
+    /**
+     * D-16 normalisation pin (behaviour-equivalent, not a conviction): a
+     * numeric-string errorInfo[1] ('1213') with a localized driver message is
+     * still the wire deadlock. The canonical driverCode() reads the legacy
+     * numeric-string shape the hand-rolled strict `=== 1213` arm would have
+     * missed; the SQLSTATE fallback rescues it, and this pin locks both arms
+     * to the same wire reading.
+     */
+    public function testSweepHeartbeatsRetriesOnNumericStringWireCode(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $deadlock = new \PDOException('Kilit çarpışması, işlemi yeniden başlatın', 40001);
+        $deadlock->errorInfo = ['40001', '1213', 'Kilit çarpışması, işlemi yeniden başlatın'];
+
+        $deleteAttempts = 0;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$deleteAttempts, $deadlock): int|array {
+                if (str_starts_with(ltrim($sql), 'SELECT')) {
+                    return [['id' => 'aaa']];
+                }
+                $deleteAttempts++;
+                if ($deleteAttempts === 1) {
+                    throw $deadlock;
+                }
+                return 1;
+            },
+        );
+
+        $reaper = new ServerReaper($db, $logger, 60, 180, 7);
+
+        self::assertSame(1, $reaper->sweepHeartbeats());
+        self::assertSame(2, $deleteAttempts, 'numeric-string wire code must enter the retry ladder');
+    }
+
     public function testSweepHeartbeatsRethrowsAfterMaxDeadlockRetries(): void
     {
         $db = $this->createMock(Connection::class);

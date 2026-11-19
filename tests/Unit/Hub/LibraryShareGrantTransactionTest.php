@@ -361,6 +361,53 @@ final class LibraryShareGrantTransactionTest extends TestCase
         $handler->shareLibrary('owner-1', 'friend@example.com', 'srv-1', 'lib-1', 'Movies');
     }
 
+    public function testUnrelatedFailureEchoingDuplicateDigitsIsNotFriendliedIntoA409(): void
+    {
+        // D-16 red-first conviction against the old OR-belt: the wire code is
+        // 1054 (unknown column) but the echoed SQL template carries the digit
+        // string '1062' (a column literally named note_1062). The belt read
+        // `str_contains($message, '1062')` and mapped this to the 409 "Share
+        // already exists", swallowing a real schema failure as a friendly
+        // conflict. Wire identity is authoritative: the PDOException must
+        // propagate untouched. (Vendor fact: lastSQL() echoes the raw
+        // statement template, so this shape is reachable through SQL text.)
+        $contradiction = new PDOException(
+            "SQL:INSERT INTO library_shares (note_1062) VALUES (1) "
+            . "SQLSTATE[42S22]: Column not found: 1054 Unknown column 'note_1062' in 'field list'",
+            42,
+        );
+        $contradiction->errorInfo = ['42S22', 1054, "Unknown column 'note_1062' in 'field list'"];
+
+        $db = $this->createMock(Connection::class);
+        $this->armTxnGuards($db);
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use ($contradiction) {
+                $event = $this->classify($sql);
+                $this->events[] = $event;
+                if ($event === 'INSERT') {
+                    throw $contradiction;
+                }
+                return match ($event) {
+                    'OWNCHECK', 'ANCHOR' => [['id' => 'srv-1']],
+                    'TUPLE' => [],
+                    default => $this->fail('unexpected: ' . $sql),
+                };
+            },
+        );
+
+        $users = $this->createMock(UserRepository::class);
+        $users->method('findByEmail')->willReturn(['id' => 'collab-1']);
+        $handler = new LibrarySharingHandler($db, $users, $this->createMock(StructuredLogger::class), null);
+
+        // Verbatim propagation: PHPUnit's object-expectation compares class +
+        // message + code against THE exception the handler must rethrow — the
+        // hand-rolled try/catch idiom would read as a dead catch to the
+        // static analyser, because the handler's declared throws is the
+        // mapped InvalidArgumentException, not the raw driver failure.
+        $this->expectExceptionObject($contradiction);
+        $handler->shareLibrary('owner-1', 'friend@example.com', 'srv-1', 'lib-1', 'Movies');
+    }
+
     public function testProviderWiresTheHandlerOnTheDedicatedTxnHandle(): void
     {
         // Static source-pin (the repo tripwire idiom): the CLAIM precedent

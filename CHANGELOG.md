@@ -12,6 +12,30 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Refactor [HUB-MYSQLERR] — `MysqlError` becomes the single MySQL error detector (D-16 twin) — 2026-11-19
+
+- New `Phlix\Hub\Common\Database\MysqlError` (body twin of the phlix-server class,
+  namespace-adjusted only; DESIGN M-30 assigns the eventual lift to `phlix-shared`,
+  which retires both twins in one step). Wire identity first: `driverCode()` reads the
+  driver errno from a raw `PDOException::$errorInfo` triple or from an unambiguous
+  rendered `SQLSTATE[...]: ...: NNNN` segment (an anchored segment wins; a second echo
+  occurrence is refused outright), and `isDuplicateKey()` / `isDeadlock()` compare
+  against named constants — no magic numbers at call sites, and English message text
+  is never the trigger.
+- Migrated detection forms: `LibrarySharingHandler`'s share-insert belt (`str_contains
+  '1062'` OR `'Duplicate entry'` — the wire-contradicting shape no longer friendlies an
+  unrelated schema failure into a 409, red-first conviction pinned), `ServerReaper::
+  isDeadlockError()` (delegates to the canonical code read; its wire-only doctrine —
+  HUB-m56 — is unchanged), `KeySweeper`'s retry belt (a localized wire deadlock with no
+  English text now enters the retry ladder, red-first pinned; a wire code contradicting
+  "Deadlock" text propagates without retry), `MigrationRunner::driverErrorCode()` (same
+  anchored segment parse through the canonical class), and `PhlixMySQLConnection::
+  execute()` (inline `errorInfo[1]` cast + the 2006/2013 literals → `CR_SERVER_GONE_ERROR`
+  / `CR_SERVER_LOST`; the tx-poison branch is untouched).
+- `scripts/parallel/test-durations.json` re-blessed from one serial Unit junit on a clean
+  checkout (host timings, no swoole) to carry the new `MysqlErrorTest` — the S468 duration
+  guard's set-equality is green against the regenerated cache.
+
 ### Chore [HUB-DEPS] — dev-toolchain upgrade: PHPUnit 12, PHP_CodeSniffer 4, current GitHub Actions — 2026-11-13
 
 - `phpunit/phpunit` `^10.0` -> `^12.5` (12.5.44), `squizlabs/php_codesniffer` `^3.10` -> `^4.0` (4.0.4);

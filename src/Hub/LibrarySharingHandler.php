@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Hub;
 
+use Phlix\Hub\Common\Database\MysqlError;
 use Phlix\Hub\Common\Support\Ids;
 use InvalidArgumentException;
 use Phlix\Hub\Auth\UserRepository;
@@ -185,8 +186,24 @@ class LibrarySharingHandler
                     // is — byte-identical to the live-tuple 409 — instead of
                     // letting a 1062 surface as a 500. Every other SQL error
                     // rethrows untouched.
-                    $message = $duplicate->getMessage();
-                    if (!str_contains($message, '1062') && !str_contains($message, 'Duplicate entry')) {
+                    //
+                    // D-16 (refactor): wire identity first. The old belt
+                    // OR-accepted ANY message containing '1062' or 'Duplicate
+                    // entry' — an unrelated failure whose echoed SQL template
+                    // carried those digits was friendlied into a 409. When the
+                    // wire renders a driver code, only 1062 maps to the
+                    // conflict answer; the phrase belt survives solely for
+                    // code-less renderings, exactly as before.
+                    $code = MysqlError::driverCode($duplicate->errorInfo)
+                        ?? MysqlError::driverCode($duplicate->getMessage());
+                    if ($code !== null) {
+                        if (!MysqlError::isDuplicateKey($code)) {
+                            throw $duplicate;
+                        }
+                    } elseif (
+                        !str_contains($duplicate->getMessage(), MysqlError::DUPLICATE_ENTRY_PHRASE)
+                        && !str_contains($duplicate->getMessage(), (string) MysqlError::ER_DUP_ENTRY)
+                    ) {
                         throw $duplicate;
                     }
                     throw new InvalidArgumentException('Share already exists', 409);

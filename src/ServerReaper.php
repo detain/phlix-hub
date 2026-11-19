@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub;
 
+use Phlix\Hub\Common\Database\MysqlError;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Workerman\Timer;
 
@@ -128,22 +129,6 @@ final class ServerReaper
      * @var int
      */
     private const DEADLOCK_MAX_ATTEMPTS = 3;
-
-    /**
-     * MySQL's deadlock error number (`ER_LOCK_DEADLOCK`).
-     *
-     * @var int
-     */
-    private const MYSQL_DEADLOCK_ERRNO = 1213;
-
-    /**
-     * SQLSTATE class for serialization failures — the code MySQL ships for
-     * error 1213, carried in {@see \PDOException::$errorInfo}[0] and as the
-     * exception's `getCode()`.
-     *
-     * @var string
-     */
-    private const SQLSTATE_SERIALIZATION_FAILURE = '40001';
 
     /**
      * Hard ceiling (~100 years) for any retention window in days.
@@ -669,14 +654,16 @@ final class ServerReaper
      */
     private static function isDeadlockError(\PDOException $e): bool
     {
-        // Driver errno arm: pdo_mysql populates errorInfo as
-        // ['40001', 1213, 'Deadlock found ...'] — strict int identity against
-        // 1213, no string casts anywhere.
-        if (is_array($e->errorInfo) && ($e->errorInfo[1] ?? null) === self::MYSQL_DEADLOCK_ERRNO) {
-            return true;
+        // D-16 (refactor): the canonical detector's array arm — wire identity
+        // only, per the HUB-m56 sweep law quoted above. The old hand-rolled
+        // strict `=== 1213` comparison additionally missed numeric-string
+        // error codes; MysqlError::driverCode normalises that shape.
+        $code = MysqlError::driverCode($e->errorInfo);
+        if ($code !== null) {
+            return MysqlError::isDeadlock($code);
         }
 
-        return (string) $e->getCode() === self::SQLSTATE_SERIALIZATION_FAILURE;
+        return (string) $e->getCode() === MysqlError::SQLSTATE_SERIALIZATION_FAILURE;
     }
 
     /**

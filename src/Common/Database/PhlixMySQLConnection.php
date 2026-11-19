@@ -251,8 +251,17 @@ final class PhlixMySQLConnection extends Connection
             $this->prepareAndBind($query, $parameters);
             $this->success = $this->sQuery instanceof \PDOStatement && $this->sQuery->execute();
         } catch (\PDOException $e) {
-            $errno = (is_array($e->errorInfo) && isset($e->errorInfo[1])) ? (int) $e->errorInfo[1] : 0;
-            if (($errno === 2006 || $errno === 2013) && $this->txOpen) {
+            // D-16 (refactor): canonical driver-code read. Equivalent to the
+            // old `isset($e->errorInfo[1]) ? (int) $e->errorInfo[1] : 0`
+            // ternary — a non-numeric or zero element yielded 0 and fell to
+            // the else-branch; driverCode() returns null and `?? 0` restores
+            // the same value. 2006/2013 are named so the retry contract reads
+            // as intent, not magic.
+            $errno = MysqlError::driverCode($e->errorInfo) ?? 0;
+            if (
+                ($errno === MysqlError::CR_SERVER_GONE_ERROR || $errno === MysqlError::CR_SERVER_LOST)
+                && $this->txOpen
+            ) {
                 // Gone away INSIDE a transaction: the server already rolled it
                 // back, so a reconnect+retry would execute outside it. Drop the
                 // dead socket, release the lock, poison the commit and fail.
@@ -265,7 +274,7 @@ final class PhlixMySQLConnection extends Connection
                     (int) $e->getCode()
                 );
             }
-            if ($errno === 2006 || $errno === 2013) {
+            if ($errno === MysqlError::CR_SERVER_GONE_ERROR || $errno === MysqlError::CR_SERVER_LOST) {
                 // "MySQL server has gone away" — drop the dead socket and retry once.
                 $this->closeConnection();
                 try {

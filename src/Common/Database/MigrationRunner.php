@@ -767,10 +767,11 @@ class MigrationRunner
      */
     private static function driverErrorCode(string $segment): ?int
     {
-        if (preg_match('/^SQLSTATE\[[^\]]*\]:\s*[^:]*:\s*(\d+)\b/', $segment, $m) !== 1) {
-            return null;
-        }
-
-        return (int) $m[1];
+        // D-16 (refactor): the parse is the canonical one; the segment handed
+        // in here is already prefix-stripped and anchored (errorSegment()'s
+        // contract), which is exactly the shape MysqlError::driverCode()
+        // parses first. The multi-occurrence refusal additionally hardens the
+        // decoy class this file's safety docblock condemned.
+        return MysqlError::driverCode($segment);
     }
 }

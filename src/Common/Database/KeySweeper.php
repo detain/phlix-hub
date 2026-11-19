@@ -118,7 +118,15 @@ final class KeySweeper
 
                 return $this->deleteByIds($ids);
             } catch (PDOException $e) {
-                $isDeadlock = stripos($e->getMessage(), 'deadlock') !== false;
+                // D-16 (refactor): wire identity first — a localized deadlock
+                // carries errorInfo ['40001', 1213, ...] with no English text
+                // at all, which the old stripos belt missed. The English
+                // phrase belt survives only when no code is readable, exactly
+                // as before.
+                $code = MysqlError::driverCode($e->errorInfo) ?? MysqlError::driverCode($e->getMessage());
+                $isDeadlock = $code !== null
+                    ? MysqlError::isDeadlock($code)
+                    : stripos($e->getMessage(), 'deadlock') !== false;
                 if (!$isDeadlock || $attempt === self::MAX_ATTEMPTS) {
                     throw $e;
                 }

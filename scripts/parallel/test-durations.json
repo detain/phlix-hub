@@ -1,5 +1,5 @@
 {
-    "generatedFrom": "b3146f8a + HUB-TLS WsTlsBootTest serial junit, clean-checkout bless",
+    "generatedFrom": "faabd065 + SRV-METRICS-A13 two new Unit files serial junit (clean-checkout bless), pcov",
     "unit": {
         "tests/Common/Database/MigrationRunnerTest.php": 0.023,
         "tests/Health/HealthControllerTest.php": 0.007,
@@ -153,6 +153,7 @@
         "tests/Unit/Http/Controllers/ServerProxyAdmissionEnvelopeTest.php": 0.002,
         "tests/Unit/Http/Controllers/ServerProxyControllerTest.php": 1.21,
         "tests/Unit/Http/Controllers/SharedUiControllerCspTest.php": 0.034,
+        "tests/Unit/Http/Controllers/Stats/MetricsControllerParamSourceCharacterizationTest.php": 0.008,
         "tests/Unit/Http/Controllers/SubdomainControllerTest.php": 0.002,
         "tests/Unit/Http/Controllers/ThemesControllerTest.php": 0,
         "tests/Unit/Http/Controllers/UserPasswordControllerTest.php": 0.002,
@@ -307,8 +308,8 @@
         "tests/Unit/Relay/TunnelThrottleTimerLoopTest.php": 5.016,
         "tests/Unit/Relay/WebSocketCloseFrameTest.php": 0.005,
         "tests/Unit/Relay/WorkerBindHostAndCloseTest.php": 0.002,
-        "tests/Unit/Relay/WsTlsContextTest.php": 0.001,
         "tests/Unit/Relay/WsTlsBootTest.php": 0.018,
+        "tests/Unit/Relay/WsTlsContextTest.php": 0.001,
         "tests/Unit/Requests/RequestManagerAutoApproveTest.php": 0.003,
         "tests/Unit/Requests/RequestManagerTest.php": 0.015,
         "tests/Unit/Requests/RequestNotificationTest.php": 0.002,
@@ -324,6 +325,7 @@
         "tests/Unit/Stats/Metrics/MetricsFlushServiceTest.php": 0.018,
         "tests/Unit/Stats/Metrics/MetricsRegistryTest.php": 0.004,
         "tests/Unit/Stats/Metrics/MetricsRepositoryTest.php": 0.004,
+        "tests/Unit/Stats/Metrics/MetricsVocabularyParityTest.php": 0.007,
         "tests/Unit/Support/AssertIntegrationTestsRanTest.php": 0.733,
         "tests/Unit/Support/CoverageArtifactGateTest.php": 1.011,
         "tests/Unit/Support/CoverageMetadataPolicyTest.php": 0.103,
