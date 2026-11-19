@@ -50,6 +50,7 @@
         "tests/Unit/Common/Container/Providers/ServerClaimRateLimitWiringTest.php": 0.001,
         "tests/Unit/Common/Database/ConnectionPoolGuardTest.php": 0,
         "tests/Unit/Common/Database/KeySweeperTest.php": 0.003,
+        "tests/Unit/Common/Database/MysqlErrorTest.php": 0.006,
         "tests/Unit/Common/Database/PhlixMySQLConnectionTest.php": 0.007,
         "tests/Unit/Common/Database/PooledMySQLConnectionTest.php": 0.004,
         "tests/Unit/Common/Database/UpsertSyntaxTest.php": 0.003,
