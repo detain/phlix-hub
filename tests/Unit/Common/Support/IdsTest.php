@@ -265,7 +265,8 @@ final class IdsTest extends TestCase
         // a plant proving exactly that is logged with the cure round.
         self::assertTrue(
             (bool) $isVariable->invoke(null, '12345678-1234-1234-1234-123456789012'),
-            'Application::isVariableSegment must still accept all-digit hyphenated v4-shape — the regex arm is load-bearing.',
+            'Application::isVariableSegment must still accept all-digit hyphenated v4-shape — '
+                . 'the regex arm is load-bearing.',
         );
     }
 }
