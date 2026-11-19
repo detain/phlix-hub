@@ -30,11 +30,16 @@ namespace Phlix\Hub\Common\Env;
  * - unset, or set-but-empty (`""`), means "not configured" → the default;
  * - `"0"` is an EXPLICIT value and survives.
  *
- * The helpers never throw and never warn: a config read cannot take the
- * boot path down. Callers own any further validation (bounds, enums) —
- * including the pools' own ceilings (PooledMySQLConnection clamps its
- * `maxSize` to ≥ 1, so a forwarded `DB_POOL_SIZE=0` can never arm a
- * zero-connection pool).
+ * The helpers never throw: a config read cannot take the boot path down.
+ * Callers own any further validation (bounds, enums) — including the pools'
+ * own ceilings (PooledMySQLConnection clamps its `maxSize` to ≥ 1, so a
+ * forwarded `DB_POOL_SIZE=0` can never arm a zero-connection pool). The
+ * numeric/text readers are also silent; the bool family adds ONE soft
+ * exception — a value that is neither a true word nor a false word is
+ * answered by the default AND logged as a one-line `error_log` warning
+ * (the server's E-04 law): junk in a knob is operator-visible, but a
+ * warning is a recording, not a throw, so the boot-path contract holds
+ * unchanged.
  *
  * Config files load this class with a plain `require_once` (not the
  * composer autoloader): the estate doctrine is that a config file must
@@ -43,9 +48,9 @@ namespace Phlix\Hub\Common\Env;
  * the PSR-4 loader in the long-running paths.
  *
  * The server original also carries a memoized CPU-count probe
- * (`availableCpuCount()`); the hub has no consumer for it, so it is
- * deliberately NOT ported — port it verbatim from the server original if a
- * consumer ever appears.
+ * (`availableCpuCount()`) and the opt-out verb (`boolOptOut()`); the hub
+ * has no consumer for either, so they are deliberately NOT ported — port
+ * them verbatim from the server original if a consumer ever appears.
  *
  * @package Phlix\Hub\Common\Env
  * @since HUB-2.1
@@ -91,5 +96,84 @@ final class EnvConfig
         $raw = getenv($name);
 
         return $raw === false || $raw === '' ? null : $raw;
+    }
+
+    /**
+     * The words the bool grammar reads as TRUE (case-folded, trimmed).
+     *
+     * @var list<string>
+     */
+    private const TRUE_WORDS = ['1', 'true', 'yes', 'on'];
+
+    /**
+     * The words the bool grammar reads as FALSE (case-folded, trimmed).
+     *
+     * @var list<string>
+     */
+    private const FALSE_WORDS = ['0', 'false', 'no', 'off'];
+
+    /**
+     * Read a boolean knob — the estate's single bool law, ported verbatim
+     * from the server's E-04 reader so a knob behaves identically on both
+     * hosts.
+     *
+     * Grammar (identical for every bool reader here, see
+     * {@see boolValue()}): unset/empty → $default; true words → true; false
+     * words → false; anything else → $default plus a one-line `error_log`
+     * warning. The trim is load-bearing: the hub's former hand-rolled copies
+     * disagreed on it — `ContainerFactory::shouldCompile()` did NOT trim
+     * (`PHLIX_HUB_CONTAINER_COMPILE=" 1 "` answered false) while the
+     * `filter_var` arms did — so the same spelling got two answers. Under one
+     * law it answers TRUE everywhere.
+     */
+    public static function bool(string $name, bool $default = false): bool
+    {
+        return self::boolValue(getenv($name), $default, $name);
+    }
+
+    /**
+     * The bool grammar as a pure function over an ALREADY-READ raw value.
+     *
+     * Public because a caller that receives the raw env value from its own
+     * caller still owes the same law — `Application::dbCeilingDemand()` is
+     * exactly that seam (env values are passed in so the boot check is
+     * unit-testable, HUB-S17; its pool-enabled arm must agree with the
+     * config's `pool_enabled`, which reads the same knob through
+     * {@see bool()}).
+     *
+     * @param string|false|null $raw     Raw env value; `getenv()`'s false and null both read as unset.
+     * @param bool              $default Answer for unset/empty/junk.
+     * @param string            $name    Knob name, used only to make the junk warning actionable.
+     */
+    public static function boolValue(string|false|null $raw, bool $default, string $name): bool
+    {
+        if (!is_string($raw)) {
+            return $default;
+        }
+
+        $normalized = strtolower(trim($raw));
+
+        if ($normalized === '') {
+            return $default;
+        }
+
+        if (in_array($normalized, self::TRUE_WORDS, true)) {
+            return true;
+        }
+
+        if (in_array($normalized, self::FALSE_WORDS, true)) {
+            return false;
+        }
+
+        error_log(sprintf(
+            'EnvConfig: %s="%s" is neither a true word (%s) nor a false word (%s); using default %s',
+            $name,
+            str_replace(["\r", "\n"], ' ', $normalized),
+            implode('/', self::TRUE_WORDS),
+            implode('/', self::FALSE_WORDS),
+            $default ? 'true' : 'false',
+        ));
+
+        return $default;
     }
 }
