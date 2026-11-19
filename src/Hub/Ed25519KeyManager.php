@@ -581,18 +581,39 @@ final class Ed25519KeyManager
      *     secret), because a corrupted key file must stop boot loudly rather
      *     than sign with a silently truncated secret.
      *  2. MODERN files — this writer's kernel-folded base64url/64-fold
-     *     server-dialect bodies (detected by alphabet) and non-ED25519-labeled
+     *     server-dialect bodies (detected by EXACT grammar: 86-char unpadded
+     *     base64url fold — S2-KEYFILE-r1 routes by shape, not by character
+     *     presence, so a standard body corrupted into carrying a url char
+     *     fails loud on the legacy arm exactly as it always did) and
+     *     non-ED25519-labeled
      *     PEM blocks such as PKCS#8 (detected by label) — delegate to
      *     {@see Ed25519Pem::parsePem()}. Both arms are ADDITIVE acceptance
      *     beyond the legacy dialect, required so a generate-then-load
      *     round-trip of freshly written keys succeeds; modernizing the legacy
      *     arm itself (fold-tolerant parsing with kept strictness) is banked
      *     for the v0.57 charter, not shipped here.
+     *  3. ROLLBACK DISCLOSURE (S2-KEYFILE-r1): key files minted AFTER the
+     *     v0.56.0 adoption carry the kernel writer's folded dialect, which a
+     *     pre-adoption build's strict one-line standard parser cannot read —
+     *     it THROWS on them. A binary rollback performed AFTER a rotation is
+     *     therefore a boot failure at this seam. A rollback-capable deployment
+     *     must carry its pre-S2 key file backup (or mint no rotation inside
+     *     the rollback window). There is no runtime fallback by design: the
+     *     alternative is silently accepting a key format the old code cannot
+     *     verify against its own published JWKS.
      *
-     * A malformed hybrid (standard body corrupted into containing `-`/`_`)
-     * falls to the kernel arm and fails loud with the modern message; the
-     * exception TYPE (RuntimeException) is invariant across both arms and
-     * every reject path, which is what callers branch on.
+     * A malformed hybrid is routed by GRAMMAR: any body carrying standard
+     * alphabet marks (`+`, `/`, or `=` padding), or a length other than the
+     * kernel's exact 86-char unpadded fold, falls to the legacy arm and fails
+     * loud with the legacy message — exactly as pre-delegation did for every
+     * such file (r1 H1/H2/H3/L6 parity restored). The IRREDUCIBLE residual,
+     * measured and pinned as known debt (testSignSeamDifferentialGrammarLook
+     * alikeIsKnownDebt): a corruption landing on EXACTLY the kernel grammar
+     * is by construction indistinguishable from a key this writer minted and
+     * loads its decoded bytes silently. A loud-fail seed/public consistency
+     * check at load is banked for the v0.57 charter. The exception TYPE
+     * (RuntimeException) is invariant across every REJECT path, which is what
+     * callers branch on.
      *
      * @param string $pem PEM-encoded key.
      *
@@ -630,13 +651,19 @@ final class Ed25519KeyManager
 
     /**
      * Does this stored key file use a MODERN dialect the legacy parser cannot
-     * read? Two discriminators, both cheap and content-local: a PEM label
-     * other than the hub's ED25519 PRIVATE KEY (PKCS#8 et al.) or a body
-     * carrying base64url-only characters (`-`/`_`), which the kernel-folded
-     * writer (Ed25519Pem::buildPem) emits but the historical one-line standard
-     * alphabet never can. Standard-alphabet bodies — legacy files in both
-     * marked and marker-less shapes — deliberately stay on the legacy arm so
-     * their exact-64 strictness is enforced by the hub, not the kernel.
+     * read? Routed by GRAMMAR, not by character presence (S2-KEYFILE-r1): a
+     * PEM label other than the hub's ED25519 PRIVATE KEY (PKCS#8 et al.), or
+     * a body that is EXACTLY the kernel-folded writer's shape — 86 chars of
+     * unpadded base64url, the length-512-behind no-padding fold of a 64-byte
+     * secret. Anything else (every standard-alphabet body, INCLUDING the
+     * `==` padding and any mid-body corruption that merely introduces a url
+     * char) stays on the legacy arm, so a hybrid-corrupted file lands on the
+     * parser LEGACY already threw at instead of the kernel, whose strtr would
+     * map the corruption into a silently different secret. The irreducible
+     * residual: a corruption that lands on the exact kernel grammar is
+     * indistinguishable from a minted key and loads its decoded bytes —
+     * characterized by pin and banked for the v0.57 seed/public consistency
+     * check; see the class docblock.
      */
     private function isModernKeyFileDialect(string $pem): bool
     {
@@ -649,7 +676,9 @@ final class Ed25519KeyManager
         $body = (string) preg_replace('#-----(BEGIN|END) ED25519 PRIVATE KEY-----#', '', $body);
         $body = str_replace(["\r", "\n", ' '], '', $body);
 
-        return preg_match('/[-_]/', $body) === 1;
+        // 86 = unpadded base64url length of 64 bytes; padding or standard-only
+        // chars (+, /) mean this is NOT the writer's grammar → legacy arm.
+        return strlen($body) === 86 && strpbrk($body, '+/=') === false;
     }
 
     /**

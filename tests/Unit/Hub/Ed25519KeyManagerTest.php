@@ -315,6 +315,7 @@ final class Ed25519KeyManagerTest extends TestCase
             $this->keyPath,
             "-----BEGIN ED25519 PRIVATE KEY-----\n{$oversized}\n-----END ED25519 PRIVATE KEY-----\n",
         );
+        chmod($this->keyPath, 0600);
 
         $manager = new Ed25519KeyManager($this->keyPath);
 
@@ -331,11 +332,100 @@ final class Ed25519KeyManagerTest extends TestCase
         $keyPair = sodium_crypto_sign_keypair();
         $secret = substr($keyPair, 0, 64);
         file_put_contents($this->keyPath, base64_encode($secret));
+        chmod($this->keyPath, 0600);
 
         $pair = (new Ed25519KeyManager($this->keyPath))->getOrCreateKeyPair();
 
         self::assertSame($secret, $pair['private']);
         self::assertSame(substr($secret, 32), $pair['public']);
+    }
+
+    /**
+     * H1 differential (S2-KEYFILE-r1 MAJOR): a standard-base64 body corrupted
+     * to contain a `-` at mid-body still carries the `==` padding of the
+     * 88-char standard shape — legacy threw ('must be exactly 64 bytes', its
+     * strict decode rejects the url char) while the character-only detector
+     * routed it to the kernel, which strtr-mapped the char and silently signed
+     * with a WRONG secret. Grammar routing must restore the loud reject.
+     */
+    public function testSignSeamDifferentialStandardBodyWithUrlCharFailsLoud(): void
+    {
+        $body = base64_encode(random_bytes(\SODIUM_CRYPTO_SIGN_SECRETKEYBYTES));
+        self::assertStringContainsString('=', $body, 'standard shape carries padding');
+        $body = substr($body, 0, 10) . '-' . substr($body, 11);
+        $pem = "-----BEGIN ED25519 PRIVATE KEY-----\n" . $body . "\n-----END ED25519 PRIVATE KEY-----\n";
+
+        file_put_contents($this->keyPath, $pem);
+        chmod($this->keyPath, 0600);
+        $manager = new Ed25519KeyManager($this->keyPath);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Ed25519 private key must be exactly 64 bytes.');
+        $manager->getKid();
+    }
+
+    /**
+     * L6 differential (S2-KEYFILE-r1): trailing junk after the END marker
+     * containing a `-`. Legacy kept the junk in its body view and threw on the
+     * strict decode; the kernel's regex captures only between markers and
+     * silently accepted. Same legacy message expected.
+     */
+    public function testSignSeamDifferentialJunkAfterEndWithUrlCharFailsLoud(): void
+    {
+        $body = base64_encode(random_bytes(\SODIUM_CRYPTO_SIGN_SECRETKEYBYTES));
+        $pem = "-----BEGIN ED25519 PRIVATE KEY-----\n" . $body
+            . "\n-----END ED25519 PRIVATE KEY-----\n" . "corrupt-tail\n";
+
+        file_put_contents($this->keyPath, $pem);
+        chmod($this->keyPath, 0600);
+        $manager = new Ed25519KeyManager($this->keyPath);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Ed25519 private key must be exactly 64 bytes.');
+        $manager->getKid();
+    }
+
+    /**
+     * Characterization pin for the IRREDUCIBLE residual (MINOR-1, known debt):
+     * a corruption landing on EXACTLY the kernel grammar — 86-char unpadded
+     * base64url, the writer's exact output shape — is by construction
+     * indistinguishable from a key this writer minted, so it loads silently
+     * with whatever secret it decodes to. Pinned so the class is documented
+     * behavior, not an accident; the loud-fail cure (seed/public consistency
+     * check at load via sodium_crypto_sign_seed_keypair round-trip) is banked
+     * for the v0.57 charter.
+     */
+    public function testSignSeamDifferentialGrammarLookalikeIsKnownDebt(): void
+    {
+        // A secret whose url-encoding actually contains a url-only char, in
+        // the writer's exact 64-fold shape.
+        $raw = null;
+        $url = null;
+        foreach (range(0, 255) as $b0) {
+            $candidate = chr($b0) . str_repeat("\x00", 63);
+            $encoded = rtrim(strtr(base64_encode($candidate), '+/', '-_'), '=');
+            if (strpbrk($encoded, '-_') !== false && strlen($encoded) === 86) {
+                $raw = $candidate;
+                $url = $encoded;
+                break;
+            }
+        }
+        self::assertNotNull($raw, 'testbed premise: a url-char-bearing key must exist');
+
+        $pem = "-----BEGIN ED25519 PRIVATE KEY-----\n"
+            . substr($url, 0, 64) . "\n" . substr($url, 64)
+            . "\n-----END ED25519 PRIVATE KEY-----\n";
+
+        file_put_contents($this->keyPath, $pem);
+        chmod($this->keyPath, 0600);
+        $manager = new Ed25519KeyManager($this->keyPath);
+        $jwk = $manager->getPublicKeyJwk();
+
+        self::assertSame(
+            rtrim(strtr(base64_encode(substr($raw, 32, 32)), '+/', '-_'), '='),
+            $jwk['x'],
+            'debt: grammar-lookalike loads its decoded secret silently (v0.57 consistency check closes this)',
+        );
     }
 
     public function testSignSeamDifferentialKernelFoldedWriterFileRoundTrips(): void
