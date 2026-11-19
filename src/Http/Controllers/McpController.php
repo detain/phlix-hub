@@ -28,6 +28,7 @@ use Phlix\Hub\Mcp\McpTokenService;
 use Phlix\Hub\Mcp\McpToolContext;
 use Phlix\Hub\Mcp\McpToolRegistry;
 use Phlix\Hub\Version;
+use Phlix\Shared\Support\Json;
 use Workerman\Connection\TcpConnection;
 
 use function array_is_list;
@@ -37,7 +38,6 @@ use function is_array;
 use function is_int;
 use function is_string;
 use function json_decode;
-use function json_encode;
 use function json_last_error;
 use function strlen;
 use function strtolower;
@@ -589,7 +589,7 @@ final class McpController
      */
     private static function toolResult(int $status, array $payload): array
     {
-        $text = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        $text = Json::encodePretty($payload);
 
         return [
             'content' => [

@@ -13,6 +13,7 @@ namespace Phlix\Hub\Console\Commands;
 
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Shared\Auth\JwtClaims;
+use Phlix\Shared\Support\Json;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -82,8 +83,8 @@ final class SmokeJwtCommand extends Command
                 $output->writeln(sprintf(
                     '<error>FAIL: %s mismatch: expected %s, got %s</error>',
                     $key,
-                    (string) json_encode($value),
-                    (string) json_encode($actual[$key]),
+                    Json::encode($value, 0),
+                    Json::encode($actual[$key], 0),
                 ));
 
                 return Command::FAILURE;

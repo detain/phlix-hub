@@ -65,6 +65,7 @@
         "tests/Unit/Common/RateLimit/RateLimiterMultiWorkerNoticeTest.php": 0,
         "tests/Unit/Common/RateLimit/RateLimiterTest.php": 0.002,
         "tests/Unit/Common/Support/IdsTest.php": 0.052,
+        "tests/Unit/Common/Support/SharedJsonDelegationTest.php": 0.12,
         "tests/Unit/Config/AuditRetentionConfigTest.php": 0.001,
         "tests/Unit/Config/AuthEnvSignupsTest.php": 0.005,
         "tests/Unit/Config/DatabaseConfigTest.php": 0.583,
