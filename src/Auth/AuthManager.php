@@ -163,12 +163,6 @@ class AuthManager
     private ?\Closure $signupsDisabledResolver;
 
     /**
-     * Lazy dummy hash used to equalise the unknown-user login path with the
-     * known-user path (timing-oracle hardening, see {@see burnPasswordTime()}).
-     */
-    private ?string $dummyPasswordHash = null;
-
-    /**
      * Build the per-IP login rate-limit bucket key. Empty/unknown IPs collapse
      * to a single shared bucket rather than going unlimited.
      */
@@ -323,8 +317,10 @@ class AuthManager
         // Minor 45: the CPU-bound Argon2id digest is computed BEFORE the
         // transaction opens — hashing inside BEGIN..COMMIT stretched the
         // signup-election gap locks across pure CPU work. Pure function of
-        // $password; the insert below now rides the precomputed arm.
-        $passwordHash = password_hash($password, PASSWORD_ARGON2ID);
+        // $password; the insert below now rides the precomputed arm. B-06:
+        // the mint goes through the SSOT so the canonical cost parameters
+        // are explicit, never host-ini-dependent.
+        $passwordHash = PasswordHasher::hash($password);
 
         $db = $this->db;
         if ($db !== null) {
@@ -467,8 +463,10 @@ class AuthManager
         if ($user === null) {
             // Equalise against the bad-password path: an unknown identifier
             // still pays one Argon2id verification, so response time cannot
-            // enumerate accounts.
-            $this->burnPasswordTime($password);
+            // enumerate accounts. B-06: the burn lives on the repository
+            // (deterministic canonical-cost dummy constant) so entry points
+            // beyond this one inherit the equalisation.
+            $this->userRepository->burnPasswordVerifyTime($password);
             $this->recordFailedAttempt($clientIp);
             $this->auditLogger->logFailedAuth('unknown_user', [
                 'identifier' => $usernameOrEmail,
@@ -491,18 +489,6 @@ class AuthManager
         $this->dispatchUserLoggedIn($userId, $deviceId);
 
         return $this->createAuthResponse($userId);
-    }
-
-    /**
-     * Run one throwaway Argon2id verification against a never-reachable dummy
-     * hash so the unknown-user branch costs the same as the wrong-password
-     * branch. The dummy hash is minted lazily (once per instance) with fresh
-     * randomness — nothing can ever match it, so the result is always false.
-     */
-    private function burnPasswordTime(string $password): void
-    {
-        $this->dummyPasswordHash ??= password_hash(bin2hex(random_bytes(16)), PASSWORD_ARGON2ID);
-        password_verify($password, $this->dummyPasswordHash);
     }
 
     /**

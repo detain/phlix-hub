@@ -13,6 +13,7 @@ namespace Phlix\Hub\Auth;
 
 use InvalidArgumentException;
 use Phlix\Hub\Common\Support\Ids;
+use Throwable;
 use Workerman\MySQL\Connection;
 
 /**
@@ -198,7 +199,7 @@ class UserRepository
             if (!is_string($plaintext)) {
                 throw new InvalidArgumentException('password must be a string');
             }
-            $passwordHash = password_hash($plaintext, PASSWORD_ARGON2ID);
+            $passwordHash = PasswordHasher::hash($plaintext);
         } else {
             throw new InvalidArgumentException(
                 'create() needs exactly one credential arm: password (plaintext) or password_hash (precomputed digest)'
@@ -278,7 +279,7 @@ class UserRepository
 
         if (array_key_exists('password', $data)) {
             $sets[] = 'password_hash = :password_hash';
-            $params['password_hash'] = password_hash($data['password'], PASSWORD_ARGON2ID);
+            $params['password_hash'] = PasswordHasher::hash($data['password']);
         }
 
         if ($sets === []) {
@@ -338,19 +339,113 @@ class UserRepository
 
     /**
      * Verify a plain password against the stored Argon2ID hash.
+     *
+     * Three law-bearing arms (B-06 hub twin of the server's shape):
+     *  - absent user: the timing burn runs HERE, on the repository lookup
+     *    path, so every entry point pays one full Argon2id verification and
+     *    response time cannot enumerate account existence;
+     *  - failed verify: plain false — a bad password never reaches the
+     *    re-mint line below, and no write happens on a wrong guess;
+     *  - successful verify of a non-canonical hash: forward-only cost
+     *    correction (see below).
      */
     public function verifyPassword(string $id, string $password): bool
     {
         $user = $this->findById($id);
         if ($user === null) {
+            $this->burnPasswordVerifyTime($password);
             return false;
         }
         $hash = $user['password_hash'] ?? null;
         if (!is_string($hash)) {
             return false;
         }
-        return password_verify($password, $hash);
+        if (!PasswordHasher::verify($password, $hash)) {
+            return false;
+        }
+
+        // B-06 (2026-11-19) forward-only cost correction: a credential that
+        // just authenticated but was minted outside the canonical ARGON2ID
+        // parameters — old bare password_hash() calls, drifted host ini
+        // defaults, bcrypt/argon2i history — is re-minted now, at the moment
+        // the plaintext is legitimately in hand. No migration exists or is
+        // needed: password verification always reads the parameters embedded
+        // in each hash, so stale shapes keep working until their owner logs
+        // in.
+        if (PasswordHasher::needsRehash($hash)) {
+            // Hub divergence from the server shape (B-06 dispatch brief,
+            // item c): the re-mint is a best-effort cost refresh — a failed
+            // write must NEVER undo an already-authenticated login. The old
+            // hash keeps verifying (parameters are embedded in the hash),
+            // so the worst case is exactly the pre-B-06 status quo and the
+            // owner's next login retries the refresh.
+            try {
+                $this->persistPasswordHash($id, PasswordHasher::hash($password));
+            } catch (Throwable) {
+                // Swallowed by design: a failed UPDATE leaves the stored
+                // hash untouched, so there is no half-written state to
+                // reconcile — the refresh is simply deferred, not lost.
+            }
+        }
+
+        return true;
     }
+
+    /**
+     * Persist a re-minted credential from {@see self::verifyPassword()}.
+     *
+     * A transparent cost re-mint keeps the SAME secret valid: sessions and
+     * tokens minted under the old (weaker) parameters stay valid — unlike
+     * {@see self::update()} with a `password` key, which is a real password
+     * change. The hub repository holds no request-scoped row cache, so no
+     * cache invalidation is needed here. The CALLER owns the failure
+     * posture: see the try/catch in verifyPassword() — a throw from this
+     * method never reaches the login responder.
+     */
+    private function persistPasswordHash(string $id, string $hash): void
+    {
+        $this->db->query(
+            'UPDATE users SET password_hash = :password_hash WHERE id = :id',
+            ['password_hash' => $hash, 'id' => $id],
+        );
+    }
+
+    /**
+     * Spend one Argon2id verification's worth of CPU on a password that will
+     * never match (L-1 lineage — login timing oracle).
+     *
+     * An unknown identifier returning immediately while a known one burned a
+     * full argon2id verify made the response time itself enumerate accounts.
+     * AuthManager's login path calls this on its no-such-user arm; since
+     * B-06 the repository's own {@see self::verifyPassword()} absent-user
+     * arm pays it too, so any future entry point that hits the repository
+     * directly inherits the equalisation. The dummy hash below is a real
+     * argon2id hash minted with the same canonical cost parameters
+     * {@see PasswordHasher::ARGON2ID_OPTIONS} that every mint in the hub now
+     * passes explicitly (m=65536,t=4,p=1); its plaintext is unknown by
+     * construction and the stored value is irrelevant — only its cost shape
+     * matters, and being a class constant it is deterministic across
+     * instances and processes (the pre-B-06 shape minted a fresh random
+     * dummy lazily per AuthManager instance).
+     *
+     * @param string $password The candidate password to burn-verify.
+     *
+     * @return void
+     */
+    public function burnPasswordVerifyTime(string $password): void
+    {
+        PasswordHasher::verify($password, self::TIMING_BURN_DUMMY_HASH);
+    }
+
+    /**
+     * Argon2id (canonical costs — {@see PasswordHasher::ARGON2ID_OPTIONS})
+     * dummy hash for {@see burnPasswordVerifyTime()}. Regenerate it in
+     * lockstep with any change to the canonical options; PasswordHasherTest
+     * pins the embedded parameters against the SSOT constant.
+     */
+    private const TIMING_BURN_DUMMY_HASH =
+        '$argon2id$v=19$m=65536,t=4,p=1$ajhMV1lZWk0wNUZYMUJJeA'
+        . '$GnAZV0jZAc3B24RwsTj5qLoSiy6ITh4BFMMHxFIDdSQ';
 
     /**
      * Quick existence probe for email (used by signup pre-validation).

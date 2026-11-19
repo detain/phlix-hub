@@ -741,6 +741,12 @@ final class AuthManagerTest extends TestCase
         // The real verifyPassword must NOT run (no user row); the timing
         // equalisation happens against the dummy hash instead.
         $repo->expects(self::never())->method('verifyPassword');
+        // B-06 hub twin: the burn lives on the repository now — one public,
+        // deterministic-const verification regardless of which entry point
+        // hits a no-such-user answer.
+        $repo->expects(self::once())
+            ->method('burnPasswordVerifyTime')
+            ->with('some-password');
 
         $mgr = new AuthManager($repo, $jwt, $audit, $logger, $rl);
         try {
@@ -749,9 +755,5 @@ final class AuthManagerTest extends TestCase
         } catch (InvalidArgumentException) {
             // expected
         }
-
-        // Proof that the dummy-hash burn ran: the lazy property is populated.
-        $prop = new \ReflectionProperty(AuthManager::class, 'dummyPasswordHash');
-        self::assertIsString($prop->getValue($mgr), 'unknown-user path must burn one Argon2id verify');
     }
 }

@@ -7,6 +7,7 @@ namespace Phlix\Hub\Tests\Unit\Auth;
 use InvalidArgumentException;
 use Phlix\Hub\Auth\UserRepository;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 use Workerman\MySQL\Connection;
 
 /**
@@ -277,6 +278,153 @@ final class UserRepositoryTest extends TestCase
 
         $repo = new UserRepository($db);
         self::assertFalse($repo->verifyPassword('nobody', 'anything'));
+    }
+
+    /**
+     * B-06 hub law: the absent-user timing burn lives on the REPOSITORY
+     * lookup path — not on one caller's private lazy random dummy — so a
+     * future hub entry point that calls verifyPassword() directly still
+     * pays one full Argon2id verification and cannot re-open the account
+     * enumeration oracle by response time. The double records the seam AND
+     * defers to the parent, so the real burn against the deterministic
+     * dummy constant executes end-to-end.
+     */
+    public function testVerifyPasswordForMissingUserRoutesThroughTheBurnSeam(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([]);
+
+        $repo = new class ($db) extends UserRepository {
+            /** @var list<string> */
+            public array $burns = [];
+
+            public function burnPasswordVerifyTime(string $password): void
+            {
+                $this->burns[] = $password;
+                parent::burnPasswordVerifyTime($password);
+            }
+        };
+
+        self::assertFalse($repo->verifyPassword('ghost-user-id', 'candidate-password'));
+        self::assertSame(
+            ['candidate-password'],
+            $repo->burns,
+            'verifyPassword() must spend one burn on every absent-user lookup '
+                . 'before answering false.'
+        );
+    }
+
+    /**
+     * The burn itself is a plain verify against the never-matching dummy —
+     * it must never throw, whatever the candidate string is, and must not
+     * leak a return value.
+     */
+    public function testBurnPasswordVerifyTimeNeverThrowsForAnyCandidate(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $repo = new UserRepository($db);
+
+        $repo->burnPasswordVerifyTime('');
+        $repo->burnPasswordVerifyTime('a-candidate-that-will-never-match');
+        $this->expectNotToPerformAssertions();
+    }
+
+    /**
+     * B-06 forward-only cost correction (server twin, UserRepository): a
+     * credential that just authenticated but was minted outside the
+     * canonical ARGON2ID parameters is re-minted at the moment the
+     * plaintext is legitimately in hand — no migration, no lockout of
+     * pre-existing sessions, and the write is a transparent cost refresh,
+     * not a password change.
+     */
+    public function testVerifyPasswordReMintsDriftedCredentialForward(): void
+    {
+        $legacy = password_hash('hunter2!!', PASSWORD_ARGON2ID, [
+            'memory_cost' => 1024,
+            'time_cost' => 1,
+            'threads' => 1,
+        ]);
+
+        /** @var array<int, array{0: string, 1: array<string, string>}> $writes */
+        $writes = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')
+            ->willReturnCallback(
+                static function (string $sql, array $params) use ($legacy, &$writes) {
+                    if (str_starts_with($sql, 'SELECT')) {
+                        return [['id' => 'u-9', 'password_hash' => $legacy]];
+                    }
+                    $writes[] = [$sql, $params];
+                    return 1;
+                }
+            );
+
+        $repo = new UserRepository($db);
+        self::assertTrue($repo->verifyPassword('u-9', 'hunter2!!'));
+
+        self::assertCount(1, $writes, 'exactly one re-mint write after the drifted verify');
+        self::assertStringContainsString('UPDATE users SET password_hash = :password_hash', $writes[0][0]);
+        self::assertStringContainsString('WHERE id = :id', $writes[0][0]);
+        self::assertSame('u-9', $writes[0][1]['id']);
+
+        $fresh = $writes[0][1]['password_hash'];
+        self::assertStringStartsWith('$argon2id$v=19$m=65536,t=4,p=1$', $fresh);
+        self::assertTrue(password_verify('hunter2!!', $fresh));
+    }
+
+    /**
+     * A credential already minted at the canonical cost answers needsRehash()
+     * false, so a normal login issues the SELECT and NOTHING else — no
+     * per-login churn of healthy hashes.
+     */
+    public function testVerifyPasswordDoesNotReMintCanonicalCredential(): void
+    {
+        $canonical = password_hash('hunter2!!', PASSWORD_ARGON2ID, [
+            'memory_cost' => 65536,
+            'time_cost' => 4,
+            'threads' => 1,
+        ]);
+
+        $db = $this->createMock(Connection::class);
+        $db->expects(self::once())
+            ->method('query')
+            ->willReturn([['id' => 'u-9', 'password_hash' => $canonical]]);
+
+        $repo = new UserRepository($db);
+        self::assertTrue($repo->verifyPassword('u-9', 'hunter2!!'));
+    }
+
+    /**
+     * Hub-specific hardening on top of the server shape (brief item (c)):
+     * the re-mint UPDATE is a best-effort cost refresh, so a write failure
+     * on it must NEVER undo an already-authenticated login. The old hash
+     * still verifies (parameters are embedded in the hash), so the login
+     * simply lands where it was before B-06 — degraded, not broken.
+     */
+    public function testReMintWriteFailureNeverBreaksTheLogin(): void
+    {
+        $legacy = password_hash('hunter2!!', PASSWORD_ARGON2ID, [
+            'memory_cost' => 1024,
+            'time_cost' => 1,
+            'threads' => 1,
+        ]);
+
+        $db = $this->createMock(Connection::class);
+        $db->method('query')
+            ->willReturnCallback(
+                static function (string $sql, array $params) use ($legacy) {
+                    if (str_starts_with($sql, 'SELECT')) {
+                        return [['id' => 'u-9', 'password_hash' => $legacy]];
+                    }
+                    throw new RuntimeException('simulated write failure on the cost refresh');
+                }
+            );
+
+        $repo = new UserRepository($db);
+        self::assertTrue(
+            $repo->verifyPassword('u-9', 'hunter2!!'),
+            'A failed transparent re-mint must not break the login flow.'
+        );
     }
 
     public function testEmailExistsTrueForKnown(): void
