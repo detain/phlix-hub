@@ -13,6 +13,7 @@ namespace Phlix\Hub;
 
 use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
+use Phlix\Hub\Common\Env\EnvConfig;
 use Channel\Client as ChannelClient;
 use Channel\Server as ChannelServer;
 use Phlix\Hub\Common\Logger\LogChannels;
@@ -3009,15 +3010,27 @@ final class Application
      * the pool is disabled (no ceiling applies). Pure: env values are passed in
      * so the arithmetic and the skip arms are unit-testable (HUB-S17).
      *
+     * HUB-ENVBOOL host lockstep: the pool-enabled arm reads through the same
+     * estate bool grammar ({@see EnvConfig::boolValue}) as the config's
+     * `pool_enabled` limb — BEFORE, the two disagreed for two spellings:
+     * `DB_POOL_ENABLED=""` booted the pool ON (HUB-2.1 posture: empty means
+     * not-configured, default ON) while this check silently SKIPPED the
+     * ceiling, and junk spelled the same way. Now unset/empty/junk all plan
+     * the check exactly as the host arms the pool; false words skip on both
+     * sides. The raw-injection purity seam (HUB-S17) is preserved — this is
+     * the server-sanctioned public raw seam, the shape its own
+     * RelayTunnelBoot::envDisables() precedent uses.
+     *
      * @param int          $workers  Worker processes that pool connections.
      * @param string|false $poolRaw  Raw `DB_POOL_SIZE` (false = unset).
-     * @param string|false $poolOn   Raw `DB_POOL_ENABLED` (false = unset).
+     * @param string|false $poolOn   Raw `DB_POOL_ENABLED` (false = unset; unset/empty/junk
+     *                               honor the pool's ON default — the ceiling check APPLIES).
      *
      * @return array{demand: int, pool_size: int}|null
      */
     public static function dbCeilingDemand(int $workers, string|false $poolRaw, string|false $poolOn): ?array
     {
-        if ($poolOn !== false && !filter_var($poolOn, FILTER_VALIDATE_BOOLEAN)) {
+        if (!EnvConfig::boolValue($poolOn, true, 'DB_POOL_ENABLED')) {
             return null;
         }
         $pool = ($poolRaw === false || (int) $poolRaw < 1) ? self::DB_POOL_SIZE_DEFAULT : (int) $poolRaw;

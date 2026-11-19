@@ -148,6 +148,48 @@ final class DatabasePoolSizeEnvTest extends TestCase
         $this->assertFalse($this->mysql()['pool_enabled']);
     }
 
+    /**
+     * HUB-ENVBOOL host-lockstep characterization (answer CHANGE, red-first
+     * against the old filter_var arm): junk in the opt-out knob is neither a
+     * true word nor a false word, so the estate bool grammar answers the
+     * documented ON default — loudly (the one-line warning is pinned at the
+     * reader suite, EnvConfigTest). The old arm read any unparseable value as
+     * DISABLE, disagreeing with the empty-string leg right above it (which
+     * HUB-2.1 had just made mean ON): two neighbouring spellings, opposite
+     * answers. Under EnvConfig::bool('DB_POOL_ENABLED', true) both answer ON,
+     * and the boot ceiling check (Application::dbCeilingDemand) sees the same
+     * matrix — that agreement is the point of the same-spelling rows in
+     * ApplicationDbCeilingTest.
+     */
+    public function testPoolEnabledJunkHonorsTheOnDefault(): void
+    {
+        putenv('DB_POOL_ENABLED=maybe');
+
+        // The reader's one-line junk warning is pinned at EnvConfigTest; the
+        // config-side ANSWER is what this leg judges, with the warning kept
+        // off stderr (PHPUnit scores stray output as risky).
+        $mysql = $this->withoutWarningStream(fn (): array => $this->mysql());
+        $this->assertTrue($mysql['pool_enabled']);
+    }
+
+    /**
+     * Hold legs (answer-unchanged spellings, the config side of the same
+     * matrix): padded/case-folded words keep answering through the trim
+     * exactly as filter_var did, so no deployment spelling that works today
+     * changes host under the migration.
+     */
+    public function testPoolEnabledVocabularyHoldsAcrossShapes(): void
+    {
+        putenv('DB_POOL_ENABLED= true ');
+        $this->assertTrue($this->mysql()['pool_enabled']);
+
+        putenv('DB_POOL_ENABLED=FALSE');
+        $this->assertFalse($this->mysql()['pool_enabled']);
+
+        putenv('DB_POOL_ENABLED=on');
+        $this->assertTrue($this->mysql()['pool_enabled']);
+    }
+
     public function testUnsetPoolKnobsKeepDocumentedDefaults(): void
     {
         $mysql = $this->mysql();
@@ -165,5 +207,33 @@ final class DatabasePoolSizeEnvTest extends TestCase
 
         // (int) '12x' === 12 — pre-existing cast posture, preserved.
         $this->assertSame(12, $this->mysql()['pool_size']);
+    }
+
+    /**
+     * Run $read with PHP's `error_log` ini target redirected to a scratch
+     * file, and return its result. Re-evaluating config/database.php with a
+     * junk DB_POOL_ENABLED emits EnvConfig's one-line warning via raw
+     * `error_log()`; stray stderr is scored risky by this repo's phpunit.xml.
+     *
+     * @template T
+     *
+     * @param callable(): T $read
+     *
+     * @return T
+     */
+    private function withoutWarningStream(callable $read): mixed
+    {
+        $file = tempnam(sys_get_temp_dir(), 'phlix-envbool-');
+        self::assertIsString($file);
+
+        $previous = (string) ini_get('error_log');
+        ini_set('error_log', $file);
+
+        try {
+            return $read();
+        } finally {
+            ini_set('error_log', $previous);
+            unlink($file);
+        }
     }
 }

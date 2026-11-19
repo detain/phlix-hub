@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Http\Controllers;
 
+use Phlix\Hub\Common\Env\EnvConfig;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Hub\EnrollmentJwtService;
@@ -108,19 +109,20 @@ final class RelayController
 
         // SH-077/SH-081 seam (ruling 20): the endpoint signpost is computed ONCE
         // above BOTH steer arms. TLS-lane truth: the steered SCHEME tracks the
-        // listener's bind-time posture (config `relay_tls` / HUB_RELAY_TLS — same
-        // truthiness idiom as config/server.php). Announcing `ws://` against a
-        // wss:// bind (or the reverse) sends operators into the endless-reconnect
-        // shape RelayConsumer itself documents. The PORT remains the fixed
-        // default — that limitation is documented, unchanged.
+        // listener's bind-time posture (config `relay_tls` / HUB_RELAY_TLS). Since
+        // HUB-ENVBOOL the arm below and config/server.php's `relay_tls` limb answer
+        // through the SAME estate reader (EnvConfig::bool); the limb's old
+        // filter_var shape was proved word-for-word answer-equivalent on every
+        // spelling (filter_var trims and case-folds too), so no deployment changes
+        // scheme — the migration is mechanism, not vocabulary. Announcing `ws://`
+        // against a wss:// bind (or the reverse) sends operators into the
+        // endless-reconnect shape RelayConsumer itself documents. The PORT remains
+        // the fixed default — that limitation is documented, unchanged.
         $docsUrl = 'https://detain.github.io/phlix-docs/dev/relay-protocol';
         $hubWsHost = getenv('HUB_WS_HOST');
         $hubWsHost = is_string($hubWsHost) && $hubWsHost !== '' ? $hubWsHost : getenv('HUB_PUBLIC_DOMAIN');
         $hubWsHost = is_string($hubWsHost) && $hubWsHost !== '' ? $hubWsHost : 'your-hub-host';
-        $relayTls = filter_var(
-            ($v = getenv('HUB_RELAY_TLS')) !== false && $v !== '' ? $v : 'false',
-            FILTER_VALIDATE_BOOLEAN,
-        );
+        $relayTls = EnvConfig::bool('HUB_RELAY_TLS');
         $wsEndpoint = ($relayTls ? 'wss://' : 'ws://') . $hubWsHost . ':8802';
 
         // Same normalisation caveat as the Authorization read above — the raw

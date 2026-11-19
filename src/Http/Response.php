@@ -400,6 +400,17 @@ class Response
      * `HUB_COOKIE_INSECURE=1` environment variable, intended ONLY for local
      * plain-HTTP development where the browser would otherwise refuse to
      * store a `Secure` cookie over `http://`.
+     *
+     * HUB-ENVBOOL census row — do-NOT-merge ruling (brief-mandated posture):
+     * this is a ratified-security surface, and its strict exact-`'1'`/`'true'`
+     * spelling is the LAW. The estate EnvConfig::bool grammar would widen the
+     * accept set (yes/on/case-fold/padded) on a knob that DROPS the Secure
+     * attribute — a loosening, which convergence may never do (server E-04's
+     * own rule). The two readers of this knob (here and
+     * CookiePolicy::insecureOverride()) share exactly this strict vocabulary
+     * BY DESIGN; migrating one alone would split their answers for the same
+     * spelling, which is worse than two local copies of one law. Any future
+     * change here must move both at once.
      */
     private static function secureCookiesDefault(): bool
     {

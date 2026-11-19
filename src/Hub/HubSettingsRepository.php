@@ -483,6 +483,15 @@ class HubSettingsRepository
     /**
      * Decode a stored text value back into a PHP value per its type.
      *
+     * HUB-ENVBOOL census row: the 'bool' limb is the PERSISTED-FORMAT decode
+     * paired with encode()'s '1'/'0' — a storage round-trip, NOT an env read.
+     * The tolerant strtolower==='true' leg exists for legacy rows; the estate
+     * bool grammar's semantics (trim, caller default, junk warning) belong on
+     * env knobs, never on how a column decodes, so this stays local by law.
+     * Reachable vocabulary via the API is exactly '1'/'0'; garbage decodes
+     * false silently, which is correct here (a corrupt stored row must not
+     * flip a setting) and would be wrong for an operator-facing knob.
+     *
      * @param string $raw       Stored text value.
      * @param string $valueType One of string|int|bool|float|json.
      *

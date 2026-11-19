@@ -106,7 +106,15 @@ final class CookiePolicy
     /** Refresh cookie name — the hub's deleted-surface name, revived. */
     public const REFRESH_COOKIE = 'phlix_hub_refresh';
 
-    /** Env opt-in to LAN-readable cookies (accepts the same '1'/'true' as Response's Secure-resolver). */
+    /**
+     * Env opt-in to LAN-readable cookies (accepts the same '1'/'true' as
+     * Response's Secure-resolver).
+     *
+     * HUB-ENVBOOL census row: the strict spelling pair is the ratified-
+     * security vocabulary — deliberately NOT the estate EnvConfig bool
+     * grammar (see {@see self::insecureOverride()} for the do-not-merge
+     * ruling and the Response twin-lock).
+     */
     public const INSECURE_ENV = 'HUB_COOKIE_INSECURE';
 
     /** Hostnames that satisfy the §2.4 localhost limb (any port). */
@@ -149,6 +157,15 @@ final class CookiePolicy
      * form additionally speaks up once per process (HUB-4.2 / SH-033 hub
      * port; {@see self::warnProductionInsecureOnce()}) — a warning, not a
      * gate: the opt-out stays honoured.
+     *
+     * HUB-ENVBOOL census row — the env limb keeps its STRICT exact-'1'/'true'
+     * shape by ratified-security law, not oversight: the estate bool grammar
+     * ({@see \Phlix\Hub\Common\Env\EnvConfig::bool()}) would accept
+     * yes/on/case-folded/padded spellings on a knob that drops the Secure
+     * attribute, and convergence never loosens a security accept-set. The
+     * stored twin below is NOT an env read at all (it goes through the store
+     * resolver) — only the env limb was ever a bool-grammar candidate, and it
+     * stays local, in lockstep with its Response.php twin.
      */
     public function insecureOverride(): bool
     {

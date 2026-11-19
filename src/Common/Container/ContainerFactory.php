@@ -18,6 +18,7 @@ use Phlix\Hub\Common\Container\Providers\CoreServicesProvider;
 use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Common\Container\Providers\HttpServicesProvider;
 use Phlix\Hub\Common\Container\Providers\MetricsServicesProvider;
+use Phlix\Hub\Common\Env\EnvConfig;
 use Psr\Container\ContainerInterface;
 
 /**
@@ -106,15 +107,20 @@ final class ContainerFactory
     /**
      * Whether to enable PHP-DI's compiled-container cache.
      *
-     * @return bool True when `PHLIX_HUB_CONTAINER_COMPILE` is truthy.
+     * HUB-ENVBOOL: the knob reads through the estate bool law
+     * ({@see EnvConfig::bool()}) — the exact shape of the server's twin
+     * (`ContainerFactory::shouldCompile` = `EnvConfig::bool` there). The
+     * former hand-rolled copy did not trim, so `PHLIX_HUB_CONTAINER_COMPILE
+     * =" 1 "` answered false here while every trimming copy answered true;
+     * under one grammar the padded word enables the cache (the knob is
+     * perf-only, so widening its ACCEPT set is change-safe — pinned by the
+     * padded-word characterization leg in ContainerFactoryTest).
+     *
+     * @return bool True when `PHLIX_HUB_CONTAINER_COMPILE` spells a true word.
      *
      */
     private static function shouldCompile(): bool
     {
-        $value = getenv('PHLIX_HUB_CONTAINER_COMPILE');
-        if ($value === false) {
-            return false;
-        }
-        return in_array(strtolower((string)$value), ['1', 'true', 'yes', 'on'], true);
+        return EnvConfig::bool('PHLIX_HUB_CONTAINER_COMPILE');
     }
 }

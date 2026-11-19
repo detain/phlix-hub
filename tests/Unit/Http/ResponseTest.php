@@ -44,6 +44,30 @@ final class ResponseTest extends TestCase
         self::assertFalse($response->cookies[0]['secure'], 'HUB_COOKIE_INSECURE=1 must drop Secure for local HTTP dev');
     }
 
+    /**
+     * HUB-ENVBOOL ratified-strict census pin (twin of CookiePolicyTest): the
+     * Secure-DROP knob accepts ONLY the literal '1'/'true' spellings. The
+     * estate bool grammar (yes/on/case-fold/padded) would WIDEN who may drop
+     * cookie Secure — a security-surface change, not a cleanup — which is
+     * why secureCookiesDefault() keeps its local strict dialect instead of
+     * EnvConfig::bool. The two readers of one knob must always answer alike;
+     * converging either one alone splits them (both docblocks say so). This
+     * test is the tripwire: green under the law, red if a lane loosens it.
+     */
+    public function testHubCookieInsecureAcceptSetIsStrictByLaw(): void
+    {
+        foreach (['yes', 'on', 'TRUE', 'True', ' 1 ', "\ttrue", 'maybe'] as $spelling) {
+            putenv('HUB_COOKIE_INSECURE=' . $spelling);
+
+            $response = (new Response())->cookie('phlix_hub_token', 'abc', 3600);
+
+            self::assertTrue(
+                $response->cookies[0]['secure'],
+                "HUB_COOKIE_INSECURE='{$spelling}' must NOT drop Secure — the accept set is law"
+            );
+        }
+    }
+
     public function testExplicitSecureArgumentOverridesEnv(): void
     {
         putenv('HUB_COOKIE_INSECURE=1');

@@ -37,8 +37,12 @@ $devFallbackAllowed = static function (): bool {
             }
         }
     }
-    $flag = getenv('PHLIX_HUB_ALLOW_DEFAULT_DB_PASSWORD');
-    if (is_string($flag) && in_array(strtolower(trim($flag)), ['1', 'true', 'yes', 'on'], true)) {
+    // HUB-ENVBOOL: the estate bool law (EnvConfig::bool, default false) —
+    // answer-identical to the former hand-rolled copy for every input (same
+    // words, same trim/case-fold; unset/empty/junk all deny), plus the
+    // reader's one-line junk warning. An opt-in escape hatch keeps its
+    // deny-by-default posture verbatim.
+    if (EnvConfig::bool('PHLIX_HUB_ALLOW_DEFAULT_DB_PASSWORD')) {
         return true;
     }
     // The test harness builds its own DB venue and never relies on these
@@ -91,10 +95,16 @@ $mysql = [
     // ceiling (clamped to ≥ 1)"), so 0 arms a one-connection pool, never a
     // zero-worker one. Same behavior as the server's pool block, the
     // estate's canonical home of this law.
-    'pool_enabled' => filter_var(
-        EnvConfig::text('DB_POOL_ENABLED', '1'),
-        FILTER_VALIDATE_BOOLEAN,
-    ),
+    // HUB-ENVBOOL: the limb below is the estate bool law itself
+    // (EnvConfig::bool, default ON), replacing the filter_var text shape. The
+    // one answer MOVE is junk spellings ("maybe" etc.): filter_var read them
+    // as DISABLE while the empty-string leg right above read as ENABLE —
+    // neighbouring spellings, opposite answers. Under the grammar neither a
+    // word is "not configured": the ON default governs AND the reader logs
+    // the one-line warning, and the boot ceiling check
+    // (Application::dbCeilingDemand) now arms with the very same matrix, so
+    // the host can never run a pooled pool the check assumed disabled.
+    'pool_enabled' => EnvConfig::bool('DB_POOL_ENABLED', true),
     'pool_size' => EnvConfig::integer('DB_POOL_SIZE', 8),
 ];
 

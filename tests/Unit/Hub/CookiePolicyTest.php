@@ -73,6 +73,27 @@ final class CookiePolicyTest extends TestCase
         self::assertFalse(self::policy()->insecureOverride());
     }
 
+    /**
+     * HUB-ENVBOOL ratified-strict census pin (twin of ResponseTest): the env
+     * limb accepts ONLY the literal '1'/'true' spellings — NOT the estate
+     * bool grammar — because widening who may arm the insecure override is a
+     * security-surface change, not a cleanup. Converging this limb onto
+     * EnvConfig::bool without its Response twin would SPLIT the two readers
+     * of one knob; with both, it would LOOSEN them. Green under the law,
+     * red if a lane breaks either posture.
+     */
+    public function testInsecureEnvAcceptSetIsStrictByLaw(): void
+    {
+        foreach (['yes', 'on', 'TRUE', 'True', ' 1 ', "\ttrue", 'maybe', '2'] as $spelling) {
+            putenv(CookiePolicy::INSECURE_ENV . '=' . $spelling);
+
+            self::assertFalse(
+                self::policy()->insecureOverride(),
+                "HUB_COOKIE_INSECURE='{$spelling}' must NOT arm the override — the accept set is law"
+            );
+        }
+    }
+
     public function testStoredInsecureTwinHonoredAndThrowFailsClosed(): void
     {
         self::assertTrue(self::policy(insecure: true)->insecureOverride());

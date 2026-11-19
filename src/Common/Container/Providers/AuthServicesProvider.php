@@ -20,6 +20,7 @@ use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Container\MissingJwtSecretException;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
 use Phlix\Hub\Common\Database\ConnectionPool;
+use Phlix\Hub\Common\Env\EnvConfig;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
@@ -581,14 +582,17 @@ final class AuthServicesProvider implements ServiceProviderInterface
 
     /**
      * Truthy-env test for boolean-ish flags ("1"/"true"/"yes"/"on").
+     *
+     * HUB-ENVBOOL: delegates to the estate bool law ({@see EnvConfig::bool})
+     * — answer-identical to the former copy for EVERY input (same words, same
+     * trim/case-fold, unset/empty/junk all false), with one addition: junk
+     * now emits the reader's one-line warning. This gate admits an insecure
+     * dev-only fallback, so the FALSE-leaning default is the fail-closed
+     * direction and stays exactly as ratified.
      */
     private static function isTruthyEnv(string $key): bool
     {
-        $value = getenv($key);
-        if (!is_string($value)) {
-            return false;
-        }
-        return in_array(strtolower(trim($value)), ['1', 'true', 'yes', 'on'], true);
+        return EnvConfig::bool($key);
     }
 
     /**

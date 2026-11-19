@@ -196,6 +196,14 @@ final class MetricsServicesProvider implements ServiceProviderInterface
      * @param bool                 $default
      *
      * @return bool
+     *
+     * HUB-ENVBOOL census row — do-NOT-merge ruling: this coerces a
+     * CONFIG-ARRAY value (config/metrics.php's own inventory), not a raw env
+     * bool, and its junk string answers FALSE even when $default is TRUE
+     * (fail-closed on a broken metrics switch). EnvConfig::boolValue answers
+     * junk with the caller DEFAULT — adopting it here would flip a malformed
+     * "enabled" value from off to on, so the narrower vocabulary is the
+     * intent, not drift, and stays local.
      */
     private function cfgBool(array $config, string $key, bool $default): bool
     {

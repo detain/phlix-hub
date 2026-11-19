@@ -143,18 +143,46 @@ final class ContainerFactoryTest extends TestCase
     }
 
     /**
-     * `shouldCompile()` must carry the server's hardened `(string)` cast into
-     * `strtolower()` — the canonical shared-lineage shape
-     * (`strtolower((string)$value)`).
-     *
-     * HUB-3.2 (A-09, runtime-deprecation family): the env read is guarded for
-     * the unset arm (`getenv() === false`), but the argument type passed to
-     * `strtolower()` was left implicit — the exact form the server hardened
-     * against implicit-conversion deprecations. Pinned on comment-stripped
-     * tokens (prose can lie, tokens can't — the repo guard idiom), so a doc
-     * mentioning the cast cannot fake this test green.
+     * HUB-ENVBOOL (answer CHANGE, red-first against the old arm): the former
+     * `shouldCompile()` did NOT trim, so `PHLIX_HUB_CONTAINER_COMPILE=" 1 "`
+     * answered false while every trimming copy of the word list answered true
+     * — the E-04 drift shape. Under the estate bool grammar (EnvConfig::bool)
+     * the trim is load-bearing and the padded word enables the compiled cache.
+     * The knob is the PHP-DI compiled-container cache (perf-only), so the
+     * change is accept-direction-safe: a padded ON now means ON everywhere.
      */
-    public function testShouldCompileCastsItsEnvValueBeforeLowercasing(): void
+    public function testShouldCompileAcceptsAPaddedTrueWord(): void
+    {
+        $reflection = new \ReflectionClass(ContainerFactory::class);
+        $method = $reflection->getMethod('shouldCompile');
+        $method->setAccessible(true);
+
+        $originalValue = getenv('PHLIX_HUB_CONTAINER_COMPILE');
+
+        try {
+            putenv('PHLIX_HUB_CONTAINER_COMPILE= 1 ');
+            self::assertTrue($method->invoke(null), 'padded " 1 " is the word 1 after the shared trim');
+        } finally {
+            if ($originalValue === false) {
+                putenv('PHLIX_HUB_CONTAINER_COMPILE');
+            } else {
+                putenv('PHLIX_HUB_CONTAINER_COMPILE=' . $originalValue);
+            }
+        }
+    }
+
+    /**
+     * `shouldCompile()` must carry the server's hardened cast law through the
+     * SHARED reader — the estate bool grammar owns the trim/case-fold/cast
+     * (its own EnvConfigTest suite pins the grammar spell-for-spell), so the
+     * site-level obligation collapses to: the body delegates to the SSOT verb
+     * on this exact knob name. HUB-3.2 (A-09) originally pinned the inline
+     * `strtolower((string)$value)` token; HUB-ENVBOOL supersedes it with the
+     * delegation token — the same comment-stripped-source idiom (prose can
+     * lie, tokens can't), and the drift it guarded against (disagreement on
+     * trim between copies) is now structurally impossible on this knob.
+     */
+    public function testShouldCompileDelegatesToTheEnvConfigSsot(): void
     {
         $srcFile = __DIR__ . '/../../../../src/Common/Container/ContainerFactory.php';
         $code = php_strip_whitespace($srcFile);
@@ -162,9 +190,9 @@ final class ContainerFactoryTest extends TestCase
         $code = (string) preg_replace('/\s+/', ' ', $code);
 
         self::assertStringContainsString(
-            'strtolower((string)$value)',
+            "EnvConfig::bool('PHLIX_HUB_CONTAINER_COMPILE')",
             $code,
-            'the server parity cast must be present at the call site',
+            'the compile gate must read its knob through the estate EnvConfig bool reader',
         );
     }
 }
