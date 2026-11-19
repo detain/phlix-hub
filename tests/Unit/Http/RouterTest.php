@@ -294,4 +294,147 @@ final class RouterTest extends TestCase
         $router->dispatch($this->request('GET', '/servers/abc/details/def'));
         self::assertSame(['id' => 'abc', 'detail' => 'def'], $receivedParams);
     }
+
+    // --- Group bookkeeping survives a throw (HUB-3.1 port of server SEC law) ---
+
+    /**
+     * A throw from inside a `group()` callback must not leak that group's
+     * middleware onto routes registered AFTERWARDS.
+     *
+     * ## Why this is a security test and not a tidiness test
+     *
+     * `addRoute()` copies `$this->groupMiddleware` onto every route it creates, so a
+     * leaked group middleware is silently attached to every later registration. The
+     * live shape is `Application`'s route loaders — groups such as `/api/v1` carry
+     * the auth gate, so one throw inside such a group (a logger, a config read, a
+     * container miss) silently attaches that gate to every route registered
+     * afterwards. The server's incident class was an allowlist middleware refusing
+     * every non-LAN caller on later routes; the hub inherits the same defect from
+     * the same shared lineage. `group()` restores its bookkeeping in a `finally`
+     * for exactly that reason.
+     *
+     * DISCRIMINATING: this test is the pin for that `finally`. Replace the
+     * `try/finally` with a plain post-callback restore and `/after` carries the
+     * throwing group's middleware under the leaked `/boom` prefix, so the
+     * registration assertions and the dispatch assertions below go red.
+     */
+    public function testAThrowInsideAGroupDoesNotLeakItsMiddlewareOntoLaterRoutes(): void
+    {
+        $ok = static fn (Request $r): Response => (new Response())->status(200)->json(['ok' => true]);
+        $outerGate = static fn (Request $r): ?Response => null;
+        // Stands in for an allowlist gate: if it leaks, later routes 403.
+        $leakyGate = static fn (Request $r): Response => (new Response())->status(403)->json(['error' => 'nope']);
+
+        $router = new Router();
+        $router->group('/outer', static function (Router $r) use ($ok): void {
+            $r->get('/a', $ok);
+        }, [$outerGate]);
+
+        $threw = false;
+        try {
+            $router->group('/boom', static function (Router $r) use ($ok): void {
+                $r->get('/x', $ok);
+                throw new \RuntimeException('registration blew up');
+            }, [$leakyGate]);
+        } catch (\RuntimeException $e) {
+            $threw = true;
+            self::assertSame('registration blew up', $e->getMessage());
+        }
+        self::assertTrue($threw, 'the exception itself must still propagate to the caller');
+
+        $router->get('/after', $ok);
+
+        // Hub routes are keyed by the COMPILED pattern (server keys by path).
+        $routes = $router->getRoutes();
+
+        // The PREFIX must be restored too, or the later route is registered at an
+        // entirely different path (asserted first so the failure names that cause).
+        self::assertArrayHasKey(
+            '#^/after$#',
+            $routes['GET'],
+            'a route registered after a throwing group must not inherit its PREFIX either',
+        );
+        self::assertArrayNotHasKey('#^/boom/after$#', $routes['GET']);
+        self::assertSame(
+            [],
+            $routes['GET']['#^/after$#']['middleware'],
+            'a route registered after a throwing group must carry NO group middleware',
+        );
+        // Control: the non-throwing group's own route still has its middleware, so
+        // this cannot pass by the router simply losing middleware everywhere.
+        self::assertCount(1, $routes['GET']['#^/outer/a$#']['middleware']);
+
+        // The consequence, asserted end to end: the later route is not gated.
+        self::assertSame(200, $router->dispatch($this->request('GET', '/after'))->statusCode);
+        self::assertSame(200, $router->dispatch($this->request('GET', '/outer/a'))->statusCode);
+        // And the leaky middleware really would have produced a 403 had it leaked.
+        self::assertSame(403, $router->dispatch($this->request('GET', '/boom/x'))->statusCode);
+    }
+
+    /**
+     * NESTED case: the restore puts back the PREVIOUS prefix and middleware, not
+     * empty ones — including when the nested group throws.
+     *
+     * Both halves matter. Restoring to empty would silently drop the OUTER group's
+     * gate from every sibling route registered after a nested group, which is the
+     * same class of defect as the leak, in the opposite direction: routes that were
+     * meant to be gated would stop being gated.
+     *
+     * DISCRIMINATING: dropping the `finally` makes `/inner-boom` leak, so `/c` is
+     * registered under the wrong prefix (`/inner-boom/c`) with two middleware
+     * instead of one, and all three assertions on it fail.
+     */
+    public function testANestedGroupRestoresThePreviousPrefixAndMiddlewareNotEmptyOnes(): void
+    {
+        $ok = static fn (Request $r): Response => (new Response())->status(200)->json(['ok' => true]);
+        $outerGate = static fn (Request $r): ?Response => null;
+        $innerGate = static fn (Request $r): ?Response => null;
+
+        $router = new Router();
+        $router->group('/outer', static function (Router $r) use ($ok, $innerGate): void {
+            $r->get('/a', $ok);
+
+            // A nested group that completes normally.
+            $r->group('/inner', static function (Router $n) use ($ok): void {
+                $n->get('/b', $ok);
+            }, [$innerGate]);
+
+            // A nested group that blows up mid-registration.
+            try {
+                $r->group('/inner-boom', static function (Router $n): void {
+                    throw new \RuntimeException('nested registration blew up');
+                }, [$innerGate]);
+            } catch (\RuntimeException) {
+                // swallowed on purpose: the point is what the router looks like now
+            }
+
+            // Registered back at the OUTER level, after both nested groups.
+            $r->get('/c', $ok);
+        }, [$outerGate]);
+
+        $routes = $router->getRoutes();
+
+        self::assertArrayHasKey('#^/outer/a$#', $routes['GET']);
+        self::assertCount(1, $routes['GET']['#^/outer/a$#']['middleware']);
+
+        // Nested groups OVERWRITE the prefix rather than concatenating it — a
+        // pre-existing quirk, asserted so this test documents the real behaviour
+        // instead of an assumed one.
+        self::assertArrayHasKey('#^/inner/b$#', $routes['GET']);
+        self::assertCount(2, $routes['GET']['#^/inner/b$#']['middleware'], 'outer + inner');
+
+        // THE POINT: after a nested group — throwing or not — the outer prefix and
+        // the outer middleware are both back, and neither has been cleared.
+        self::assertArrayHasKey(
+            '#^/outer/c$#',
+            $routes['GET'],
+            'the outer prefix must be restored after a nested group throws, not left leaked',
+        );
+        self::assertCount(
+            1,
+            $routes['GET']['#^/outer/c$#']['middleware'],
+            'the OUTER middleware must be restored — not cleared to [], and not left with the inner one',
+        );
+        self::assertSame($outerGate, $routes['GET']['#^/outer/c$#']['middleware'][0]);
+    }
 }

@@ -184,6 +184,18 @@ class Router
     /**
      * Define a route group with shared prefix and optional middleware.
      *
+     * The prefix/middleware restore runs in a `finally`, so a throw from inside
+     * `$callback` cannot leave this router mid-group. It used to be able to, and
+     * the consequence was a security one rather than a cosmetic one: the leaked
+     * `groupMiddleware` is copied by {@see self::addRoute()} onto **every** route
+     * registered afterwards. The live shape is `Application`'s route loaders —
+     * groups such as `/api/v1` carry the auth gate, so one throw inside such a
+     * group (a logger, a config read, a container miss) would silently attach
+     * that gate to every route registered after it; on the server the incident
+     * class was an allowlist middleware refusing every non-LAN caller for the
+     * rest of the boot. The exception itself still propagates; only the
+     * router's own bookkeeping is made unconditional.
+     *
      * @param string             $prefix     Common prefix.
      * @param callable           $callback   Receives `$this`.
      * @param array<int, callable> $middleware Shared middleware.
@@ -198,10 +210,12 @@ class Router
         $this->groupPrefix = $prefix;
         $this->groupMiddleware = array_merge($this->groupMiddleware, $middleware);
 
-        $callback($this);
-
-        $this->groupPrefix = $previousPrefix;
-        $this->groupMiddleware = $previousMiddleware;
+        try {
+            $callback($this);
+        } finally {
+            $this->groupPrefix = $previousPrefix;
+            $this->groupMiddleware = $previousMiddleware;
+        }
 
         return $this;
     }
@@ -241,6 +255,9 @@ class Router
             if (preg_match($pattern, $path, $matches) === 1) {
                 /** @var array<string, string> $params */
                 $params = array_filter($matches, 'is_string', ARRAY_FILTER_USE_KEY);
+                // S435 (ported): percent-decode once, here at the routing
+                // boundary — after the match, before anyone downstream sees it.
+                $params = $this->decodePathParams($params);
                 $request->pathParams = $params;
 
                 foreach ($route['middleware'] as $middleware) {
@@ -344,6 +361,12 @@ class Router
                 if (preg_match($pattern, $path, $captures) === 1) {
                     /** @var array<string, string> $params */
                     $params = array_filter($captures, 'is_string', ARRAY_FILTER_USE_KEY);
+                    // Same boundary law as dispatch(): these captures are
+                    // published onto the request for the preflight chain
+                    // (dispatchPreflight copies them into $request->pathParams),
+                    // so a gate inspecting `{param}` segments must see the same
+                    // decoded shape the eventual dispatched request will.
+                    $params = $this->decodePathParams($params);
                     /** @var array{middleware: array<int, callable>, path: string} $shape */
                     $shape = ['middleware' => $route['middleware'], 'path' => $route['path']];
                     $matched[$verb] = ['route' => $shape, 'params' => $params];
@@ -435,6 +458,47 @@ class Router
         /** @var Response $response */
         $response = $handler($request, $params);
         return $response;
+    }
+
+    /**
+     * Percent-decodes extracted route parameters ONCE, at the routing boundary.
+     *
+     * Ported from the server's S435 (same shared-router lineage): the wire form
+     * of a path segment is percent-encoded (a client asks for
+     * `/api/v1/servers/Abbey%20Road`), but handlers consume NAMES — handing the
+     * still-encoded segment to a lookup silently 404s every name with a space,
+     * accent or unicode character.
+     *
+     * Decoding happens HERE — after pattern matching, before the handler sees a
+     * value — and nowhere else, because:
+     *  - routing itself must keep matching the RAW path: decoding earlier would
+     *    turn an encoded `%2F` into a segment separator (forging routes) and
+     *    would hand upstream traversal guards decoded `..` they never vetted;
+     *  - handlers that decoded again after this boundary would double-decode —
+     *    a literal `%20` inside a real name (`%2520` on the wire) would collapse
+     *    into a space and resolve the WRONG row. One decode, exactly here.
+     *
+     * Policy decisions, pinned by `RouterPathParamDecodingTest`:
+     *  - `rawurldecode()`, NOT `urldecode()`: in a PATH segment `+` is a literal
+     *    plus (RFC 3986 sub-delim); `+`-means-space is the legacy
+     *    `application/x-www-form-urlencoded` form of QUERY strings only. Using
+     *    `urldecode()` here would silently rewrite a name like `Black+Sabbath`.
+     *  - Malformed sequences (`%ZZ`, a trailing `%`) are left verbatim:
+     *    `rawurldecode()` never throws and never corrupts them, so the handler
+     *    receives the closest faithful reading and answers 404 — the honest
+     *    outcome for a name nobody can have registered.
+     *
+     * @param array<string, string> $params Raw captured segments, keyed by placeholder name
+     *
+     * @return array<string, string> The same params, each value decoded exactly once
+     */
+    private function decodePathParams(array $params): array
+    {
+        $decoded = [];
+        foreach ($params as $name => $value) {
+            $decoded[$name] = rawurldecode($value);
+        }
+        return $decoded;
     }
 
     /**

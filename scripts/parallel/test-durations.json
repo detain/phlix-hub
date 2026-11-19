@@ -176,6 +176,7 @@
         "tests/Unit/Http/RouteRegistration/RegistrarAuthGateTest.php": 0.072,
         "tests/Unit/Http/RouteRegistration/RegistrarRouteTableTest.php": 0.024,
         "tests/Unit/Http/RouterCorsTest.php": 0.004,
+        "tests/Unit/Http/RouterPathParamDecodingTest.php": 0.0095,
         "tests/Unit/Http/RouterTest.php": 0.003,
         "tests/Unit/Http/SpaBrowserFloorTest.php": 0.001,
         "tests/Unit/Http/UserThrottleRouteRegistrationTest.php": 0.004,
