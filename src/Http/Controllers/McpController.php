@@ -44,9 +44,6 @@ use function strtolower;
 use function trim;
 
 use const JSON_ERROR_NONE;
-use const JSON_PRETTY_PRINT;
-use const JSON_THROW_ON_ERROR;
-use const JSON_UNESCAPED_SLASHES;
 
 /**
  * `POST /mcp` + `GET /mcp` — the hub's Model Context Protocol endpoint (S62/S63).
