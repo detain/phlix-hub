@@ -13,6 +13,7 @@ namespace Phlix\Hub\Hub;
 
 use Phlix\Hub\Common\Database\UpsertSyntax;
 use Phlix\Hub\Common\Support\Ids;
+use Phlix\Shared\Settings\SettingsCodec;
 use Workerman\MySQL\Connection;
 
 /**
@@ -35,7 +36,11 @@ use Workerman\MySQL\Connection;
  * Storage notes:
  *   - `setting_value` is always stored as text; `value_type`
  *     (string|int|bool|float|json) records how to decode it back into a
- *     PHP value. {@see self::encode()} / {@see self::decode()}.
+ *     PHP value. The codec is the shared kernel (v0.57 leg M-32):
+ *     {@see SettingsCodec::encode()} / {@see SettingsCodec::decode()}; the
+ *     kernel docblocks carry the strict-throw encode posture this repo
+ *     wrote (an unencodable value never persists) and the HUB-ENVBOOL
+ *     persisted-format decode law (a storage round-trip, not an env read).
  *   - Upserts use `INSERT ... ON DUPLICATE KEY UPDATE` against the
  *     `uq_hub_settings_key` unique index, mirroring the server
  *     {@see \Phlix\Admin\SettingsRepository} pattern.
@@ -270,7 +275,7 @@ class HubSettingsRepository
         $raw  = is_string($row['setting_value'] ?? null) ? (string) $row['setting_value'] : '';
 
         return [
-            'value'      => self::decode($raw, $type),
+            'value'      => SettingsCodec::decode($raw, $type),
             'value_type' => $type,
         ];
     }
@@ -301,7 +306,7 @@ class HubSettingsRepository
             $type = is_string($row['value_type'] ?? null) ? (string) $row['value_type'] : 'string';
             $raw  = is_string($row['setting_value'] ?? null) ? (string) $row['setting_value'] : '';
             /** @psalm-suppress MixedAssignment */
-            $out[(string) $row['setting_key']] = self::decode($raw, $type);
+            $out[(string) $row['setting_key']] = SettingsCodec::decode($raw, $type);
         }
 
         return $out;
@@ -318,12 +323,16 @@ class HubSettingsRepository
      * @param mixed  $value     PHP value to persist.
      * @param string $valueType One of string|int|bool|float|json.
      *
+     * @throws \JsonException via the shared kernel when an unencodable json
+     *                        value is handed in — never persists an empty
+     *                        string for it (M-32 strict posture law).
+     *
      * @since H.5a
      */
     public function set(string $key, mixed $value, string $valueType): void
     {
         $id      = Ids::uuidV4();
-        $encoded = self::encode($value, $valueType);
+        $encoded = SettingsCodec::encode($value, $valueType);
 
         // Upsert on the unique `setting_key` index.
         $sql = UpsertSyntax::adapt('INSERT INTO hub_settings (id, setting_key, setting_value, value_type)'
@@ -456,55 +465,5 @@ class HubSettingsRepository
         $loaded = @include $path;
 
         return $this->configCache[$file] = is_array($loaded) ? $loaded : null;
-    }
-
-    /**
-     * Serialise a PHP value to its text representation for storage.
-     *
-     * @param mixed  $value     Value to encode.
-     * @param string $valueType One of string|int|bool|float|json.
-     *
-     * @return string Text form suitable for the `setting_value` column.
-     *
-     * @throws \JsonException When the value cannot be JSON-encoded (never
-     *                        persists an empty string for an unencodable value).
-     */
-    private static function encode(mixed $value, string $valueType): string
-    {
-        return match ($valueType) {
-            'bool'  => ($value ? '1' : '0'),
-            'int'   => (string) (int) (is_numeric($value) ? $value : 0),
-            'float' => (string) (float) (is_numeric($value) ? $value : 0),
-            'json'  => json_encode($value, JSON_THROW_ON_ERROR),
-            default => is_scalar($value) ? (string) $value : json_encode($value, JSON_THROW_ON_ERROR),
-        };
-    }
-
-    /**
-     * Decode a stored text value back into a PHP value per its type.
-     *
-     * HUB-ENVBOOL census row: the 'bool' limb is the PERSISTED-FORMAT decode
-     * paired with encode()'s '1'/'0' — a storage round-trip, NOT an env read.
-     * The tolerant strtolower==='true' leg exists for legacy rows; the estate
-     * bool grammar's semantics (trim, caller default, junk warning) belong on
-     * env knobs, never on how a column decodes, so this stays local by law.
-     * Reachable vocabulary via the API is exactly '1'/'0'; garbage decodes
-     * false silently, which is correct here (a corrupt stored row must not
-     * flip a setting) and would be wrong for an operator-facing knob.
-     *
-     * @param string $raw       Stored text value.
-     * @param string $valueType One of string|int|bool|float|json.
-     *
-     * @return mixed The decoded PHP value.
-     */
-    private static function decode(string $raw, string $valueType): mixed
-    {
-        return match ($valueType) {
-            'bool'  => $raw === '1' || strtolower($raw) === 'true',
-            'int'   => (int) $raw,
-            'float' => (float) $raw,
-            'json'  => json_decode($raw, true),
-            default => $raw,
-        };
     }
 }

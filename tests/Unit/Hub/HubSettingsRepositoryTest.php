@@ -4,12 +4,22 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Hub;
 
+use JsonException;
 use Phlix\Hub\Hub\HubSettingsRepository;
+use Phlix\Shared\Settings\SettingsCodec;
 use PHPUnit\Framework\TestCase;
+use ReflectionClass;
+use ReflectionMethod;
 use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for {@see HubSettingsRepository}.
+ *
+ * The M-32 suite pins the v0.57 codec adoption: the retired private arms
+ * are byte-paired against the shared kernel across the whole grammar
+ * (the HUB-JSON-F14 legacy-pin idiom), the kernel keeps the hub's strict
+ * posture against the server's silent variant, and the twins' absence
+ * from the class is held by tripwires.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
  */
@@ -376,5 +386,216 @@ final class HubSettingsRepositoryTest extends TestCase
         self::assertContains('auth.secret', HubSettingsRepository::DENIED_KEYS);
         self::assertContains('server.hub_base_url', HubSettingsRepository::DENIED_KEYS);
         self::assertContains('server.tls_enabled', HubSettingsRepository::DENIED_KEYS);
+    }
+
+    // ------------------------------------------------- M-32 codec adoption pins
+
+    /**
+     * The full value_type vocabulary of the storage grammar: the five named
+     * types plus the fall-through shapes the default arm owes identical
+     * answers on (unknown spellings included).
+     */
+    private const CODEC_TYPES = ['string', 'int', 'bool', 'float', 'json', '', 'unknown', 'BOOL', 'Json'];
+
+    /**
+     * `HubSettingsRepository`'s private encode() arm verbatim, as it shipped
+     * until v0.57 leg M-32 (deleted from the class; reproduced here the way
+     * SharedJsonDelegationTest keeps its legacy bodies). Golden bytes are
+     * pinned against the kernel — never against an implementation.
+     *
+     * @param mixed $value Value to encode.
+     */
+    private static function retiredHubEncode(mixed $value, string $valueType): string
+    {
+        return match ($valueType) {
+            'bool'  => ($value ? '1' : '0'),
+            'int'   => (string) (int) (is_numeric($value) ? $value : 0),
+            'float' => (string) (float) (is_numeric($value) ? $value : 0),
+            'json'  => json_encode($value, JSON_THROW_ON_ERROR),
+            default => is_scalar($value) ? (string) $value : json_encode($value, JSON_THROW_ON_ERROR),
+        };
+    }
+
+    /** `HubSettingsRepository`'s private decode() arm verbatim (pre M-32). */
+    private static function retiredHubDecode(string $raw, string $valueType): mixed
+    {
+        return match ($valueType) {
+            'bool'  => $raw === '1' || strtolower($raw) === 'true',
+            'int'   => (int) $raw,
+            'float' => (float) $raw,
+            'json'  => json_decode($raw, true),
+            default => $raw,
+        };
+    }
+
+    /**
+     * Outcome tag for one codec call: the result's var_export, or the
+     * exception class and message. Any other Throwable is a bug and must
+     * surface as a test error, so only JsonException is caught here.
+     *
+     * @param callable(): mixed $call
+     *
+     * @return array{0: string, 1: string}
+     */
+    private static function codecOutcome(callable $call): array
+    {
+        try {
+            return ['ok', var_export($call(), true)];
+        } catch (JsonException $e) {
+            return ['throw', get_class($e) . ':' . $e->getMessage()];
+        }
+    }
+
+    public function testTheKernelIsByteIdenticalToTheRetiredHubEncodeArms(): void
+    {
+        $values = [
+            'true' => true,
+            'false' => false,
+            'int0' => 0,
+            'int1' => 1,
+            'intneg' => -2,
+            'str0' => '0',
+            'str1' => '1',
+            'abc' => 'abc',
+            'empty' => '',
+            'float' => 2.7,
+            'strFloat' => '2.7',
+            'strJunkNum' => '2.7x',
+            'null' => null,
+            'emptyArr' => [],
+            'list' => [1, 2],
+            'map' => ['a' => 1, 'b' => 'テスト'],
+            'nested' => ['x' => ['y' => [true, null]]],
+            'obj' => new \stdClass(),
+            'infMap' => ['v' => INF],
+            'badUtf8' => "\xB1\x31",
+            'intMax' => PHP_INT_MAX,
+            'sciStr' => '-1.5e3',
+        ];
+
+        $cases = 0;
+        foreach (self::CODEC_TYPES as $type) {
+            foreach ($values as $name => $value) {
+                $cases++;
+                $legacy = self::codecOutcome(
+                    static fn(): string => self::retiredHubEncode($value, $type)
+                );
+                $kernel = self::codecOutcome(
+                    static fn(): string => SettingsCodec::encode($value, $type)
+                );
+
+                self::assertSame(
+                    $legacy[0] . '|' . $legacy[1],
+                    $kernel[0] . '|' . $kernel[1],
+                    "encode(type={$type}, value={$name}) drifted across the M-32 adoption."
+                );
+            }
+        }
+
+        self::assertGreaterThanOrEqual(180, $cases, 'corpus shrank — the parity proof is going vacuous');
+    }
+
+    public function testTheKernelIsByteIdenticalToTheRetiredHubDecodeArms(): void
+    {
+        $raws = [
+            '1', '0', 'true', 'TRUE', 'False', 'yes', '5', '-3', '007', '5.7', '2e3',
+            'abc', '', '{"a":1}', '[1,2]', 'null', 'garbage{', '{"a":}', 'é', '1e999', '0.0',
+        ];
+
+        $cases = 0;
+        foreach (self::CODEC_TYPES as $type) {
+            foreach ($raws as $raw) {
+                $cases++;
+                $legacy = self::codecOutcome(
+                    static fn(): mixed => self::retiredHubDecode($raw, $type)
+                );
+                $kernel = self::codecOutcome(
+                    static fn(): mixed => SettingsCodec::decode($raw, $type)
+                );
+
+                self::assertSame(
+                    $legacy[0] . '|' . $legacy[1],
+                    $kernel[0] . '|' . $kernel[1],
+                    "decode(type={$type}) drifted across the M-32 adoption."
+                );
+            }
+        }
+
+        self::assertGreaterThanOrEqual(180, $cases, 'corpus shrank — the parity proof is going vacuous');
+    }
+
+    /**
+     * Risk-seam R1: the kernel ships the HUB's strict posture, never the
+     * server's silent-'' variant. If a future kernel refactor folds the
+     * strictness back out, this pin reddens and the server leg — not the
+     * hub — is where the harmonization has to happen.
+     */
+    public function testTheServerSilentVariantIsTheDivergenceTheKernelRefuses(): void
+    {
+        $unencodable = ['v' => INF];
+        self::assertSame('', (string) json_encode($unencodable), 'silent variant renders empty');
+
+        $thrown = null;
+        try {
+            SettingsCodec::encode($unencodable, 'json');
+        } catch (JsonException $e) {
+            $thrown = $e;
+        }
+        self::assertInstanceOf(JsonException::class, $thrown, 'kernel must keep the strict json arm');
+    }
+
+    public function testTheRepositoryNoLongerDeclaresTheRetiredCodecArms(): void
+    {
+        $names = array_map(
+            static fn(ReflectionMethod $method): string => $method->getName(),
+            (new ReflectionClass(HubSettingsRepository::class))->getMethods()
+        );
+
+        self::assertNotContains('encode', $names, 'retired private encode arm re-materialised');
+        self::assertNotContains('decode', $names, 'retired private decode arm re-materialised');
+    }
+
+    public function testTheRepositorySourceDelegatesEveryCodecSiteToTheKernel(): void
+    {
+        $file = (new ReflectionClass(HubSettingsRepository::class))->getFileName();
+        self::assertIsString($file, 'reflection must locate the repository source');
+        $src = file_get_contents((string) $file);
+        self::assertIsString($src);
+
+        self::assertSame(
+            2,
+            substr_count($src, 'SettingsCodec::decode($raw, $type)'),
+            'both decode sites must call the kernel'
+        );
+        self::assertSame(
+            1,
+            substr_count($src, 'SettingsCodec::encode($value, $valueType)'),
+            'the set() seam must call the kernel'
+        );
+        self::assertStringNotContainsString('self::encode', $src, 'no self::encode may survive');
+        self::assertStringNotContainsString('self::decode', $src, 'no self::decode may survive');
+        self::assertStringNotContainsString('private static function encode', $src);
+        self::assertStringNotContainsString('private static function decode', $src);
+    }
+
+    public function testTheEncodeThrowCrossesTheSetSeamBeforeAnyWrite(): void
+    {
+        /** @var list<string> $issued */
+        $issued = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function ($sql) use (&$issued): int {
+                $issued[] = (string) $sql;
+
+                return 1;
+            }
+        );
+
+        try {
+            $this->repo($db)->set('meta.test', ['v' => INF], 'json');
+            self::fail('unencodable json must not write silently through set()');
+        } catch (JsonException $e) {
+            self::assertSame([], $issued, 'the kernel throw must fire before the upsert');
+        }
     }
 }
