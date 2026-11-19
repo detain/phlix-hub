@@ -247,10 +247,7 @@ final class AuthMiddleware
     private function challenge(Request $request, string $code): Response
     {
         if (self::isJsonRequest($request)) {
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'code'  => $code,
-            ]);
+            return (new Response())->error(401, $code, 'Unauthorized');
         }
         return (new Response())
             ->status(302)

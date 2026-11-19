@@ -201,10 +201,8 @@ final class ErrorCodesContractTest extends TestCase
         'Http/Response.php::error' => 'swept:error@2',
         'Http/Response.php::errorBody' => 'swept:errorBody@1',
         'Relay/FrameEncoder.php::error' => 'swept:error@2',
-        'Http/Controllers/FederationController.php::badRequest' => 'swept:badRequest@1',
         'Http/Controllers/AdminUserController.php::conflict' => 'swept:conflict@2',
         'Http/Controllers/McpController.php::unauthorized' => 'swept:unauthorized@1',
-        'Http/Middleware/AuthMiddleware.php::challenge' => 'swept:challenge@2',
         'SyncPlay/SyncPlayRelayWorker.php::sendCanonicalError' => 'swept:sendCanonicalError@2',
         // — excluded, with reasons —
         'Http/Middleware/AlexaSignatureMiddleware.php::reject' =>
@@ -355,6 +353,18 @@ final class ErrorCodesContractTest extends TestCase
             'hop: reject() emits (new Response())->error(400, $wireCode, $code) where $wireCode'
             . ' is a REJECTION_CODE_MAP value — registered dotted twins AND the whole frame'
             . ' shape are pinned by \\Phlix\\Hub\\Tests\\Unit\\Http\\Middleware\\AlexaRejectionCodeMapLawTest',
+        'Http/Controllers/FederationController.php::badRequest::error@2' =>
+            'hop: badRequest(string $code, string $reason) forwards its own string-typed $code'
+            . ' parameter into (new Response())->error(...) after the HUB-ENV F-01 seam adoption;'
+            . ' every call site in that file passes a registered literal code, swept directly at'
+            . ' badRequest@1 in CODE_HELPER_SWEEPS, and the 400 frame bytes are pinned by'
+            . ' \\Phlix\\Hub\\Tests\\Unit\\Http\\HttpEnvelopeAdoptionTest',
+        'Http/Middleware/AuthMiddleware.php::challenge::error@2' =>
+            'hop: challenge(Request, string $code) forwards its own string-typed $code into'
+            . ' (new Response())->error(...) after the HUB-ENV F-01 seam adoption; every call site'
+            . ' passes a registered literal code, swept directly at challenge@2 in'
+            . ' CODE_HELPER_SWEEPS, and the 401 frame bytes are pinned by'
+            . ' \\Phlix\\Hub\\Tests\\Unit\\Http\\HttpEnvelopeAdoptionTest',
     ];
 
     /**

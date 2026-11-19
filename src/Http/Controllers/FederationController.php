@@ -141,13 +141,11 @@ final class FederationController
     {
         $resolver = $this->enabledResolver;
         if (is_callable($resolver) && !$resolver()) {
-            return (new Response())->status(409)->json([
-                'error' => 'Conflict',
-                'code' => 'provider.not_configured',
-                'message' => 'Federation is disabled on this hub.',
+            return (new Response())->error(409, 'provider.not_configured', 'Conflict', [
                 // Disambiguation leg (HUB-49): `provider.not_configured` is catalogued
                 // as a sign-in-provider message, so the cause rides here instead of a
                 // new wire code. Additive; code/status/message are unchanged.
+                'message' => 'Federation is disabled on this hub.',
                 'detail' => 'Federation is switched off (federation.enabled). '
                     . 'Enable it in hub settings to manage peers and shares.',
             ]);
@@ -461,18 +459,14 @@ final class FederationController
         // Check for duplicate URL or public key
         $existingByUrl = $this->hubRepo->getPeerByUrl($urlRaw);
         if ($existingByUrl !== null) {
-            return (new Response())->status(409)->json([
-                'error' => 'Conflict',
-                'code' => 'peer_url_exists',
+            return (new Response())->error(409, 'peer_url_exists', 'Conflict', [
                 'message' => 'A peer with this URL already exists.',
             ]);
         }
 
         $existingByKey = $this->hubRepo->getPeerByPublicKey($publicKeyRaw);
         if ($existingByKey !== null) {
-            return (new Response())->status(409)->json([
-                'error' => 'Conflict',
-                'code' => 'peer_key_exists',
+            return (new Response())->error(409, 'peer_key_exists', 'Conflict', [
                 'message' => 'A peer with this public key already exists.',
             ]);
         }
@@ -533,10 +527,7 @@ final class FederationController
 
         $peer = $this->hubRepo->getPeerById($peerId);
         if ($peer === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code' => 'peer_not_found',
-            ]);
+            return (new Response())->error(404, 'peer_not_found', 'Not Found');
         }
 
         /** @var mixed $currentRaw */
@@ -548,9 +539,7 @@ final class FederationController
             // at @phlix/contracts v0.5.3 (deferred-mint flip of the earlier
             // 'invalid_request'-generic precedent, InviteLink-style). The free-
             // form 'reason' still carries the condition for humans and MCP.
-            return (new Response())->status(409)->json([
-                'error' => 'Conflict',
-                'code' => 'leaf_hub_id_already_bound',
+            return (new Response())->error(409, 'leaf_hub_id_already_bound', 'Conflict', [
                 'reason' => 'leaf_hub_id already bound to a different value',
                 'message' => 'This peer is already bound to a different leaf hub',
             ]);
@@ -589,10 +578,7 @@ final class FederationController
 
         $peer = $this->hubRepo->getPeerById($peerId);
         if ($peer === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code' => 'peer_not_found',
-            ]);
+            return (new Response())->error(404, 'peer_not_found', 'Not Found');
         }
 
         // If this peer is connected, disconnect first
@@ -641,10 +627,7 @@ final class FederationController
 
         $peer = $this->hubRepo->getPeerById($peerId);
         if ($peer === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code' => 'peer_not_found',
-            ]);
+            return (new Response())->error(404, 'peer_not_found', 'Not Found');
         }
 
         $body = $request->body;
@@ -713,10 +696,7 @@ final class FederationController
 
         $peer = $this->hubRepo->getPeerById($peerId);
         if ($peer === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code' => 'peer_not_found',
-            ]);
+            return (new Response())->error(404, 'peer_not_found', 'Not Found');
         }
 
         $body = $request->body;
@@ -812,10 +792,7 @@ final class FederationController
 
         $peer = $this->hubRepo->getPeerById($peerIdRaw);
         if ($peer === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code' => 'peer_not_found',
-            ]);
+            return (new Response())->error(404, 'peer_not_found', 'Not Found');
         }
 
         if (!is_string($permissionRaw) || !in_array($permissionRaw, ['read', 'readwrite'], true)) {
@@ -902,10 +879,7 @@ final class FederationController
 
         $share = $this->libraryShares->getOutgoingShareById($shareId);
         if ($share === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code' => 'share_not_found',
-            ]);
+            return (new Response())->error(404, 'share_not_found', 'Not Found');
         }
 
         /** @var string $peerId */
@@ -992,18 +966,14 @@ final class FederationController
 
         $offer = $this->libraryShares->getIncomingOfferById($offerId);
         if ($offer === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code' => 'offer_not_found',
+            return (new Response())->error(404, 'offer_not_found', 'Not Found', [
                 'message' => 'Offer not found',
             ]);
         }
 
         $status = is_string($offer['status'] ?? null) ? $offer['status'] : 'pending';
         if ($status !== 'pending') {
-            return (new Response())->status(409)->json([
-                'error' => 'Conflict',
-                'code' => 'offer_already_responded',
+            return (new Response())->error(409, 'offer_already_responded', 'Conflict', [
                 'message' => 'This offer has already been accepted or rejected',
             ]);
         }
@@ -1049,18 +1019,14 @@ final class FederationController
 
         $offer = $this->libraryShares->getIncomingOfferById($offerId);
         if ($offer === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code' => 'offer_not_found',
+            return (new Response())->error(404, 'offer_not_found', 'Not Found', [
                 'message' => 'Offer not found',
             ]);
         }
 
         $status = is_string($offer['status'] ?? null) ? $offer['status'] : 'pending';
         if ($status !== 'pending') {
-            return (new Response())->status(409)->json([
-                'error' => 'Conflict',
-                'code' => 'offer_already_responded',
+            return (new Response())->error(409, 'offer_already_responded', 'Conflict', [
                 'message' => 'This offer has already been accepted or rejected',
             ]);
         }
@@ -1100,9 +1066,7 @@ final class FederationController
         $isMasterRaw = $hubConfig['is_master'] ?? null;
         $isMaster = is_int($isMasterRaw) ? $isMasterRaw === 1 : (is_string($isMasterRaw) && $isMasterRaw === '1');
         if ($hubConfig === null || !$isMaster) {
-            return (new Response())->status(403)->json([
-                'error' => 'Forbidden',
-                'code' => 'master_only',
+            return (new Response())->error(403, 'master_only', 'Forbidden', [
                 'message' => 'Admin delegations are only available on the master hub.',
             ]);
         }
@@ -1151,9 +1115,7 @@ final class FederationController
         $isMasterRaw = $hubConfig['is_master'] ?? null;
         $isMaster = is_int($isMasterRaw) ? $isMasterRaw === 1 : (is_string($isMasterRaw) && $isMasterRaw === '1');
         if ($hubConfig === null || !$isMaster) {
-            return (new Response())->status(403)->json([
-                'error' => 'Forbidden',
-                'code' => 'master_only',
+            return (new Response())->error(403, 'master_only', 'Forbidden', [
                 'message' => 'Admin delegations are only available on the master hub.',
             ]);
         }
@@ -1178,10 +1140,7 @@ final class FederationController
 
         $peer = $this->hubRepo->getPeerById($peerIdRaw);
         if ($peer === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code' => 'peer_not_found',
-            ]);
+            return (new Response())->error(404, 'peer_not_found', 'Not Found');
         }
 
         $delegationId = Ids::uuidV4();
@@ -1218,10 +1177,7 @@ final class FederationController
 
         $delegation = $this->adminDel->getDelegationById($delegationId);
         if ($delegation === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code' => 'delegation_not_found',
-            ]);
+            return (new Response())->error(404, 'delegation_not_found', 'Not Found');
         }
 
         /** @var string $peerId */
@@ -1242,10 +1198,12 @@ final class FederationController
      * Return a 400 Bad Request JSON response.
      *
      * Wire-law: `$code` MUST be a registered `@phlix/contracts` code. The
-     * ErrorCodesContractTest scanner sees only literal `'code' => '…'`
-     * shapes, and this helper's payload writes `'code' => $code` through a
-     * variable — so the verifiable literals are the CALL-SITE arguments,
-     * every one of which is registry-checked (the leaf_hub_id family — both
+     * ErrorCodesContractTest scanner sees only literal code-channel shapes,
+     * and this helper feeds its envelope through `Response::error()`'s
+     * second positional argument via a variable — so the verifiable literals
+     * are the CALL-SITE arguments, every one of which is registry-checked
+     * (direct `badRequest@1` sweep + the enumerated opaque hop feed; the
+     * leaf_hub_id family — both
      * malformed-UUID 400 sites and the 409 rebind conflict — rides the
      * dedicated 'leaf_hub_id_already_bound' minted at @phlix/contracts v0.5.3,
      * with the condition also carried in `reason`; f30e8a7 generic-era flipped).
@@ -1277,17 +1235,13 @@ final class FederationController
 
         $message = $messages[$code] ?? ($reason !== '' ? $reason : 'Bad Request');
 
-        $payload = [
-            'error' => 'Bad Request',
-            'code' => $code,
-            'message' => $message,
-        ];
+        $extra = ['message' => $message];
 
         if ($reason !== '') {
-            $payload['reason'] = $reason;
+            $extra['reason'] = $reason;
         }
 
-        return (new Response())->status(400)->json($payload);
+        return (new Response())->error(400, $code, 'Bad Request', $extra);
     }
 
     /**
