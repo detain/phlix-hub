@@ -11,20 +11,23 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Common\Database;
 
-use Phlix\Hub\Common\Database\MysqlError;
+use Phlix\Shared\Database\MysqlError;
 use PHPUnit\Framework\TestCase;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
 use ReflectionClass;
 
 /**
- * Unit coverage for {@see MysqlError} — the canonical MySQL error detector
- * (refactor D-16). Twin of the phlix-server suite of the same name (identical
- * bodies, namespace-adjusted only). The shapes asserted here are the two the
- * estate's own connection layer provably produces (raw PDOException with
- * intact errorInfo, and the vendor re-wrap carrying only message +
- * SQLSTATE-as-int), plus the MigrationRunner segment contract (anchored
- * parse, bracketed connect failures deliberately unmatched, echo decoys
- * refused — anchored segment wins, ambiguous multi-segment strings parse to
- * nothing).
+ * Unit coverage for {@see MysqlError} — the canonical MySQL error detector,
+ * retired into its shared home at v0.57 leg M-30 (refactor D-16). This suite
+ * is the hub-side ADOPTION pin: it holds the exact corpus the hub's
+ * connection layer provably produces (raw PDOException with intact errorInfo,
+ * and the vendor re-wrap carrying only message + SQLSTATE-as-int) plus the
+ * MigrationRunner segment contract (anchored parse, bracketed connect
+ * failures deliberately unmatched, echo decoys refused — anchored segment
+ * wins, ambiguous multi-segment strings parse to nothing) against the kernel
+ * THIS repo's lock ships. The retire-tripwires below pin that the hub-local
+ * twin stays gone and the shared kernel is the sole implementation.
  */
 final class MysqlErrorTest extends TestCase
 {
@@ -162,5 +165,45 @@ final class MysqlErrorTest extends TestCase
         self::assertSame('23000', MysqlError::SQLSTATE_INTEGRITY);
         self::assertSame('40001', MysqlError::SQLSTATE_SERIALIZATION_FAILURE);
         self::assertSame('Duplicate entry', MysqlError::DUPLICATE_ENTRY_PHRASE);
+    }
+
+    public function testTheHubLocalTwinIsRetiredAndTheSharedKernelIsSoleImpl(): void
+    {
+        // M-30 lift-retirement tripwire: the hub-local twin must never come
+        // back, and the vocabulary this suite pins must resolve to exactly
+        // one implementation — the shared kernel this repo's lock ships.
+        self::assertFalse(
+            class_exists('Phlix\Hub\Common\Database\MysqlError'),
+            'the retired hub-local MysqlError twin has re-materialised'
+        );
+        self::assertSame('Phlix\Shared\Database\MysqlError', MysqlError::class);
+
+        // Scan-based extinction pin asserting its own coverage: walk every
+        // src/ PHP file and prove none re-declares the retired class name.
+        // The floor is the measured 239 src files at retirement (240 minus
+        // the twin's own body); a walk that sees fewer has lost coverage and
+        // must not pass vacuously.
+        $root = dirname(__DIR__, 4);
+        $declared = [];
+        $visited = 0;
+        $walk = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($root . '/src', RecursiveDirectoryIterator::SKIP_DOTS)
+        );
+        foreach ($walk as $file) {
+            if (!$file->isFile() || $file->getExtension() !== 'php') {
+                continue;
+            }
+            $visited++;
+            if (preg_match('/\b(?:final\s+|abstract\s+)?(?:class|interface|trait|enum)\s+MysqlError\b/', (string) file_get_contents($file->getPathname())) === 1) {
+                $declared[] = str_replace($root . '/', '', $file->getPathname());
+            }
+        }
+
+        self::assertSame([], $declared, 'a src/ file still declares the retired MysqlError');
+        self::assertGreaterThanOrEqual(
+            200,
+            $visited,
+            'the src/ walk lost coverage (measured 239 at retirement) — this pin must not pass vacuously'
+        );
     }
 }

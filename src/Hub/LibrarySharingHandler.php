@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Hub;
 
-use Phlix\Hub\Common\Database\MysqlError;
+use Phlix\Shared\Database\MysqlError;
 use Phlix\Hub\Common\Support\Ids;
 use InvalidArgumentException;
 use Phlix\Hub\Auth\UserRepository;

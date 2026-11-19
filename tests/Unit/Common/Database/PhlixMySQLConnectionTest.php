@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Common\Database;
 
-use Phlix\Hub\Common\Database\MysqlError;
 use Phlix\Hub\Common\Database\PhlixMySQLConnection;
+use Phlix\Shared\Database\MysqlError;
 use Phlix\Hub\Tests\Support\SwooleFixtureProcess;
 use Phlix\Hub\Tests\Support\TransactionLockConnection;
 use PHPUnit\Framework\TestCase;

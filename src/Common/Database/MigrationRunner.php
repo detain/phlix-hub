@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Common\Database;
 
+use Phlix\Shared\Database\MysqlError;
 use RuntimeException;
 use Throwable;
 use Workerman\MySQL\Connection;

@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Common\Database;
 
 use PDOException;
+use Phlix\Shared\Database\MysqlError;
 use RuntimeException;
 use Workerman\MySQL\Connection;
 

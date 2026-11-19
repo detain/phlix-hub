@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub;
 
-use Phlix\Hub\Common\Database\MysqlError;
+use Phlix\Shared\Database\MysqlError;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Workerman\Timer;
 

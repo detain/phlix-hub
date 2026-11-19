@@ -13,6 +13,7 @@ namespace Phlix\Hub\Common\Database;
 
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Shared\Database\MysqlError;
 use Workerman\MySQL\Connection;
 
 /**
