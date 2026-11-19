@@ -16,6 +16,7 @@ use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Auth\SignupsDisabledException;
 use Phlix\Hub\Hub\CookiePolicy;
+use Phlix\Hub\Http\ControllerErrorFrames;
 use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Middleware\CsrfOriginGuard;
 use Phlix\Hub\Http\Request;
@@ -101,7 +102,7 @@ final class AuthController
             // mint registered `not_found` for — now speaks the unified
             // member-facing envelope (machine word in `code`, one sentence
             // co-mirrored in error/message), companion of Router::notFound().
-            default => self::errorFrame(404, 'not_found', 'The requested resource was not found'),
+            default => ControllerErrorFrames::errorFrame(404, 'not_found', 'The requested resource was not found'),
         };
     }
 
@@ -119,7 +120,11 @@ final class AuthController
         $email = ControllerRequests::stringField($request, 'email');
         $password = ControllerRequests::stringField($request, 'password');
         if ($username === '' || $email === '' || $password === '') {
-            return self::errorFrame(400, 'auth.missing_credentials', 'username, email and password are required');
+            return ControllerErrorFrames::errorFrame(
+                400,
+                'auth.missing_credentials',
+                'username, email and password are required',
+            );
         }
 
         try {
@@ -139,12 +144,12 @@ final class AuthController
 
             return $response;
         } catch (SignupsDisabledException $e) {
-            return self::errorFrame(403, 'auth.signups_disabled', $e->getMessage());
+            return ControllerErrorFrames::errorFrame(403, 'auth.signups_disabled', $e->getMessage());
         } catch (RateLimitException $e) {
             // Before InvalidArgumentException: a budget trip is 429, not 400.
             return self::rateLimited($e);
         } catch (InvalidArgumentException $e) {
-            return self::errorFrame(400, 'validation_failed', $e->getMessage());
+            return ControllerErrorFrames::errorFrame(400, 'validation_failed', $e->getMessage());
         }
     }
 
@@ -164,7 +169,11 @@ final class AuthController
         }
         $password = ControllerRequests::stringField($request, 'password');
         if ($identifier === '' || $password === '') {
-            return self::errorFrame(400, 'auth.missing_credentials', 'username (or email) and password are required');
+            return ControllerErrorFrames::errorFrame(
+                400,
+                'auth.missing_credentials',
+                'username (or email) and password are required',
+            );
         }
 
         try {
@@ -188,7 +197,7 @@ final class AuthController
             // to 429 + Retry-After rather than a misleading 401.
             return self::rateLimited($e);
         } catch (InvalidArgumentException $e) {
-            return self::errorFrame(401, 'auth.invalid_credentials', $e->getMessage());
+            return ControllerErrorFrames::errorFrame(401, 'auth.invalid_credentials', $e->getMessage());
         }
     }
 
@@ -213,22 +222,12 @@ final class AuthController
     }
 
     /**
-     * The house error frame: `{error, code}` from {@see Response::error()}
-     * plus the legacy top-level `message` key carrying the same human text,
-     * so readers written against the pre-code envelope keep working while
-     * the machine `code` becomes available to new ones.
-     */
-    private static function errorFrame(int $status, string $code, string $message): Response
-    {
-        return (new Response())->error($status, $code, $message, ['message' => $message]);
-    }
-
-    /**
      * Build the shared 429 rate-limit envelope. The status, the `Retry-After`
      * header and the machine `code: 'rate_limited'` match the central mapping
      * in {@see \Phlix\Hub\Application::rateLimitResponse()}; on top of that
      * pair this local frame also carries the human `message` sentence, which
-     * is this class's own house law ({@see errorFrame()} sentences every
+     * is this class's own house law ({@see ControllerErrorFrames::errorFrame()}
+     * sentences every
      * code, and the test-suite header names it) — an auth throttle in front
      * of a person must never be a bare machine frame. Wire-ADDITIVE against
      * the central `{error, code}` shape: legacy readers are untouched, no
@@ -319,7 +318,7 @@ final class AuthController
     {
         [$token, $fromCookie] = self::resolveRefreshToken($request);
         if ($token === '') {
-            return self::errorFrame(400, 'auth.missing_credentials', 'refresh_token is required');
+            return ControllerErrorFrames::errorFrame(400, 'auth.missing_credentials', 'refresh_token is required');
         }
 
         // CP-012: cookie-sourced rotation is the one lineage the Origin guard
@@ -342,7 +341,7 @@ final class AuthController
 
             return $response;
         } catch (InvalidArgumentException $e) {
-            return self::errorFrame(401, 'auth.invalid_token', $e->getMessage());
+            return ControllerErrorFrames::errorFrame(401, 'auth.invalid_token', $e->getMessage());
         }
     }
 
@@ -394,7 +393,7 @@ final class AuthController
         $revoked = $this->auth->revokeTokenSession($request->userId ?? '', $sessionId);
 
         if (!$revoked) {
-            return self::errorFrame(404, 'not_found', 'Session not found');
+            return ControllerErrorFrames::errorFrame(404, 'not_found', 'Session not found');
         }
 
         return (new Response())->status(204);

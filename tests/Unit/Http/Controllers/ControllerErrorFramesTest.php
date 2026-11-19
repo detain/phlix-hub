@@ -291,4 +291,41 @@ final class ControllerErrorFramesTest extends TestCase
         self::assertSame('some_code', $decoded['code']);
         self::assertSame('Some prose', $decoded['message']);
     }
+    /**
+     * F-19: the machine frame with the mirrored human `message` twin — the
+     * byte-identical law the AuthController and UserPasswordController
+     * private copies shared. Key order is error, code, message.
+     */
+    public function testErrorFrameIsPinnedByteForByte(): void
+    {
+        $frame = ControllerErrorFrames::errorFrame(400, 'validation_failed', 'password too short');
+
+        self::assertSame(400, $frame->statusCode);
+        self::assertSame(
+            ['Content-Type' => 'application/json', 'Cache-Control' => 'no-store'],
+            $frame->headers,
+        );
+        self::assertSame(
+            '{"error":"password too short","code":"validation_failed",' .
+            '"message":"password too short"}',
+            $frame->body,
+        );
+    }
+
+    /**
+     * Status passthrough law: the frame builder never edits the status, only
+     * the pair of message slots — pinned for the two arms the controllers
+     * actually emit through the fold.
+     */
+    public function testErrorFrameCarriesEveryStatusVerbatim(): void
+    {
+        $frame = ControllerErrorFrames::errorFrame(403, 'auth.signups_disabled', 'Signups are closed');
+
+        self::assertSame(403, $frame->statusCode);
+        self::assertSame(
+            '{"error":"Signups are closed","code":"auth.signups_disabled",' .
+            '"message":"Signups are closed"}',
+            $frame->body,
+        );
+    }
 }

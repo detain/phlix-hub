@@ -71,7 +71,11 @@ final class UserPasswordController
         $currentPassword = ControllerRequests::stringField($request, 'current_password');
         $newPassword = ControllerRequests::stringField($request, 'new_password');
         if ($currentPassword === '' || $newPassword === '') {
-            return self::errorFrame(400, 'auth.missing_credentials', 'current_password and new_password are required');
+            return ControllerErrorFrames::errorFrame(
+                400,
+                'auth.missing_credentials',
+                'current_password and new_password are required',
+            );
         }
 
         try {
@@ -84,28 +88,18 @@ final class UserPasswordController
                 $request->getTrustedClientIp() ?: 'unknown',
             );
         } catch (CurrentPasswordInvalidException $e) {
-            return self::errorFrame(401, 'auth.invalid_credentials', $e->getMessage());
+            return ControllerErrorFrames::errorFrame(401, 'auth.invalid_credentials', $e->getMessage());
         } catch (RateLimitException $e) {
             // Precede InvalidArgumentException so a budget trip maps to
             // 429 + Retry-After, never a misleading 400/401 (loginJson :153-156).
             return self::rateLimited($e);
         } catch (InvalidArgumentException $e) {
-            return self::errorFrame(400, 'validation_failed', $e->getMessage());
+            return ControllerErrorFrames::errorFrame(400, 'validation_failed', $e->getMessage());
         }
 
         return (new Response())->json([
             'message' => 'Password updated successfully',
         ]);
-    }
-
-    /**
-     * The house error frame (AuthController::errorFrame :168-171):
-     * `{error, code}` from Response::error() plus the legacy top-level
-     * `message` twin carrying the same human text.
-     */
-    private static function errorFrame(int $status, string $code, string $message): Response
-    {
-        return (new Response())->error($status, $code, $message, ['message' => $message]);
     }
 
     /**

@@ -185,4 +185,16 @@ final class ControllerErrorFrames
             'message' => 'An unexpected error occurred.',
         ]);
     }
+    /**
+     * The generic house frame: `{error, code}` from {@see Response::error()}
+     * plus the legacy top-level `message` twin carrying the same human text
+     * (key order error, code, message — error() merges the extra last).
+     * Absorbs the byte-identical private `errorFrame()` copies of
+     * AuthController and UserPasswordController (F-19): the dual-placement
+     * machine family that ErrorPromotionFramesTest already pins end to end.
+     */
+    public static function errorFrame(int $status, string $code, string $message): Response
+    {
+        return (new Response())->error($status, $code, $message, ['message' => $message]);
+    }
 }
