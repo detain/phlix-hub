@@ -132,14 +132,7 @@ final class AuthController
                 // the raw HAProxy loopback peer).
                 $request->getTrustedClientIp() ?: 'unknown',
             );
-            $response = (new Response())->json([
-                'access_token'  => $result['access_token'],
-                'refresh_token' => $result['refresh_token'],
-                'token_type'    => $result['token_type'],
-                'expires_in'    => $result['expires_in'],
-                'user'          => $result['user'],
-                'claims'        => $result['claims'],
-            ], 201);
+            $response = self::tokenResponse($result, 201);
             if ($this->classifyRequest($request) === CookiePolicy::MODE_COOKIE) {
                 $this->attachAuthCookies($response, $result);
             }
@@ -184,14 +177,7 @@ final class AuthController
                 $request->getTrustedClientIp() ?: 'unknown',
                 self::deviceId($request),
             );
-            $response = (new Response())->json([
-                'access_token'  => $result['access_token'],
-                'refresh_token' => $result['refresh_token'],
-                'token_type'    => $result['token_type'],
-                'expires_in'    => $result['expires_in'],
-                'user'          => $result['user'],
-                'claims'        => $result['claims'],
-            ], 200);
+            $response = self::tokenResponse($result, 200);
             if ($this->classifyRequest($request) === CookiePolicy::MODE_COOKIE) {
                 $this->attachAuthCookies($response, $result);
             }
@@ -204,6 +190,26 @@ final class AuthController
         } catch (InvalidArgumentException $e) {
             return self::errorFrame(401, 'auth.invalid_credentials', $e->getMessage());
         }
+    }
+
+    /**
+     * F-17: the signup/login/refresh success arms all assemble the same
+     * six-key token envelope; only the status differs. One builder owns the
+     * key order — the cookie-custody leg is per-call-site policy and stays
+     * with the caller.
+     *
+     * @param array<string, mixed> $result
+     */
+    private static function tokenResponse(array $result, int $status): Response
+    {
+        return (new Response())->json([
+            'access_token'  => $result['access_token'],
+            'refresh_token' => $result['refresh_token'],
+            'token_type'    => $result['token_type'],
+            'expires_in'    => $result['expires_in'],
+            'user'          => $result['user'],
+            'claims'        => $result['claims'],
+        ], $status);
     }
 
     /**
@@ -329,14 +335,7 @@ final class AuthController
 
         try {
             $result = $this->auth->refresh($token);
-            $response = (new Response())->json([
-                'access_token'  => $result['access_token'],
-                'refresh_token' => $result['refresh_token'],
-                'token_type'    => $result['token_type'],
-                'expires_in'    => $result['expires_in'],
-                'user'          => $result['user'],
-                'claims'        => $result['claims'],
-            ], 200);
+            $response = self::tokenResponse($result, 200);
             if ($this->classifyRequest($request) === CookiePolicy::MODE_COOKIE) {
                 $this->attachAuthCookies($response, $result);
             }

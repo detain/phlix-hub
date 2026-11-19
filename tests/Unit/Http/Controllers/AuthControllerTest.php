@@ -43,6 +43,27 @@ final class AuthControllerTest extends TestCase
 {
     private const SECRET = 'this-secret-is-at-least-32-bytes-long!';
 
+    /** The shaped success payload every token arm must echo, key order fixed. */
+    private const TOKEN_RESULT = [
+        'access_token' => 'AT-1',
+        'refresh_token' => 'RT-1',
+        'token_type' => 'Bearer',
+        'expires_in' => 3600,
+        'user' => ['id' => 'u-4'],
+        'claims' => ['sub' => 'u-4'],
+    ];
+
+    /** A fresh hub JSON frame: content type first, no-store seed second. */
+    private const TOKEN_HEADERS = [
+        'Content-Type' => 'application/json',
+        'Cache-Control' => 'no-store',
+    ];
+
+    /** Whole-body golden for the six-key token assembly (F-17 fold proof). */
+    private const TOKEN_BODY =
+        '{"access_token":"AT-1","refresh_token":"RT-1","token_type":"Bearer",' .
+        '"expires_in":3600,"user":{"id":"u-4"},"claims":{"sub":"u-4"}}';
+
     private function controller(AuthManager $auth): AuthController
     {
         return new AuthController($auth);
@@ -194,6 +215,70 @@ final class AuthControllerTest extends TestCase
         self::assertSame(201, $response->statusCode);
         self::assertStringContainsString('access_token', $response->body);
         self::assertStringContainsString('claims', $response->body);
+    }
+
+    /**
+     * F-17 wire pins: the three token arms are byte-identical six-key
+     * assemblies differing only in status (signup 201, login/refresh 200).
+     * The tests above settle for substrings; these pin the WHOLE frame —
+     * exact body bytes, status, and the fresh-Response header pair. They
+     * documented the pre-fold wire and must stay green across the fold.
+     */
+    public function testSignupTokenFrameIsPinnedByteForByte(): void
+    {
+        $mgr = $this->createMock(AuthManager::class);
+        $mgr->method('register')->willReturn(self::TOKEN_RESULT);
+        $controller = $this->controller($mgr);
+
+        $request = new Request();
+        $request->method = 'POST';
+        $request->path = '/api/v1/auth/signup';
+        $request->remoteIp = '203.0.113.7';
+        $request->body = ['username' => 'alice', 'email' => 'a@example.com', 'password' => 'longenough'];
+
+        $response = $controller->signupJson($request);
+
+        self::assertSame(201, $response->statusCode);
+        self::assertSame(self::TOKEN_HEADERS, $response->headers);
+        self::assertSame(self::TOKEN_BODY, $response->body);
+    }
+
+    public function testLoginTokenFrameIsPinnedByteForByte(): void
+    {
+        $mgr = $this->createMock(AuthManager::class);
+        $mgr->method('login')->willReturn(self::TOKEN_RESULT);
+        $controller = $this->controller($mgr);
+
+        $request = new Request();
+        $request->method = 'POST';
+        $request->path = '/api/v1/auth/login';
+        $request->remoteIp = '203.0.113.7';
+        $request->body = ['username' => 'alice', 'password' => 'longenough'];
+
+        $response = $controller->loginJson($request);
+
+        self::assertSame(200, $response->statusCode);
+        self::assertSame(self::TOKEN_HEADERS, $response->headers);
+        self::assertSame(self::TOKEN_BODY, $response->body);
+    }
+
+    public function testRefreshTokenFrameIsPinnedByteForByte(): void
+    {
+        $mgr = $this->createMock(AuthManager::class);
+        $mgr->method('refresh')->willReturn(self::TOKEN_RESULT);
+        $controller = $this->controller($mgr);
+
+        $request = new Request();
+        $request->method = 'POST';
+        $request->path = '/api/v1/auth/refresh';
+        $request->remoteIp = '203.0.113.7';
+        $request->body = ['refresh_token' => 'RT-1'];
+
+        $response = $controller->refreshJson($request);
+
+        self::assertSame(200, $response->statusCode);
+        self::assertSame(self::TOKEN_HEADERS, $response->headers);
+        self::assertSame(self::TOKEN_BODY, $response->body);
     }
 
     /**
