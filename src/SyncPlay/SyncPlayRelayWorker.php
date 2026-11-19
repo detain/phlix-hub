@@ -30,6 +30,9 @@ use Phlix\Hub\Relay\TokenBucket;
 use Phlix\Hub\Relay\WebSocketCloseFrame;
 use Phlix\Hub\Relay\WsTlsBoot;
 use Phlix\Hub\Relay\WsTlsContext;
+use Phlix\Shared\Relay\SyncPlayDialect;
+use Phlix\Shared\Support\Clock;
+use Phlix\Shared\Support\Json;
 use Throwable;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
@@ -45,9 +48,7 @@ use function is_numeric;
 use function is_string;
 use function json_decode;
 use function mb_substr;
-use function microtime;
 use function preg_replace;
-use function round;
 use function spl_object_id;
 use function sprintf;
 use function str_starts_with;
@@ -274,33 +275,36 @@ final class SyncPlayRelayWorker
      * tests/Unit/SyncPlay/SyncPlayRelayCanonicalDialectTest binds THIS set to
      * THOSE literals with a token scan (a new dispatch name missing from the
      * catalog, or a catalog name the worker never speaks, reddens that test —
-     * LW-082-b). The full estate SSOT is `Phlix\Shared\Relay\SyncPlayDialect`
-     * (phlix-shared, landed above the current vendored constraint); swapping
-     * this constant to a live import of it is gated on the next shared tag —
-     * see .reviews/2026-11-10/FIX-hub-w21L6.md.
+     * LW-082-b). The estate SSOT `Phlix\Shared\Relay\SyncPlayDialect` is a
+     * live import since phlix-shared v0.56.0: every member below is the
+     * dialect alias for the SAME string, kept in the hub's declaration order
+     * (the shared catalog lists in server order — a set-equal, value-equal
+     * spelling, never a re-keyed literal). See
+     * .reviews/2026-11-10/FIX-hub-w21L6.md, which gated this swap on exactly
+     * that tag.
      *
      * @var list<string>
      */
     public const CANONICAL_MESSAGE_TYPES = [
-        'syncplay_group_create',
-        'syncplay_group_join',
-        'syncplay_group_leave',
-        'syncplay_group_list',
-        'syncplay_group_state',
-        'syncplay_host_elect',
-        'syncplay_host_transfer',
-        'syncplay_playback_play',
-        'syncplay_playback_pause',
-        'syncplay_playback_seek',
-        'syncplay_playback_sync',
-        'syncplay_playback_queue',
-        'syncplay_chat',
-        'syncplay_typing',
-        'syncplay_time_ping',
-        'syncplay_time_pong',
-        'syncplay_time_sync',
-        'syncplay_info',
-        'syncplay_error',
+        SyncPlayDialect::TYPE_GROUP_CREATE,
+        SyncPlayDialect::TYPE_GROUP_JOIN,
+        SyncPlayDialect::TYPE_GROUP_LEAVE,
+        SyncPlayDialect::TYPE_GROUP_LIST,
+        SyncPlayDialect::TYPE_GROUP_STATE,
+        SyncPlayDialect::TYPE_HOST_ELECT,
+        SyncPlayDialect::TYPE_HOST_TRANSFER,
+        SyncPlayDialect::TYPE_PLAYBACK_PLAY,
+        SyncPlayDialect::TYPE_PLAYBACK_PAUSE,
+        SyncPlayDialect::TYPE_PLAYBACK_SEEK,
+        SyncPlayDialect::TYPE_PLAYBACK_SYNC,
+        SyncPlayDialect::TYPE_PLAYBACK_QUEUE,
+        SyncPlayDialect::TYPE_CHAT_MESSAGE,
+        SyncPlayDialect::TYPE_CHAT_TYPING,
+        SyncPlayDialect::TYPE_TIME_PING,
+        SyncPlayDialect::TYPE_TIME_PONG,
+        SyncPlayDialect::TYPE_TIME_SYNC,
+        SyncPlayDialect::TYPE_INFO,
+        SyncPlayDialect::TYPE_ERROR,
     ];
 
     /**
@@ -312,11 +316,11 @@ final class SyncPlayRelayWorker
      * @var list<string>
      */
     public const CANONICAL_SERVER_ONLY_TYPES = [
-        'syncplay_info',
-        'syncplay_group_state',
-        'syncplay_host_elect',
-        'syncplay_time_pong',
-        'syncplay_error',
+        SyncPlayDialect::TYPE_INFO,
+        SyncPlayDialect::TYPE_GROUP_STATE,
+        SyncPlayDialect::TYPE_HOST_ELECT,
+        SyncPlayDialect::TYPE_TIME_PONG,
+        SyncPlayDialect::TYPE_ERROR,
     ];
 
     /**
@@ -1317,7 +1321,7 @@ final class SyncPlayRelayWorker
         // uncaught throw from ANY handler kills the sole process and every
         // relayed room with it. The fan-out below has no exhaustive type
         // system behind it — wire payloads reach helpers (re-encode anchors,
-        // queue media_info) that json_encode(JSON_THROW_ON_ERROR) can reject
+        // queue media_info) that the throwing encoder can reject
         // even after the parse edges passed. The estate idiom is the server's
         // own (:8097 `SyncPlayManager::handleMessage` wraps its whole switch
         // the same way); the guard covers ONLY the fan-out — auth, budget and
@@ -1722,7 +1726,7 @@ final class SyncPlayRelayWorker
             'clients' => $this->getRoomState($scopedRoom),
             'playback' => self::$roomPlayback[$scopedRoom] ?? null,
         ];
-        $this->deliver($client, json_encode($stateMessage, JSON_THROW_ON_ERROR));
+        $this->deliver($client, Json::encode($stateMessage, 0));
 
         // Notify the OTHER members about the new joiner. The joiner is EXCLUDED
         // on purpose (audit L-1): both docs promise "Another client joined the
@@ -1737,7 +1741,7 @@ final class SyncPlayRelayWorker
         ];
         $this->broadcastToRoom(
             $scopedRoom,
-            json_encode($joinNotification, JSON_THROW_ON_ERROR),
+            Json::encode($joinNotification, 0),
             $client->clientId,
         );
 
@@ -1784,7 +1788,7 @@ final class SyncPlayRelayWorker
             'type' => 'client_left',
             'client_id' => $clientId,
         ];
-        $this->broadcastToRoom($room, json_encode($leaveNotification, JSON_THROW_ON_ERROR), $clientId);
+        $this->broadcastToRoom($room, Json::encode($leaveNotification, 0), $clientId);
     }
 
     /**
@@ -1827,7 +1831,7 @@ final class SyncPlayRelayWorker
         // confirms the hub accepted the frame. One parameter — exclusion by id,
         // null for none — because the previous (exclude-id, include-self) pair
         // let callers pass contradictory arguments and the comment drifted.
-        $this->broadcastToRoom($room, json_encode($message, JSON_THROW_ON_ERROR), null);
+        $this->broadcastToRoom($room, Json::encode($message, 0), null);
     }
 
     /**
@@ -1852,7 +1856,7 @@ final class SyncPlayRelayWorker
             'client_time' => $message['client_time'] ?? null,
         ];
 
-        $this->deliver($client, json_encode($reply, JSON_THROW_ON_ERROR));
+        $this->deliver($client, Json::encode($reply, 0));
     }
 
     // =====================================================================
@@ -1942,7 +1946,7 @@ final class SyncPlayRelayWorker
      */
     private function sendCanonical(SyncPlayClient $client, array $frame): void
     {
-        $this->deliver($client, json_encode($frame, JSON_THROW_ON_ERROR));
+        $this->deliver($client, Json::encode($frame, 0));
     }
 
     /**
@@ -2001,7 +2005,8 @@ final class SyncPlayRelayWorker
      */
     private function broadcastCanonical(string $room, array $frame, ?string $excludeClientId = null): void
     {
-        $encoded = json_encode($frame, JSON_THROW_ON_ERROR);
+        // Explicit 0 flags = the hub's live wire style set (DESIGN M-13): bytes unmoved.
+        $encoded = Json::encode($frame, 0);
         foreach (self::$rooms[$room] ?? [] as $client) {
             if (!$client->canonical) {
                 continue;
@@ -2794,10 +2799,14 @@ final class SyncPlayRelayWorker
      * (@phlix/ui hubRelay.ts) — see PendingCommandDispatcher. Different frame
      * family, different pinned unit; do not "harmonise" one without its
      * consumer.
+     *
+     * Stamps via the shared `Clock::unixMs()` round law (phlix-shared
+     * v0.56.0) — the named seam stays: this worker's ms law is its wire
+     * contract, and the seam is what its tests read.
      */
     private static function nowMs(): int
     {
-        return (int) round(microtime(true) * 1000);
+        return Clock::unixMs();
     }
 
     /**
