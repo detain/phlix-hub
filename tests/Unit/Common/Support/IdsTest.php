@@ -111,4 +111,35 @@ final class IdsTest extends TestCase
             'src/ must mint every UUID through Ids::uuidV4() directly — no generateUuid() wrappers (SH-068).',
         );
     }
+
+    public function testNoHexSprintfUuidGeneratorSurvivesAnywhereInSrc(): void
+    {
+        // SH-068 swept the thin generateUuid() delegates; HUB-5.3 (bug #10)
+        // closes the family's remaining hole: a LOCAL sprintf('%04x%04x-…',
+        // random_int(…)) re-implementation of the v4 shape. The pattern
+        // demands the CONCATENATED '%04x%04x' token pair, so the unrelated
+        // '0x%04x' mask renderings (HookDelivery, CoroutineHooks) stay
+        // innocent; only uuid-group generators match.
+        $srcRoot = dirname(__DIR__, 4) . '/src';
+        $offenders = [];
+
+        $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($srcRoot));
+        /** @var \SplFileInfo $file */
+        foreach ($iterator as $file) {
+            if (!$file->isFile() || $file->getExtension() !== 'php') {
+                continue;
+            }
+
+            $contents = (string) file_get_contents($file->getPathname());
+            if (preg_match('/%04x%04x/', $contents) === 1) {
+                $offenders[] = substr($file->getPathname(), strlen($srcRoot) + 1);
+            }
+        }
+
+        self::assertSame(
+            [],
+            $offenders,
+            'src/ must mint every UUID through Ids::uuidV4() — no local hex-sprintf generators (D-07).',
+        );
+    }
 }

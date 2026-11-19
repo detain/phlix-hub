@@ -18,6 +18,7 @@ use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
+use Phlix\Hub\Common\Support\Ids;
 use Phlix\Hub\Common\Support\ProcessLocalTopology;
 use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\ServerInfoHandler;
@@ -892,7 +893,7 @@ final class SyncPlayRelayWorker
         }
 
         $connId = spl_object_id($connection);
-        $clientId = self::generateClientId();
+        $clientId = Ids::uuidV4();
 
         // SV-4.7 / S237: Authenticate via relay token, using the SAME CARRIER as
         // `:8803` — `ClientRelayWorker::extractClientToken()`, i.e. an
@@ -2957,26 +2958,6 @@ final class SyncPlayRelayWorker
     private static function scopedRoomKey(SyncPlayClient $client, string $clientRoom): string
     {
         return $client->serverId . ':' . (string) $client->userId . ':' . $clientRoom;
-    }
-
-    /**
-     * Generate a unique client ID.
-     *
-     * @return string UUID-like client identifier.
-     */
-    private static function generateClientId(): string
-    {
-        return sprintf(
-            '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-            random_int(0, 0xffff),
-            random_int(0, 0xffff),
-            random_int(0, 0xffff),
-            random_int(0, 0x0fff) | 0x4000,
-            random_int(0, 0x3fff) | 0x8000,
-            random_int(0, 0xffff),
-            random_int(0, 0xffff),
-            random_int(0, 0xffff),
-        );
     }
 
     /**
