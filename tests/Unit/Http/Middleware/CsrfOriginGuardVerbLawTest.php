@@ -13,26 +13,25 @@ namespace Phlix\Hub\Tests\Unit\Http\Middleware;
 
 use Phlix\Hub\Http\Middleware\CsrfOriginGuard;
 use Phlix\Hub\Http\Request;
+use Phlix\Shared\Security\OriginPolicy;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
-use ReflectionClass;
 
 /**
  * HUB-4.2 (bug #3 hub half, drift pin): the CSRF verb-law parity contract
  * between the two hosts' Origin guards.
  *
- * `CsrfOriginGuard::STATE_CHANGING_METHODS` and the hub CookiePolicy header
- * docblock both CLAIM "the exact list the server's validateCsrfOrigin"
- * method limb accepts — phlix-server `src/Server/Http/RequestAuthenticator.php`
- * gates `in_array($method, ['POST', 'PUT', 'DELETE', 'PATCH'], true)`. The
- * claim was true at CP-012 and nothing on either side pins it, so a verb
- * added to one host's list would silently split the deny vocabulary
- * (B-13's drift risk). This test pins the literal list and the strict-
- * case exemption shape the guard actually runs; both hosts already decide
- * identically on disk, so the pin lands GREEN by construction — its teeth
- * are proven by the mutation probe recorded in the HUB-4 report (loosen
- * the list to ['POST'] and the PUT/DELETE/PATCH legs plus the literal pin
- * redden).
+ * The verb list that used to be hand-carried here (`CsrfOriginGuard::
+ * STATE_CHANGING_METHODS`) now lives in the shared kernel — phlix-shared
+ * v0.56.0 `OriginPolicy::stateChangingMethod()` — so drift is structurally
+ * impossible, exactly the fold this file's original docblock anticipated.
+ * The kernel's list is the server-ratified one verbatim: phlix-server
+ * `src/Server/Http/RequestAuthenticator.php` gates `in_array($method,
+ * ['POST', 'PUT', 'DELETE', 'PATCH'], true)`. This test pins that compiled
+ * law and the strict-case exemption shape the guard actually runs; the pin
+ * lands GREEN by construction — its teeth were proven by the mutation probe
+ * recorded in the HUB-4 report (loosen the list to ['POST'] and the
+ * PUT/DELETE/PATCH legs plus the literal pin redden).
  *
  * The full Origin/Referer/Sec-Fetch decision logic is arm-for-arm identical
  * to the server already (server canonicals re-verified during HUB-4.2; the
@@ -51,22 +50,22 @@ final class CsrfOriginGuardVerbLawTest extends TestCase
      */
     private const SERVER_CANONICAL = ['POST', 'PUT', 'DELETE', 'PATCH'];
 
-    /** @return list<string> the hub guard's compiled verb list */
-    private function hubVerbs(): array
+    /** @return list<string> verbs the shared kernel's predicate accepts */
+    private function kernelStateChangingVerbs(): array
     {
-        $constant = (new ReflectionClass(CsrfOriginGuard::class))->getConstant('STATE_CHANGING_METHODS');
+        $candidates = [
+            'POST', 'PUT', 'DELETE', 'PATCH', 'GET', 'HEAD', 'OPTIONS', 'TRACE',
+            'post', 'put', 'delete', 'patch', 'CONNECT', '',
+        ];
 
-        self::assertIsArray($constant, 'the guard must own its verb list as a class constant');
-
-        // Boundary parse of the reflection result: mixed entries must be
-        // strings before the pin compares them as verbs.
-        $verbs = [];
-        foreach ($constant as $verb) {
-            self::assertTrue(is_string($verb), 'every entry of the verb list must be a string');
-            $verbs[] = $verb;
+        $accepted = [];
+        foreach ($candidates as $verb) {
+            if (OriginPolicy::stateChangingMethod($verb)) {
+                $accepted[] = $verb;
+            }
         }
 
-        return $verbs;
+        return $accepted;
     }
 
     private function request(string $method, ?string $origin, ?string $host): Request
@@ -88,9 +87,9 @@ final class CsrfOriginGuardVerbLawTest extends TestCase
     public function testVerbListIsTheServerCanonicalListExactly(): void
     {
         // Same-name, same-contents, same-order — one deny vocabulary across
-        // the two hosts until the shared-lib fold (wave 3) makes drift
-        // structurally impossible.
-        self::assertSame(self::SERVER_CANONICAL, $this->hubVerbs());
+        // the two hosts, now structurally so: the shared kernel carries the
+        // list and the hub guard delegates its METHOD limb to it.
+        self::assertSame(self::SERVER_CANONICAL, $this->kernelStateChangingVerbs());
     }
 
     /**

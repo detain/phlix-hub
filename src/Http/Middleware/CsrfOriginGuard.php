@@ -14,8 +14,7 @@ namespace Phlix\Hub\Http\Middleware;
 use Phlix\Hub\Hub\CookiePolicy;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
-
-use function in_array;
+use Phlix\Shared\Security\OriginPolicy;
 
 /**
  * CP-012 (COOKIE-DESIGN §2.5/§4.2, owner ruling CD-8a): the hub's CSRF
@@ -42,19 +41,17 @@ use function in_array;
  * writes no log line: origin refusals are high-volume noise on a public
  * relay front, and the frame itself is the observability.
  *
+ * The METHOD limb is the shared kernel's law ({@see
+ * OriginPolicy::stateChangingMethod()}, phlix-shared v0.56.0 — the verb
+ * list this guard used to hand-carry, byte-identical into the kernel). The
+ * header law still rides hub {@see CookiePolicy} verbatim; folding that
+ * class onto the same kernel is the recorded follow-on leg (the kernel's
+ * docblock enumerates the exact method-by-method mapping).
+ *
  * @package Phlix\Hub\Http\Middleware
  */
 final class CsrfOriginGuard
 {
-    /**
-     * State-changing verbs — the exact list the server's validateCsrfOrigin
-     * method limb accepts (OPTIONS/HEAD/GET stay outside it; the hub has no
-     * GET-logout route to carve, unlike the server's one form-era path).
-     *
-     * @var list<string>
-     */
-    private const STATE_CHANGING_METHODS = ['POST', 'PUT', 'DELETE', 'PATCH'];
-
     /**
      * Apply the Origin law to a COOKIE-LINEAGE request.
      *
@@ -68,7 +65,7 @@ final class CsrfOriginGuard
      */
     public static function enforce(Request $request): ?Response
     {
-        if (!in_array($request->method, self::STATE_CHANGING_METHODS, true)) {
+        if (!OriginPolicy::stateChangingMethod($request->method)) {
             return null;
         }
 
