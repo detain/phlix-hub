@@ -13,6 +13,7 @@ use Phlix\Hub\Tests\Support\CookiePolicyTestShapes;
 use Phlix\Shared\Security\OriginPolicy;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
 
 /**
  * A19 wire-parity + kernel-equivalence law for {@see CookiePolicy}.
@@ -745,5 +746,115 @@ final class CookiePolicyWireParityTest extends TestCase
                 self::describe('isLocalhostHost', ['value' => $host])
             );
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Fold-map guards (A19): the hub's arms are delegators, the kernel owns
+    // the math, and the ratified-local surface survived the fold intact.
+    // RED against the pre-fold parent (proof: ran from the bless worktree).
+    // ------------------------------------------------------------------
+
+    public function testDelegatorArmsRouteToSharedKernel(): void
+    {
+        $source = self::hubCookiePolicySource();
+
+        $strictArm = "return OriginPolicy::stateChangingRequestOriginAllowed(\n"
+            . "            \$originHeader,\n"
+            . "            \$refererHeader,\n"
+            . "            \$hostHeader,\n"
+            . "            \$secFetchSite\n"
+            . '        );';
+
+        $arms = [
+            'public const MODE_COOKIE = OriginPolicy::MODE_COOKIE;',
+            'public const MODE_BEARER = OriginPolicy::MODE_BEARER;',
+            'return OriginPolicy::custodyMode(false, $deviceTypeHeader, $originHeader, $hostHeader, $secFetchSite);',
+            'return OriginPolicy::httpsForwardedValue($forwardedProto);',
+            'return OriginPolicy::localhostHost($hostHeader);',
+            'return OriginPolicy::originIsSameSite($origin, $hostHeader);',
+            $strictArm,
+        ];
+
+        foreach ($arms as $arm) {
+            self::assertStringContainsString($arm, $source, 'fold arm missing from hub CookiePolicy');
+        }
+    }
+
+    public function testKernelHelpersAreExtinctFromTheHubCopy(): void
+    {
+        $source = self::hubCookiePolicySource();
+
+        $goneList = [
+            'LOCALHOST_HOSTS',
+            'function hostOf',
+            'function defaultPort',
+            'function originLawHostParts',
+            'function originLawHostsMatch',
+        ];
+
+        foreach ($goneList as $gone) {
+            self::assertStringNotContainsString($gone, $source, 'kernel-owned helper still present');
+        }
+    }
+
+    public function testKernelArmsArePublicStaticContract(): void
+    {
+        // The twin tripwire shape: the server fold (phlix-server 4c0ae4f4)
+        // calls the SAME kernel arms, so pinning this public static surface
+        // pins the hub-server fold-map 1:1 transitively: hub CI never reads
+        // the server repo, so 1:1 lives as this contract plus the report
+        // row, and kernel drift reddens both consumers at once.
+        $arms = [
+            'custodyMode',
+            'httpsForwardedValue',
+            'localhostHost',
+            'originIsSameSite',
+            'stateChangingRequestOriginAllowed',
+        ];
+
+        foreach ($arms as $arm) {
+            $method = new ReflectionMethod(OriginPolicy::class, $arm);
+
+            self::assertTrue(
+                $method->isPublic() && $method->isStatic(),
+                "OriginPolicy::{$arm} must stay a public static kernel arm"
+            );
+        }
+    }
+
+    public function testRatifiedLocalSurfaceSurvivedTheFold(): void
+    {
+        $source = self::hubCookiePolicySource();
+
+        $keptList = [
+            "const SESSION_COOKIE = 'phlix_hub_token';",
+            "const REFRESH_COOKIE = 'phlix_hub_refresh';",
+            "const INSECURE_ENV = 'HUB_COOKIE_INSECURE';",
+            "\$env === '1' || \$env === 'true'",
+            "'HUB_ENV', 'APP_ENV', 'PHLIX_ENV'",
+            '__phlix_hub_cookie_insecure_production_warn',
+        ];
+
+        foreach ($keptList as $kept) {
+            self::assertStringContainsString($kept, $source, 'HUB-ENVBOOL/ratified keep-local row lost');
+        }
+
+        // Response.php's twin strict limb: the fold must not have touched it.
+        $response = (string) file_get_contents(dirname(__DIR__, 3) . '/src/Http/Response.php');
+        $limb = "\$override === '1' || \$override === 'true'";
+
+        self::assertStringContainsString(
+            $limb,
+            $response,
+            'Response.php strict Secure-resolver limb (HUB-ENVBOOL twin) moved'
+        );
+    }
+
+    private static function hubCookiePolicySource(): string
+    {
+        $source = file_get_contents(dirname(__DIR__, 3) . '/src/Hub/CookiePolicy.php');
+        self::assertIsString($source);
+
+        return $source;
     }
 }
