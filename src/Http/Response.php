@@ -157,7 +157,7 @@ class Response
     {
         $needle = strtolower($name);
         foreach (array_keys($this->headers) as $key) {
-            if (strtolower((string) $key) === $needle) {
+            if (strtolower($key) === $needle) {
                 return true;
             }
         }
