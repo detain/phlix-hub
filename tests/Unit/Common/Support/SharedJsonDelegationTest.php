@@ -159,6 +159,7 @@ final class SharedJsonDelegationTest extends TestCase
             /** docblock: json_encode($z) mention too */
             $w = json_encode($v, JSON_THROW_ON_ERROR);
             $s = json_encode($m) . json_encode($n, JSON_UNESCAPED_UNICODE);
+            $tc = json_encode($vv,);
             $o = $obj->json_encode($p);
             C::json_encode($q);
             $j = Json::encode($r, 0);
@@ -167,16 +168,17 @@ final class SharedJsonDelegationTest extends TestCase
 
         $sites = self::encodeCallSites($fixture, 'fixture.php');
 
-        // Real calls in the fixture: $a (bare), $w (flagged), $m (bare), $n (flagged).
+        // Real calls in the fixture: $a (bare), $w (flagged), $m (bare), $n (flagged),
+        // $tc (bare — trailing comma must NOT read as a flag argument, r1 MINOR).
         // Excluded by shape: comment/docblock text, method call, static call, the
         // `Json::encode` name (token 'encode'), and the function declaration itself.
         self::assertCount(
-            4,
+            5,
             $sites,
             'scanner missed or invented a call site: ' . implode(' | ', array_column($sites, 'label')),
         );
         self::assertSame(
-            ['fixture.php:2', 'fixture.php:6'],
+            ['fixture.php:2', 'fixture.php:6', 'fixture.php:7'],
             self::unflaggedEncodeSites($sites),
             'the bare-call detector must fire on unflagged calls only.',
         );
@@ -294,7 +296,14 @@ final class SharedJsonDelegationTest extends TestCase
                 continue;
             }
             if ($text === ',' && $depth === 0) {
-                $commas++;
+                // A comma whose very next meaningful token closes the call is a
+                // trailing separator, not an argument delimiter: `json_encode($v,)`
+                // is behaviorally the flag-less silent-false call this gate exists
+                // to extinct (HUB-JSON r1 MINOR).
+                $next = self::nextMeaningful($tokens, $k + 1);
+                if ($next === null || $tokens[$next] !== ')') {
+                    $commas++;
+                }
             }
         }
 
