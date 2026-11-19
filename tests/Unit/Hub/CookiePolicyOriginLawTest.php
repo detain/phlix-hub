@@ -27,9 +27,16 @@ use PHPUnit\Framework\TestCase;
  * normalizes; the two twins differ from each other the same way the
  * server's own pair of laws does, disclosed at the method docblock).
  *
- * The `Sec-Fetch-Site: cross-site` reject is the §2.5 design ADD the server
- * has not grown yet: a present, honest cross-site signal never outruns the
- * guard even when a forged same-host Origin accompanies it.
+ * The `Sec-Fetch-Site: cross-site` reject was the §2.5 design ADD the
+ * server had not grown when this law was first written; the HUB-S51
+ * re-check (recorded at CookiePolicy::stateChangingRequestOriginAllowed())
+ * confirmed the server has since grown the same belt, arm-for-arm and in
+ * the same order — so a present, honest cross-site signal never outruns
+ * either host's guard, even behind a forged same-host Origin, and the two
+ * reject vocabularies are identical (HUB-4.2 parity audit found no
+ * decision-logic arm the hub lacks; the only missing server limb was the
+ * production insecure-cookie warning, now ported and pinned by
+ * CookiePolicyProductionInsecureWarnTest).
  *
  * @package Phlix\Hub\Tests\Unit\Hub
  */

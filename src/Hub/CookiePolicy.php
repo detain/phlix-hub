@@ -44,7 +44,9 @@ use Throwable;
  *     cookies (`HUB_COOKIE_INSECURE=1|true` env — the name the hub's
  *     pre-existing Secure-resolver already shipped — or its stored twin
  *     `auth.cookie.insecure`, which ALSO drops the Secure attribute; there is
- *     never a silent Secure downgrade onto plain HTTP).
+ *     never a silent Secure downgrade onto plain HTTP). On a hub marked
+ *     production the opt-in now additionally speaks once per process
+ *     (HUB-4.2 / SH-033 hub port; {@see self::warnProductionInsecureOnce()}).
  *  4. REQUEST LAW (CP-012) — a state-changing request that authenticated via
  *     the session cookie must NAME this origin:
  *     {@see stateChangingRequestOriginAllowed()} is the pure law the
@@ -143,20 +145,77 @@ final class CookiePolicy
      * name the hub's shipped Secure-resolver already honours) or its stored
      * twin. True = the scheme gate is bypassed AND the Secure attribute is
      * dropped. Never enabled by default, never inferred from anything else
-     * (CD-3a: no silent Secure downgrade).
+     * (CD-3a: no silent Secure downgrade). On a hub marked production either
+     * form additionally speaks up once per process (HUB-4.2 / SH-033 hub
+     * port; {@see self::warnProductionInsecureOnce()}) — a warning, not a
+     * gate: the opt-out stays honoured.
      */
     public function insecureOverride(): bool
     {
         $env = getenv(self::INSECURE_ENV);
         if ($env === '1' || $env === 'true') {
+            self::warnProductionInsecureOnce(self::INSECURE_ENV . '=' . $env);
+
             return true;
         }
 
         try {
-            return ($this->insecureResolver ?? HubSettingsResolvers::bool(self::COOKIE_INSECURE_KEY, false))();
+            $stored = ($this->insecureResolver ?? HubSettingsResolvers::bool(self::COOKIE_INSECURE_KEY, false))();
         } catch (Throwable) {
             return false;
         }
+
+        if ($stored === true) {
+            self::warnProductionInsecureOnce(self::COOKIE_INSECURE_KEY);
+        }
+
+        return $stored;
+    }
+
+    /**
+     * SH-033 hub port (HUB-4.2): an insecure-cookie opt-in while the hub is
+     * marked production is a misconfiguration the operator should HEAR
+     * about — exactly one loud E_USER_WARNING per process, the same
+     * once-per-process latch idiom as the server twin (phlix-server
+     * `src/Auth/CookiePolicy.php::warnProductionInsecureOnce()`, itself
+     * modelled on the boot-time DB-credential guard).
+     *
+     * Posture facts owned by the port, both deliberate:
+     *  - production marker: the server keys on its single PHLIX_ENV; the
+     *    hub's shipped config readers honour HUB_ENV, APP_ENV and PHLIX_ENV
+     *    alike, so ANY of them strictly equal to 'production' marks the
+     *    deployment (unset/dev tiers stay silent — no warning theater);
+     *  - latch key: hub-scoped (`__phlix_hub_...`) rather than the server's
+     *    name, so if both hosts' classes are ever loaded in one process
+     *    (integration harness) each keeps its own once-semantics.
+     *
+     * Warning, never gate: LAN opt-ins keep working (a hard block would
+     * strand the operator who genuinely runs plain HTTP). The documented
+     * test seam is unsetting the latch key in $GLOBALS
+     * ({@see \Phlix\Hub\Tests\Unit\Hub\CookiePolicyProductionInsecureWarnTest}).
+     */
+    private static function warnProductionInsecureOnce(string $source): void
+    {
+        $markedProduction = getenv('HUB_ENV') === 'production'
+            || getenv('APP_ENV') === 'production'
+            || getenv('PHLIX_ENV') === 'production';
+        if (!$markedProduction) {
+            return;
+        }
+
+        if (isset($GLOBALS['__phlix_hub_cookie_insecure_production_warn'])) {
+            return;
+        }
+
+        $GLOBALS['__phlix_hub_cookie_insecure_production_warn'] = true;
+
+        trigger_error(
+            $source . ' is active while the hub is marked production (HUB_ENV=production) — hub auth '
+            . 'cookies are issued WITHOUT the Secure attribute and are readable on plain HTTP. '
+            . 'Terminate TLS at the front proxy and serve the hub over https, '
+            . 'or turn the insecure-cookie opt-in off',
+            E_USER_WARNING
+        );
     }
 
     /**
