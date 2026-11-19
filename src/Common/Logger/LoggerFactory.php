@@ -97,9 +97,17 @@ class LoggerFactory
             return [];
         }
 
-        /** @psalm-suppress UnresolvableInclude self::$configPath is set at runtime */
+        /**
+         * @psalm-suppress UnresolvableInclude self::$configPath is set at runtime
+         * @var array<string, mixed> $config
+         */
         $config = include self::$configPath;
 
+        // The @var above states the contract; this check ENFORCES it at
+        // runtime (A-17: a scalar-returning config must fall back, not
+        // TypeError). Docblock-narrowed type makes the guard statically
+        // redundant, hence the suppression — the runtime is not.
+        /** @psalm-suppress RedundantConditionGivenDocblockType */
         return is_array($config) ? $config : [];
     }
 }
