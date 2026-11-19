@@ -199,6 +199,31 @@ final class HookEnforcementGuardTest extends TestCase
         }
     }
 
+    /**
+     * The probe's error-formatting arm must carry the server's hardened casts on
+     * the by-reference failure outputs of `stream_socket_server()`.
+     *
+     * HUB-3.2 (A-11 partial, runtime-deprecation family): `$errno`/`$errstr` are
+     * populated by reference and their type on every failure path is not
+     * compiler-guaranteed, so handing them to `sprintf()` un-cast is the same
+     * implicit-conversion class the server killed with explicit
+     * `(int) $errno, (string) $errstr` arguments. The hub kept the message but
+     * lost the casts to drift; this pins them back (tokens, not prose).
+     */
+    public function testTheDeliveryProbeFormatsItsErrnoWithHardenedCasts(): void
+    {
+        $probe = self::code(self::HOOK_DELIVERY);
+
+        foreach (
+            [
+                '(int) $errno' => 'the errno argument must be cast, not implicitly converted',
+                '(string) $errstr' => 'the errstr argument must be cast, not implicitly converted',
+            ] as $needle => $why
+        ) {
+            self::assertStringContainsString($needle, $probe, "HookDelivery must contain {$needle} — {$why}.");
+        }
+    }
+
     public function testEveryWorkerTypeDeliversExactlyOnce(): void
     {
         $app = self::code(self::APPLICATION);

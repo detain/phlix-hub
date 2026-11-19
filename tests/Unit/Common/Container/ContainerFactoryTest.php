@@ -141,4 +141,30 @@ final class ContainerFactoryTest extends TestCase
         self::assertNotNull($constructor);
         self::assertTrue($constructor->isPrivate());
     }
+
+    /**
+     * `shouldCompile()` must carry the server's hardened `(string)` cast into
+     * `strtolower()` — the canonical shared-lineage shape
+     * (`strtolower((string)$value)`).
+     *
+     * HUB-3.2 (A-09, runtime-deprecation family): the env read is guarded for
+     * the unset arm (`getenv() === false`), but the argument type passed to
+     * `strtolower()` was left implicit — the exact form the server hardened
+     * against implicit-conversion deprecations. Pinned on comment-stripped
+     * tokens (prose can lie, tokens can't — the repo guard idiom), so a doc
+     * mentioning the cast cannot fake this test green.
+     */
+    public function testShouldCompileCastsItsEnvValueBeforeLowercasing(): void
+    {
+        $srcFile = __DIR__ . '/../../../../src/Common/Container/ContainerFactory.php';
+        $code = php_strip_whitespace($srcFile);
+        self::assertNotFalse($code, "php_strip_whitespace({$srcFile}) failed — empty/missing file?");
+        $code = (string) preg_replace('/\s+/', ' ', $code);
+
+        self::assertStringContainsString(
+            'strtolower((string)$value)',
+            $code,
+            'the server parity cast must be present at the call site',
+        );
+    }
 }

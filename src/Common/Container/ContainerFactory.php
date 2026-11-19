@@ -115,6 +115,6 @@ final class ContainerFactory
         if ($value === false) {
             return false;
         }
-        return in_array(strtolower($value), ['1', 'true', 'yes', 'on'], true);
+        return in_array(strtolower((string)$value), ['1', 'true', 'yes', 'on'], true);
     }
 }
