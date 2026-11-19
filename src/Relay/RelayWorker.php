@@ -96,7 +96,8 @@ final class RelayWorker
      * @param bool                $useTls      Enable TLS (wss://) on the relay WebSocket.
      * @param string|null         $tlsCert     Path to TLS certificate file (PEM); a missing
      *                                         file fails the boot pre-bind via
-     *                                         {@see TlsMaterialWatch::bootDecision()}, an
+     *                                         {@see WsTlsBoot::forListener()} (the shared
+     *                                         {@see TlsMaterialWatch} decision seam), an
      *                                         unreadable one degrades to a loud boot warning
      *                                         plus the per-connection watch (audit §3.2).
      * @param string|null         $tlsKey      Path to TLS private key file (PEM), same law.
@@ -209,48 +210,13 @@ final class RelayWorker
     }
 
     /**
-     * The canonical bind-time TLS context for the :8802 listener (M21).
-     *
-     * Single source of truth so the production bind, the unit shape law, and
-     * the real-TLS loopback E2E child all speak from one builder — drift
-     * between them is the failure mode this seam exists to prevent. The
-     * hardening list (AEAD-only ciphers, secp384r1, compression off, OpenSSL
-     * security level 2) is the server-side half of the estate TLS posture;
-     * `allow_self_signed`/`verify_peer` here describe whether THIS listener
-     * validates CLIENT certificates (it does not — tunnel authentication is
-     * the enrollment JWT inside the HELLO, not mTLS). Peer validation of the
-     * hub certificate is the dialing server's duty (`PHLIX_RELAY_TLS_VERIFY`,
-     * phlix-server RelayConsumer::buildSslContext — strict by default).
-     *
-     * @param string $certPath local_cert PEM bundle; already passed the boot
-     *                         material decision (audit §3.2).
-     * @param string $keyPath  local_pk PEM path.
-     *
-     * @return array{ssl: array<string, mixed>} Workerman socket context.
-     */
-    public static function relayTlsContext(string $certPath, string $keyPath): array
-    {
-        return [
-            'ssl' => [
-                'ciphers' => 'ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS',
-                'ecdh_curve' => 'secp384r1',
-                'disable_compression' => true,
-                'security_level' => 2,
-                'local_cert' => $certPath,
-                'local_pk' => $keyPath,
-                'allow_self_signed' => true,
-                'verify_peer' => false,
-            ],
-        ];
-    }
-
-    /**
      * Strict pre-bind guard: throws on ANY non-readable TLS material.
      *
      * Kept as the exact fail-fast contract (message wording pinned by
      * RelayWorkerTlsMaterialTest) for direct callers. RelayWorker::start()
-     * itself now routes the boot through {@see TlsMaterialWatch::bootDecision()},
-     * which preserves this throw for MISSING files but downgrades the
+     * itself now routes the boot through {@see WsTlsBoot::forListener()}
+     * (F-12 — the ONE decision shared by all four inbound listeners), which
+     * preserves this throw for MISSING files but downgrades the
      * exists-but-unreadable case to a loud boot warning + per-connection
      * runtime guard (audit §3.2: an off-pipeline rotation must never kill
      * the hub's boot, and must never go silent either).
@@ -320,37 +286,23 @@ final class RelayWorker
             LoggerFactory::get(LogChannels::RELAY)->warning(self::plaintextAdvisory($this->port));
         }
 
-        // Workerman's Worker::__construct() types $socketContext as a non-nullable
-        // array, so default to an empty context (its own default for "no options")
-        // rather than null — passing null throws a TypeError on the non-TLS path.
-        $sslContext = [];
-
-        // Enable TLS (wss://) when configured. Audit §3.2 (wildcard-rotation
-        // cure) split the boot-time decision: a MISSING PEM still fails fast
-        // pre-bind (today's law, byte-ident message), while an exists-but-
-        // UNREADABLE PEM degrades to a loud boot warning plus the per-
-        // connection TlsMaterialWatch below — the off-pipeline delivery case
-        // must never kill the hub's boot, and it must never be silent either.
-        $materialWatch = null;
-        if ($this->useTls) {
-            if ($this->tlsCert === null || $this->tlsKey === null) {
-                throw new \InvalidArgumentException(
-                    'TLS enabled for relay worker but HUB_RELAY_TLS_CERT and/or HUB_RELAY_TLS_KEY env vars are not set',
-                );
-            }
-            $envPaths = ['HUB_RELAY_TLS_CERT' => $this->tlsCert, 'HUB_RELAY_TLS_KEY' => $this->tlsKey];
-            $decision = TlsMaterialWatch::bootDecision($envPaths, 'relay worker', 'HUB_RELAY_TLS');
-            if ($decision['fatal'] !== null) {
-                throw TlsMaterialWatch::failFast($decision['fatal']);
-            }
-
-            foreach ($decision['warnings'] as $bootWarning) {
-                LoggerFactory::get(LogChannels::RELAY)->warning($bootWarning);
-            }
-
-            $materialWatch = new TlsMaterialWatch('relay-ws :' . $this->port, $envPaths);
-            $sslContext = self::relayTlsContext($this->tlsCert, $this->tlsKey);
-        }
+        // F-11 + F-12: the boot material decision — null-material throw, the
+        // audit §3.2 MISSING-fails-fast / exists-but-UNREADABLE-degrades split,
+        // the RELAY-channel warning, the armed watch, and the hardened listen
+        // context — is ONE seam now, shared with the other three inbound
+        // listeners. It returns Workerman's non-nullable empty context on the
+        // plaintext path (a null there TypeError'd the Worker ctor) and, under
+        // TLS, the context from WsTlsContext::forListener() — the SSOT this
+        // worker's relayTlsContext() copy duplicated until this migration.
+        [$sslContext, $materialWatch] = WsTlsBoot::forListener(
+            $this->useTls,
+            $this->tlsCert,
+            $this->tlsKey,
+            'relay worker',
+            'HUB_RELAY_TLS',
+            'relay-ws',
+            $this->port,
+        );
 
         $worker = new Worker(WsTlsContext::listenString($this->bindHost, $this->port), $sslContext);
         $worker->name = 'phlix-hub-relay-ws';

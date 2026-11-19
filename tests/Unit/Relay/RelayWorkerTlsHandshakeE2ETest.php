@@ -23,7 +23,8 @@ use Phlix\Hub\Tests\Support\Narrow;
  * verify_peer + verify_peer_name against the cert's 127.0.0.1 IP SAN) completes
  * a genuine TLS handshake with the genuine child (tests/Support/Relay/
  * tls_relay_child_server.php — a real Workerman worker produced by
- * RelayWorker::start() itself, transport=ssl, hardened relayTlsContext), the
+ * RelayWorker::start() itself, transport=ssl, hardened context from the
+ * WsTlsContext::forListener() SSOT via the shared WsTlsBoot seam), the
  * WebSocket Upgrade rides the encrypted channel to a 101, a masked TEXT frame
  * of `{"type":"hello"}` is deframed by the production Websocket protocol into
  * RelayWorker::handleHello(), and the verdict frame that comes back over TLS

@@ -16,6 +16,7 @@ use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Relay\RelayWorker;
+use Phlix\Hub\Relay\WsTlsContext;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use InvalidArgumentException;
@@ -26,16 +27,19 @@ use ReflectionProperty;
 /**
  * TLS-lane laws for the :8802 bind material (successor seam to M21).
  *
- *   1. {@see RelayWorker::relayTlsContext()} is the ONE canonical hardened
- *      context builder — the shape the production listener binds with and the
- *      shape the real-TLS loopback E2E child (RelayWorkerTlsHandshakeE2ETest)
- *      exercises byte-for-byte;
+ *   1. {@see WsTlsContext::forListener()} is the ONE canonical hardened
+ *      context builder — the shape every production listener binds with (the
+ *      :8802 surface migrated onto it from relayTlsContext() in F-11, pins
+ *      re-pointed in the same move) and the shape the real-TLS loopback E2E
+ *      child (RelayWorkerTlsHandshakeE2ETest) exercises byte-for-byte;
  *   2. {@see RelayWorker::assertTlsMaterialReadable()} fails FAST, pre-bind,
  *      on cert/key paths that are not readable files — naming the env knob,
  *      the resolved path, and both ways out (red on the parent: it happily
  *      built an ssl context around nonexistent paths and left the hub to die
  *      cryptically inside stream_socket_server, half-booted);
- *   3. start() consults the material decision before any Worker exists:
+ *   3. start() consults the material decision before any Worker exists —
+ *      through the shared {@see \Phlix\Hub\Relay\WsTlsBoot} seam since F-12
+ *      (policy unchanged here):
  *      MISSING keeps the fail-fast throw (audit §3.2 — the historical text,
  *      byte-ident), exists-but-unreadable degrades to a loud RELAY-channel
  *      boot warning + the armed per-connection watch + onError loud line.
@@ -112,12 +116,12 @@ final class RelayWorkerTlsMaterialTest extends TestCase
 
     // ---- 1. canonical context shape ------------------------------------------
 
-    public function testRelayTlsContextCarriesTheHardenedServerShape(): void
+    public function testTheCanonicalContextBuilderCarriesTheHardenedServerShape(): void
     {
         $cert = $this->scratchPem('cert');
         $key = $this->scratchPem('key');
 
-        $context = RelayWorker::relayTlsContext($cert, $key);
+        $context = WsTlsContext::forListener($cert, $key);
 
         self::assertSame(['ssl'], array_keys($context), 'exactly one top-level section: ssl');
 

@@ -8,9 +8,11 @@
  *
  * Why process-level: the seam under proof is the ACCEPT side of the relay
  * tunnel — Workerman's `websocket://` listener bound with
- * `$worker->transport = 'ssl'` and the context from
- * {@see RelayWorker::relayTlsContext()} (via {@see RelayWorker::start()}
- * itself, not a re-approximation of it). Trusting a fake TLS peer would make
+ * `$worker->transport = 'ssl'` and the hardened context from
+ * {@see \Phlix\Hub\Relay\WsTlsContext::forListener()} — reached via
+ * {@see RelayWorker::start()} and its shared {@see \Phlix\Hub\Relay\WsTlsBoot}
+ * seam (F-11/F-12: this replaced the per-surface relayTlsContext() duplicate),
+ * not a re-approximation of it. Trusting a fake TLS peer would make
  * the entire point — that a strict client genuinely completes TLS + upgrade +
  * a deframed round trip against the production construction site — untestable.
  * The venue is estate-proven: tests/Support/Federation/tls_federation_master_server.php

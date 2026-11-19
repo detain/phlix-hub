@@ -15,17 +15,23 @@ use function str_contains;
 use function str_starts_with;
 
 /**
- * Shared listen-side TLS kit for the client-facing hub WebSocket surfaces
- * that arrived after the shipped pair (SH-064, review hub__secnet#1).
+ * Shared listen-side TLS kit for the hub's inbound WebSocket surfaces.
  *
- * Why a new home rather than reuse: `RelayWorker::relayTlsContext()` (:8802,
- * M21) and `FederationWorker`'s inline context (:8805, M22) are byte-pinned
- * by their own suites and must not be refactored out from under those pins.
- * This class carries the SAME hardened list forward for the surfaces joining
- * them (:8803, :8804), so a future cipher-policy change has one place to
- * touch for the new half while the pinned halves migrate deliberately.
+ * History (SH-064, review hub__secnet#1): the later-arriving :8803/:8804
+ * surfaces adopted this home while the shipped pair — `RelayWorker`'s
+ * `relayTlsContext()` (:8802, M21) and `FederationWorker`'s inline literal
+ * (:8805, M22) — stayed byte-pinned duplicates, because refactoring them
+ * out from under their own suites was not the arriving surfaces' remit.
+ * F-11/F-12 (dupe-scan-1119) executed that deliberate migration: both
+ * duplicates were proven byte-identical to {@see self::forListener()} on
+ * the pristine base tree, their pins were re-pointed (WsTlsBootTest carries
+ * the full hardened-shape law now), and all four listeners build their
+ * bind context HERE — the cipher floor finally has one place to touch.
  *
- * Pure value builders: no I/O, no state, no statics.
+ * Pure value builders: no I/O, no state, no statics. The boot-time material
+ * decision around this value (null/missing/unreadable policy + watch
+ * construction) lives in {@see WsTlsBoot}, not here, precisely so this
+ * purity law holds.
  *
  * @package Phlix\Hub\Relay
  */

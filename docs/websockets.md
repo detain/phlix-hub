@@ -160,7 +160,10 @@ all-abort helper (`RelayWorker::assertTlsMaterialReadable`) remains verbatim
 as the strict missing-or-unreadable contract for direct callers.
 The bind-time context itself — AEAD-only cipher list, `secp384r1`, compression
 off, OpenSSL security level 2 — is the single builder
-`RelayWorker::relayTlsContext()`, and the real-TLS loopback E2E
+`WsTlsContext::forListener()`, reached at boot through the shared
+`WsTlsBoot::forListener()` material decision used by all four inbound
+listeners (:8802/:8803/:8804/:8805 — F-11/F-12 of the dupe-scan consolidation),
+and the real-TLS loopback E2E
 (`tests/Unit/Relay/RelayWorkerTlsHandshakeE2ETest.php`) completes a genuine
 strict-verify handshake, WebSocket upgrade, and HELLO verdict round trip
 against it, so the shape documented here is the shape executed.

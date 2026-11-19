@@ -296,34 +296,19 @@ final class ClientRelayWorker
             LoggerFactory::get(LogChannels::RELAY)->warning(self::plaintextAdvisory($this->port));
         }
 
-        // Workerman's Worker::__construct() types $socketContext as a non-nullable
-        // array, so default to an empty context rather than null — passing null
-        // throws a TypeError on the non-TLS path.
-        $sslContext = [];
-        $materialWatch = null;
-        if ($this->useTls) {
-            if ($this->tlsCert === null || $this->tlsKey === null) {
-                throw new \InvalidArgumentException(
-                    'TLS enabled for client relay worker but HUB_CLIENT_RELAY_TLS_CERT '
-                        . 'and/or HUB_CLIENT_RELAY_TLS_KEY env vars are not set',
-                );
-            }
-            $envPaths = ['HUB_CLIENT_RELAY_TLS_CERT' => $this->tlsCert, 'HUB_CLIENT_RELAY_TLS_KEY' => $this->tlsKey];
-            // MISSING PEM fails fast pre-bind; exists-but-UNREADABLE degrades
-            // to a loud boot warning + the per-connection watch below (audit
-            // §3.2 law: an off-pipeline rotation must never kill boot, and
-            // must never go silent either).
-            $decision = TlsMaterialWatch::bootDecision($envPaths, 'client relay worker', 'HUB_CLIENT_RELAY_TLS');
-            if ($decision['fatal'] !== null) {
-                throw TlsMaterialWatch::failFast($decision['fatal']);
-            }
-            foreach ($decision['warnings'] as $bootWarning) {
-                LoggerFactory::get(LogChannels::RELAY)->warning($bootWarning);
-            }
-
-            $materialWatch = new TlsMaterialWatch('client-relay-ws :' . $this->port, $envPaths);
-            $sslContext = WsTlsContext::forListener($this->tlsCert, $this->tlsKey);
-        }
+        // F-12: boot material decision collapsed into the shared seam (law +
+        // audit §3.2 policy documented in WsTlsBoot; F-11: bind context from
+        // WsTlsContext::forListener via that seam — byte-ident to this
+        // surface's historical value).
+        [$sslContext, $materialWatch] = WsTlsBoot::forListener(
+            $this->useTls,
+            $this->tlsCert,
+            $this->tlsKey,
+            'client relay worker',
+            'HUB_CLIENT_RELAY_TLS',
+            'client-relay-ws',
+            $this->port,
+        );
 
         $worker = new Worker(WsTlsContext::listenString($this->bindHost, $this->port), $sslContext);
         $worker->name = 'phlix-hub-client-relay-ws';
