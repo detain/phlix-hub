@@ -17,7 +17,6 @@ use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
 
-use function chr;
 use function json_encode;
 use function pack;
 use function strlen;
@@ -64,21 +63,56 @@ final class FrameDecoder implements RelayWireCodecInterface
      */
     public function encode(RelayFrameType $type, int $seq, string $payload): string
     {
-        if (strlen($payload) > 65535) {
+        return self::encodeFrame($type, $seq, $payload);
+    }
+
+    /**
+     * The single byte-emitting frame encoder of this repo.
+     *
+     * FRAME lane (scan finding C-06): the server repo carries the twin of
+     * this encoder at phlix-server src/Hub/RelayMessageFramer.php::encodeFrame().
+     * Both are pinned byte-identical by the triple corpus tests (hub
+     * tests/Unit/Relay/FrameWireCorpusTest.php, server
+     * tests/Unit/Hub/RelayMessageFramerWireCorpusTest.php and shared
+     * tests/Relay/FrameCodecTest.php all pin the same wire digest literal).
+     * The eventual single home is phlix-shared src/Relay/FrameCodec.php —
+     * added by the FRAME lane, adoption scheduled for the v0.56.0 release;
+     * until then each repo keeps its own copy and the corpus pins keep the
+     * twins honest. The body now mirrors the server's byte-for-byte
+     * (pack('C') replacing the former chr() leg — identical bytes for every
+     * valid enum value); exception wording stays per-repo until adoption
+     * harmonizes it (that harmonization is the release lane's disclosed job).
+     *
+     * @param RelayFrameType $type    Frame type.
+     * @param int            $seq     32-bit unsigned sequence number.
+     * @param string         $payload Raw byte payload.
+     *
+     * @return string Binary-encoded frame.
+     *
+     * @throws InvalidArgumentException If the payload exceeds 65535 bytes.
+     */
+    private static function encodeFrame(RelayFrameType $type, int $seq, string $payload): string
+    {
+        $len = strlen($payload);
+
+        if ($len > 65535) {
             throw new InvalidArgumentException(
-                sprintf('Payload exceeds maximum size of 65535 bytes (got %d)', strlen($payload)),
+                sprintf('Payload exceeds maximum size of 65535 bytes (got %d)', $len),
             );
         }
 
         // [4-byte seq (big-endian uint32)][1-byte type][2-byte len (big-endian uint16)][payload]
         return pack('N', $seq)
-            . chr($type->value)
-            . pack('n', strlen($payload))
+            . pack('C', $type->value)
+            . pack('n', $len)
             . $payload;
     }
 
     /**
      * @inheritDoc
+     *
+     * @see phlix-server src/Hub/RelayMessageFramer.php::encodeHello() — wire
+     *      twin; shared home phlix-shared src/Relay/FrameCodec.php (v0.56.0 adoption).
      */
     public function encodeHello(string $enrollmentJwt, string $serverId): string
     {
@@ -93,6 +127,9 @@ final class FrameDecoder implements RelayWireCodecInterface
 
     /**
      * @inheritDoc
+     *
+     * @see phlix-server src/Hub/RelayMessageFramer.php::encodeHelloAck() — wire
+     *      twin; shared home phlix-shared src/Relay/FrameCodec.php (v0.56.0 adoption).
      */
     public function encodeHelloAck(string $relaySessionId, string $tunnelId): string
     {

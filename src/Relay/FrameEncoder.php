@@ -29,6 +29,13 @@ use function json_encode;
  *
  * Maximum frame payload: 65535 bytes.
  *
+ * FRAME lane (scan finding C-06): every byte this class emits is produced by
+ * the single canonical encoder {@see FrameDecoder::encodeFrame()}; the server
+ * repo's twin is phlix-server src/Hub/RelayMessageFramer.php::encodeFrame(),
+ * and the eventual single home is phlix-shared src/Relay/FrameCodec.php
+ * (v0.56.0 adoption). All three are pinned byte-identical by the triple
+ * wire-corpus tests; see the FrameDecoder class docblock for the full map.
+ *
  * @package Phlix\Hub\Relay
  */
 final class FrameEncoder
