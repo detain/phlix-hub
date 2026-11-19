@@ -39,6 +39,8 @@ use Phlix\Hub\Http\Request;
 use Phlix\Shared\Auth\JwtClaims;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
+use ReflectionClass;
+use ReflectionMethod;
 use RuntimeException;
 use Workerman\MySQL\Connection;
 
@@ -605,7 +607,6 @@ final class TokenSessionFamilyTest extends TestCase
         $store = $this->createMock(TokenSessionRepository::class);
         $store->method('sessionBelongsToUser')->with('fam-a', self::USER_ID)->willReturn(true);
         $store->expects(self::once())->method('revokeSession')->with('fam-a', 'logout');
-        $store->expects(self::never())->method('revokeAllForUser');
 
         $audited = [];
         self::assertTrue($this->manager($store, auditSink: $audited)->revokeTokenSession(self::USER_ID, 'fam-a'));
@@ -660,7 +661,6 @@ final class TokenSessionFamilyTest extends TestCase
 
         $store = $this->createMock(TokenSessionRepository::class);
         $store->expects(self::never())->method('revokeSession');
-        $store->expects(self::never())->method('revokeAllForUser');
         $store->expects(self::never())->method('isSessionActive');
         $store->expects(self::never())->method('findGrant');
 
@@ -712,6 +712,52 @@ final class TokenSessionFamilyTest extends TestCase
         );
         self::assertStringContainsString('prune failed during grant mint', $written);
         self::assertStringContainsString('simulated sweep outage', $written);
+    }
+
+    public function testTheStoreShipsNoPublicPrimitiveWithoutAnSrcCaller(): void
+    {
+        // HUB-5.4 (bug #14): an account-wide primitive with no production
+        // caller is a trap — it reads as available surface while nothing
+        // exercises it. The hub keeps exactly ONE account-wide revocation
+        // event: user deletion, swept completely by the 055 FK CASCADE
+        // (sessions.user_id and grants.session_id both cascade). No
+        // "disabled-but-alive" state exists to revoke (users carries no
+        // status column), so no second primitive may accrete behind us.
+        $methods = (new ReflectionClass(TokenSessionRepository::class))
+            ->getMethods(ReflectionMethod::IS_PUBLIC);
+        $srcRoot = dirname(__DIR__, 3) . '/src';
+        $offenders = [];
+
+        foreach ($methods as $method) {
+            $name = $method->getName();
+            if ($method->isConstructor() || $method->isStatic()) {
+                continue;
+            }
+
+            $needle = '->' . $name . '(';
+            $called = false;
+            $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($srcRoot));
+            /** @var \SplFileInfo $file */
+            foreach ($iterator as $file) {
+                if (!$file->isFile() || $file->getExtension() !== 'php') {
+                    continue;
+                }
+                if (str_contains((string) file_get_contents($file->getPathname()), $needle)) {
+                    $called = true;
+                    break;
+                }
+            }
+
+            if (!$called) {
+                $offenders[] = $name;
+            }
+        }
+
+        self::assertSame(
+            [],
+            $offenders,
+            'every public TokenSessionRepository primitive must have a production caller in src/.',
+        );
     }
 
     private static function asGrantJti(mixed $value): string

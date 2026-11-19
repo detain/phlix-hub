@@ -19,10 +19,12 @@
  *    constant the adjudicator passes (a PHP-side now() would drift with the
  *    TZ-window flake class the estate already documents);
  *  - consume → reuse, family isolation, listing order, and — the hub's
- *    chosen nuclear edge — user delete CASCADEing families and grants,
- *    plus the revokeAllForUser primitive the hub ships WITHOUT a production
- *    call site (no watermark choke on the hub; this leg is its only
- *    conviction, which is exactly why it lives here and not in prose).
+ *    chosen nuclear edge — user delete CASCADEing families and grants.
+ *    That CASCADE is the hub's ONLY account-wide revocation execution (no
+ *    UPDATE primitive ships: there is no watermark choke and no
+ *    disabled-but-alive user state on the hub — see the class docblock and
+ *    the caller-census pin in the family suite), so the delete legs below
+ *    are the whole blast-radius story.
  *
  * Phlix hub test: Auth.
  *
@@ -480,31 +482,6 @@ final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCas
         self::assertSame(0, $this->countRows('auth_refresh_grants'));
     }
 
-    public function testRevokeAllForUserKillsExactlyThatUsersFamiliesOnce(): void
-    {
-        $one = $this->seedUser('cp055all-one');
-        $two = $this->seedUser('cp055all-two');
-        $familyOne = $this->store->createSession($one);
-        $familyTwo = $this->store->createSession($one);
-        $familyElsewhere = $this->store->createSession($two);
-
-        $this->store->revokeAllForUser($one, 'twin_probe');
-
-        self::assertFalse($this->store->isSessionActive($familyOne));
-        self::assertFalse($this->store->isSessionActive($familyTwo));
-        self::assertTrue($this->store->isSessionActive($familyElsewhere));
-
-        $stamp = $this->revokedAtOf($familyOne);
-        // Second call must not rewrite the first kill (the UPDATE's status
-        // guard): reason and timestamp of a death stay who-dunnit-faithful.
-        $this->store->revokeAllForUser($one, 'twin_probe_later');
-        self::assertSame($stamp, $this->revokedAtOf($familyOne));
-        /** @var mixed $rows */
-        $rows = $this->db->query('SELECT revoke_reason FROM auth_token_sessions WHERE id = :id', ['id' => $familyOne]);
-        $rows = Narrow::rows($rows);
-        self::assertSame('twin_probe', $rows[0]['revoke_reason']);
-    }
-
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
@@ -616,16 +593,6 @@ final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCas
         $raw = $rows[0]['x'] ?? null;
 
         return is_numeric($raw) ? (int) $raw : 0;
-    }
-
-    private function revokedAtOf(string $family): ?string
-    {
-        /** @var mixed $rows */
-        $rows = $this->db->query('SELECT revoked_at FROM auth_token_sessions WHERE id = :id', ['id' => $family]);
-        $rows = Narrow::rows($rows);
-        self::assertCount(1, $rows);
-
-        return $rows[0]['revoked_at'] === null ? null : Narrow::castString($rows[0]['revoked_at']);
     }
 
     private function countRows(string $table): int

@@ -28,10 +28,11 @@ use Workerman\MySQL\Connection;
  * bound stays where the hub always had it: the carrier layer — the `jti`
  * revocation registry written by logout ({@see RefreshTokenRevocationService})
  * and the users FK CASCADE that sweeps both tables on account deletion. The
- * hub has no per-user token watermark, so unlike the server twin this class
- * has no choke-point caller for {@see self::revokeAllForUser()}; the
- * primitive ships for schema/API parity with the server store and is
- * convicted by the real-DB leg that pins its exact blast radius.
+ * hub has no per-user token watermark, so unlike the server twin there is no
+ * account-wide UPDATE primitive here at all: user deletion IS the account-
+ * wide revocation event, and the CASCADE is its complete execution. Every
+ * public primitive on this class therefore has a production caller
+ * (pinned by a census test in the family suite).
  *
  * `auth_refresh_grants` is the theft sensor: every MINTED refresh token
  * (identified by its `jti`) gets a row. Rotation marks the presented token
@@ -403,28 +404,6 @@ class TokenSessionRepository
             "UPDATE auth_token_sessions SET status = 'revoked', revoke_reason = :reason, revoked_at = NOW()"
             . " WHERE id = :id AND status = 'active'",
             ['reason' => $reason, 'id' => $sessionId],
-        );
-    }
-
-    /**
-     * End EVERY family of one user. Shipped for parity with the server store;
-     * the hub has NO production call site (no watermark choke point exists to
-     * fold it into — see class docblock). User deletion already sweeps these
-     * rows through the users FK CASCADE; this primitive is for the explicit
-     * account-wide action a future hub surface may want, convicted here so it
-     * is never shipped-untested.
-     *
-     * @param string $userId User whose families all die.
-     * @param string $reason Audit context carried into `revoke_reason`.
-     *
-     * @return void
-     */
-    public function revokeAllForUser(string $userId, string $reason): void
-    {
-        $this->db->query(
-            "UPDATE auth_token_sessions SET status = 'revoked', revoke_reason = :reason, revoked_at = NOW()"
-            . " WHERE user_id = :user_id AND status = 'active'",
-            ['reason' => $reason, 'user_id' => $userId],
         );
     }
 
