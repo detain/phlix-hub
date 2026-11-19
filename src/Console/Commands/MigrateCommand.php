@@ -56,12 +56,21 @@ final class MigrateCommand extends Command
     /**
      * Apply pending migrations and render a summary.
      *
-     * Mirrors `scripts/run-migrations.php`:
+     * Mirrors `scripts/run-migrations.php` — including the HUB-5.1 exit
+     * verdict SSOT: every verdict routes through
+     * {@see MigrationRunner::exitCodeFor()} / the
+     * {@see MigrationRunner::EXIT_SUCCESS}/{@see MigrationRunner::EXIT_FAILURE}
+     * constants (whose values are identical to `Command::SUCCESS`/
+     * `Command::FAILURE`), so the two entry points can never drift apart:
      * - empty migrations directory → "No SQL migrations found…", exit 0;
      * - a runner failure → "<error>Migration failed: …</error>", exit 1;
      * - nothing pending → "All migrations already applied…", exit 0;
      * - otherwise one "Applied: <file>" line per newly applied migration
      *   followed by "Migrations complete (N applied).", exit 0.
+     *
+     * A statement error whose driver errno is on the runner's closed
+     * idempotent list never reaches this method as a failure — the runner
+     * skips-and-logs it (S159 law), and the file records normally.
      */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
@@ -71,7 +80,7 @@ final class MigrateCommand extends Command
         if ($files === []) {
             $output->writeln('No SQL migrations found.');
 
-            return Command::SUCCESS;
+            return MigrationRunner::EXIT_SUCCESS;
         }
 
         try {
@@ -79,13 +88,13 @@ final class MigrateCommand extends Command
         } catch (Throwable $e) {
             $output->writeln('<error>Migration failed: ' . $e->getMessage() . '</error>');
 
-            return Command::FAILURE;
+            return MigrationRunner::exitCodeFor($e);
         }
 
         if ($ran === []) {
             $output->writeln('All migrations already applied. Nothing to do.');
 
-            return Command::SUCCESS;
+            return MigrationRunner::EXIT_SUCCESS;
         }
 
         foreach ($ran as $filename) {
@@ -93,6 +102,6 @@ final class MigrateCommand extends Command
         }
         $output->writeln(sprintf('Migrations complete (%d applied).', count($ran)));
 
-        return Command::SUCCESS;
+        return MigrationRunner::exitCodeFor(null);
     }
 }

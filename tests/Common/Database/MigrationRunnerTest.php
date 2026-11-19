@@ -714,4 +714,229 @@ final class MigrationRunnerTest extends TestCase
     {
         self::assertSame('migrations', MigrationRunner::TRACKING_TABLE);
     }
+
+    /**
+     * HUB-5.1 (bug #12, red-first): the S159 already-applied law.
+     *
+     * A recorded file whose checksum DIVERGED is re-applied on purpose
+     * (HB-4.11 promises re-run safety). When such a re-apply meets an
+     * idempotent schema code — the measured 1060 rendered by
+     * `Workerman\MySQL\Connection` for an `ALTER ... ADD COLUMN` whose
+     * column already exists — the statement must be classified
+     * already-applied, logged loudly, and SKIPPED, so the file completes
+     * and its checksum refreshes. Before this law the error threw
+     * mid-file: the ledger kept the stale checksum and EVERY subsequent
+     * boot re-failed the same migration — a permanently-red hub, the
+     * exact opposite of the documented re-run-safe contract.
+     */
+    public function testDivergedReapplySquelchesIdempotentErrorAndRefreshesChecksum(): void
+    {
+        $content = 'ALTER TABLE foo ADD COLUMN bar INT;';
+        file_put_contents($this->migrationsDir . '/001_a.sql', $content);
+
+        $db = $this->createMock(Connection::class);
+        $executed = [];
+        $recordedChecksum = null;
+        $db->method('query')
+            ->willReturnCallback(function ($sql, $params = null) use (&$executed, &$recordedChecksum) {
+                if (is_string($sql) && str_contains($sql, 'SELECT filename')) {
+                    // Recorded with a stale (non-matching) checksum → diverged.
+                    return [['filename' => '001_a.sql', 'checksum' => str_repeat('0', 32)]];
+                }
+                if (is_string($sql) && str_contains($sql, 'ALTER TABLE foo ADD COLUMN bar')) {
+                    // The exact message shape the real connection renders:
+                    // 'SQL:' . lastSQL() . ' ' . driver text (measured 1060).
+                    throw new \RuntimeException(
+                        'SQL:' . $sql . " SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'bar'"
+                    );
+                }
+                if (is_string($sql) && str_contains($sql, 'INSERT INTO `migrations`')) {
+                    $recordedChecksum = is_array($params) ? ($params['checksum'] ?? null) : null;
+                }
+                $executed[] = is_string($sql) ? $sql : '';
+                return null;
+            });
+
+        // The squelch must be VISIBLE, not silent: capture the note via error_log.
+        $logFile = (string) tempnam(sys_get_temp_dir(), 'phlix-hub-mig-log-');
+        $previous = ini_set('error_log', $logFile);
+
+        $runner = new MigrationRunner($db, $this->migrationsDir);
+        $applied = $runner->run();
+
+        ini_set('error_log', $previous === false ? '' : $previous);
+        $log = (string) @file_get_contents($logFile);
+        @unlink($logFile);
+
+        self::assertSame(['001_a.sql'], $applied, 'A diverged file with a class-(a) statement error still completes.');
+        self::assertSame(
+            MigrationRunner::checksum($content),
+            $recordedChecksum,
+            'Completing the file must refresh the recorded checksum, so the next boot skips it clean.'
+        );
+        self::assertStringContainsString('already applied', $log, 'The skip must be logged, never silent.');
+        self::assertStringContainsString('1060', $log, 'The log must carry the driver code it classified.');
+    }
+
+    /**
+     * HUB-5.1 (bug #12): the squelch is scoped to the CLOSED idempotent code
+     * list. A genuine 1064 syntax failure whose echoed SQL text happens to
+     * carry the phrase 'already exists' must NOT be swallowed — matching the
+     * raw message text is how the server's pre-S159 classifier was convicted.
+     */
+    public function testNonIdempotentFailureCarryingAlreadyExistsPhraseStillThrows(): void
+    {
+        $statement = "CREATE TABLE decoy (already exists INT) COMMENT 'this table already exists'";
+        file_put_contents($this->migrationsDir . '/001_a.sql', $statement . ';');
+
+        $db = $this->createMock(Connection::class);
+        $db->method('query')
+            ->willReturnCallback(function ($sql) {
+                if (is_string($sql) && str_contains($sql, 'SELECT filename')) {
+                    return [];
+                }
+                if (is_string($sql) && str_contains($sql, 'CREATE TABLE decoy')) {
+                    throw new \RuntimeException(
+                        'SQL:' . $sql . " SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in"
+                        . " your SQL syntax; check the manual that corresponds to your MySQL server version"
+                        . " for the right syntax to use near 'already exists INT) COMMENT"
+                        . " 'this table already exists'' at line 1"
+                    );
+                }
+                return null;
+            });
+
+        $runner = new MigrationRunner($db, $this->migrationsDir);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('001_a.sql');
+
+        try {
+            $runner->run();
+        } finally {
+            self::assertFalse(
+                MigrationRunner::isAlreadyAppliedNote(
+                    'SQL:' . $statement . " SQLSTATE[42000]: Syntax error or access violation: 1064"
+                    . " You have an error in your SQL syntax near 'already exists INT'",
+                    $statement
+                ),
+                'The closed-list errno verdict must reject a 1064 no matter what the echoed SQL text says.'
+            );
+        }
+    }
+
+    /**
+     * @return array<string, array{message: string, statement: string|null, expected: bool}>
+     */
+    public static function measuredErrorShapes(): array
+    {
+        $alter = 'ALTER TABLE t ADD COLUMN bar INT';
+        $addKey = 'ALTER TABLE t ADD KEY idx_x (x)';
+        $dropGone = 'ALTER TABLE t DROP COLUMN gone';
+        $insertDup = 'INSERT INTO t (id) VALUES (1)';
+        $addPk = 'ALTER TABLE t ADD PRIMARY KEY (a)';
+        $addFk = 'ALTER TABLE t ADD CONSTRAINT fk_a FOREIGN KEY (a) REFERENCES u (id)';
+        $addCheck = 'ALTER TABLE t ADD CONSTRAINT ck_a CHECK (a > 0)';
+        $decoy = 'CREATE TABLE decoy (already exists INT)';
+
+        return [
+            '1050 table exists' => [
+                'message' => 'SQL:CREATE TABLE t (a INT)'
+                    . " SQLSTATE[42S01]: Base table or view already exists: 1050 Table 't' already exists",
+                'statement' => 'CREATE TABLE t (a INT)',
+                'expected' => true,
+            ],
+            '1060 duplicate column' => [
+                'message' => 'SQL:' . $alter
+                    . " SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'bar'",
+                'statement' => $alter,
+                'expected' => true,
+            ],
+            '1061 duplicate key name' => [
+                'message' => 'SQL:' . $addKey
+                    . " SQLSTATE[42000]: Syntax error or access violation: 1061 Duplicate key name 'idx_x'",
+                'statement' => $addKey,
+                'expected' => true,
+            ],
+            '1091 cant drop' => [
+                'message' => 'SQL:' . $dropGone
+                    . " SQLSTATE[42000]: Syntax error or access violation: 1091"
+                    . " Can't DROP 'gone'; check that column/key exists",
+                'statement' => $dropGone,
+                'expected' => true,
+            ],
+            '1062 duplicate entry is a data violation' => [
+                'message' => 'SQL:' . $insertDup
+                    . " SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry '1' for key 't.PRIMARY'",
+                'statement' => $insertDup,
+                'expected' => false,
+            ],
+            '1068 multiple primary keys is indistinguishable' => [
+                'message' => 'SQL:' . $addPk
+                    . ' SQLSTATE[42000]: Syntax error or access violation: 1068 Multiple primary key defined',
+                'statement' => $addPk,
+                'expected' => false,
+            ],
+            '1826 duplicate foreign key constraint name is schema-scoped' => [
+                'message' => 'SQL:' . $addFk
+                    . " SQLSTATE[HY000]: General error: 1826 Duplicate foreign key constraint name 'fk_a'",
+                'statement' => $addFk,
+                'expected' => false,
+            ],
+            '3822 duplicate check constraint name is schema-scoped' => [
+                'message' => 'SQL:' . $addCheck
+                    . " SQLSTATE[HY000]: General error: 3822 Duplicate check constraint name 'ck_a'",
+                'statement' => $addCheck,
+                'expected' => false,
+            ],
+            '1064 decoy: phrase inside echoed SQL is NOT an idempotent code' => [
+                'message' => 'SQL:' . $decoy
+                    . " SQLSTATE[42000]: Syntax error or access violation: 1064 syntax error near 'already exists INT'",
+                'statement' => $decoy,
+                'expected' => false,
+            ],
+            'prefixed message with NO driver segment is never squelched' => [
+                'message' => 'SQL:SOME STATEMENT something went wrong with no SQLSTATE at all',
+                'statement' => 'SOME STATEMENT',
+                'expected' => false,
+            ],
+            'connect failure (no errno in segment) is not class (a)' => [
+                'message' => 'SQLSTATE[HY000] [2002] Connection refused',
+                'statement' => null,
+                'expected' => false,
+            ],
+            'unprefixed 1060 (mock/bare shapes) takes the fallback route' => [
+                'message' => "SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'bar'",
+                'statement' => null,
+                'expected' => true,
+            ],
+        ];
+    }
+
+    /**
+     * HUB-5.1 (bug #12): the classifier, pinned against the measured driver
+     * message shapes ported from the server's S159 harness.
+     */
+    #[DataProvider('measuredErrorShapes')]
+    public function testIsAlreadyAppliedNoteClassifiesMeasuredShapes(
+        string $message,
+        ?string $statement,
+        bool $expected
+    ): void {
+        self::assertSame($expected, MigrationRunner::isAlreadyAppliedNote($message, $statement), $message);
+    }
+
+    /**
+     * HUB-5.1 (bug #12): the exit verdict is single-sourced — both operator
+     * paths (the CLI script and `bin/phlix migrate`) map presence/absence of
+     * a failure through the same static, so the two entry points cannot
+     * drift apart the way the inline 0/1 mappings did.
+     */
+    public function testExitVerdictIsSingleSourcedThroughExitCodeFor(): void
+    {
+        self::assertSame(0, MigrationRunner::EXIT_SUCCESS);
+        self::assertSame(1, MigrationRunner::EXIT_FAILURE);
+        self::assertSame(MigrationRunner::EXIT_SUCCESS, MigrationRunner::exitCodeFor(null));
+        self::assertSame(MigrationRunner::EXIT_FAILURE, MigrationRunner::exitCodeFor(new \RuntimeException('boom')));
+    }
 }

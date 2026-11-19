@@ -66,10 +66,67 @@ use Workerman\MySQL\Connection;
  * (backfilled as the new baseline, never re-applied).
  *
  * @package Phlix\Hub\Common\Database
+ *
+ * ## Idempotent replay law (HUB-5.1, bug #12 — S159 port)
+ *
+ * The server's S159 law, mirrored here: a statement error whose driver
+ * errno is one of the closed {@see self::IDEMPOTENT_ERROR_CODES} set —
+ * "the object this statement creates is already there" — is NOT a failed
+ * migration. {@see self::applyFile()} classifies such errors through
+ * {@see self::isAlreadyAppliedNote()} (statement-exact message parsing,
+ * never raw phrase matching), logs the skip loudly via error_log, and
+ * continues, so the file completes and its ledger row (and checksum)
+ * records normally. Every other error keeps today's throw-stop contract:
+ * the file stays unrecorded and the failure surfaces. This is the law
+ * that makes the documented "re-run-safe" divergence re-apply actually
+ * re-run-safe — before it, a recorded file whose edited DDL repeated an
+ * already-present column threw 1060 on every boot, could never refresh
+ * its checksum, and reddened the hub permanently (the exact opposite
+ * polarity of the pre-S159 server bug, where the same failure was
+ * silently reported as success).
+ *
+ * The process verdict itself is single-sourced through
+ * {@see self::EXIT_SUCCESS}/{@see self::EXIT_FAILURE} +
+ * {@see self::exitCodeFor()} so `scripts/run-migrations.php` and
+ * `bin/phlix migrate` cannot drift apart.
  */
 class MigrationRunner
 {
     public const string TRACKING_TABLE = 'migrations';
+
+    /**
+     * Process verdict constants — the single source of truth both migration
+     * entry points exit with. Values match `Symfony\Component\Console\Command\Command::SUCCESS`/
+     * `::FAILURE` (0/1) by design; the names, not the numerals, are the law.
+     */
+    public const int EXIT_SUCCESS = 0;
+    public const int EXIT_FAILURE = 1;
+
+    /**
+     * CLOSED list of MySQL driver errnos that mean "the object this
+     * statement was creating already exists" — an idempotent replay, not a
+     * failure. Ported verbatim (list + reasoning) from the server's S159
+     * classifier; every member is scoped per-table, so a collision can only
+     * be with the object the failing statement itself was creating:
+     *
+     *  - 1050 table exists          (`CREATE TABLE` without IF NOT EXISTS)
+     *  - 1060 duplicate column      (`ALTER TABLE ... ADD COLUMN`)
+     *  - 1061 duplicate key name    (`ALTER TABLE ... ADD KEY` / `CREATE INDEX`)
+     *  - 1091 can't drop            (`ALTER TABLE ... DROP` of a gone field/key)
+     *
+     * Deliberately EXCLUDED, with the server's measured reasons (MySQL 8.0.46):
+     *  - 1062 duplicate entry — a UNIQUE-index/data violation inside a
+     *    migration is a real failure and must stop the chain;
+     *  - 1068 multiple primary keys — the message carries no object name, so
+     *    an already-applied replay is indistinguishable from a bad DDL edit;
+     *  - 1826/3822 duplicate FK/CHECK constraint names — scoped to the whole
+     *    SCHEMA, not this table: a `CREATE TABLE` that collides on a
+     *    constraint name could be recorded as applied while having created
+     *    nothing. Considered and rejected.
+     *
+     * @var list<int>
+     */
+    private const array IDEMPOTENT_ERROR_CODES = [1050, 1060, 1061, 1091];
 
     /**
      * @param Connection $db             Live MySQL connection.
@@ -238,6 +295,16 @@ class MigrationRunner
             try {
                 $this->db->query($statement);
             } catch (Throwable $e) {
+                if (self::isAlreadyAppliedNote($e->getMessage(), $statement)) {
+                    // HUB-5.1 (S159 law): the object this statement creates is
+                    // already there — an idempotent replay, not a failure.
+                    // Log it LOUDLY and continue so the file still completes
+                    // and records (refreshing its checksum on the divergence
+                    // path); any other error keeps the throw-stop contract.
+                    $this->noteAlreadyApplied(basename($file), $statement, $e->getMessage());
+                    continue;
+                }
+
                 throw new RuntimeException(
                     sprintf(
                         "Migration %s failed: %s\nStatement:\n%s",
@@ -501,6 +568,23 @@ class MigrationRunner
     }
 
     /**
+     * Loud record of one statement skipped by the HUB-5.1 idempotent-replay
+     * law ({@see self::isAlreadyAppliedNote()}). Same channel as the
+     * divergence WARNING above (error_log surfaces on CLI stderr and the
+     * journald unit alike) — a skip must never be silent, but it must also
+     * never fail the chain.
+     */
+    private function noteAlreadyApplied(string $filename, string $statement, string $driverMessage): void
+    {
+        error_log(sprintf(
+            '[phlix-hub][MigrationRunner] %s: statement skipped (already applied): %s | %s',
+            $filename,
+            $driverMessage,
+            $statement,
+        ));
+    }
+
+    /**
      * Compute the ledger checksum of a migration file's contents.
      *
      * The hash is taken over a NORMALISED form of the file: full-line `--` / `#`
@@ -564,5 +648,129 @@ class MigrationRunner
         }
 
         return str_contains(strtolower($message), "unknown column 'checksum'");
+    }
+
+    /**
+     * Map a migration outcome to the process exit verdict — the single
+     * source both entry points (`scripts/run-migrations.php` and
+     * `bin/phlix migrate`) must use.
+     *
+     * Hub-shaped on purpose: the server's runner reports in-band
+     * (`exitCodeFor(array $result)` over its errors channel) because its
+     * loop CONTINUES past failures; the hub's runner keeps the documented
+     * throw-stop contract, so a failure travels as a `Throwable` and its
+     * ABSENCE is the success proof. Same law either way: only a genuine
+     * failure reddens the process — idempotent skips, an empty directory,
+     * and an already-complete ledger all exit
+     * {@see self::EXIT_SUCCESS}.
+     */
+    public static function exitCodeFor(?Throwable $failure): int
+    {
+        return $failure === null ? self::EXIT_SUCCESS : self::EXIT_FAILURE;
+    }
+
+    /**
+     * Whether a statement error means "the schema object is already there"
+     * — the idempotent-replay class of {@see self::IDEMPOTENT_ERROR_CODES}.
+     *
+     * Ported semantics from the server's S159 classifier, including the
+     * anti-forgery rule that decided that fix: the verdict is taken from
+     * the parsed DRIVER segment's errno against the closed list, never from
+     * raw phrase matching over the whole message. `Workerman\MySQL\Connection`
+     * (and {@see PhlixMySQLConnection::query()}) prefix the failing SQL onto
+     * the error text, and migration SQL is free to contain the words
+     * 'already exists' (a COMMENT, a table name) — measured server-side, a
+     * genuine 1064/1146 failure whose echoed SQL carried the phrase was
+     * silently classed idempotent by the naive classifier, which is worse
+     * than the pre-S159 bug it replaced. When the driver errno is present it
+     * rules; the phrase test only runs on segment shapes that carry no
+     * parseable errno (e.g. the bare 'Unknown column … in 'field list''
+     * variants and the two unprefixed rethrow paths).
+     *
+     * @param string      $message   The exception message as thrown.
+     * @param string|null $statement The statement that produced it, when the
+     *                               caller knows it — always true from
+     *                               {@see self::applyFile()}, which gets it
+     *                               verbatim from its own loop.
+     */
+    public static function isAlreadyAppliedNote(string $message, ?string $statement = null): bool
+    {
+        $segment = self::errorSegment($message, $statement);
+        if ($segment === null) {
+            return false;
+        }
+
+        $code = self::driverErrorCode($segment);
+        if ($code !== null) {
+            return in_array($code, self::IDEMPOTENT_ERROR_CODES, true);
+        }
+
+        return str_contains($segment, 'Duplicate column name')
+            || str_contains($segment, 'Duplicate key name')
+            || str_contains($segment, 'check that column/key exists')
+            || str_contains($segment, 'already exists');
+    }
+
+    /**
+     * Strip the `'SQL:' . $statement . ' '` prefix the connection classes
+     * prepend, leaving only the driver's own error text. Two routes, in
+     * order of trust (ported verbatim from the server):
+     *
+     *  1. EXACT prefix strip: when the statement is known, the literal
+     *     `'SQL:' . $statement . ' '` is what both rethrow sites build —
+     *     `Connection::query()` trims the query and stores it as `lastSQL()`,
+     *     and {@see self::splitStatements()} trims every statement it
+     *     yields, so the two are byte-identical. Everything after the prefix
+     *     is driver text with no delimiter left for a payload to forge; if
+     *     what follows does NOT open with `SQLSTATE[` the segment is
+     *     unparseable and the caller must NOT squelch (return null).
+     *  2. FALLBACK last `SQLSTATE[`: the only route for legitimately
+     *     unprefixed shapes (unit doubles, raw PDOException rethrows,
+     *     `SQLSTATE[HY000] [2002] Connection refused`, the gone-away retry
+     *     path). A guess, and forgeable when misapplied — which is exactly
+     *     why route 1 must win whenever the prefix is present: a message
+     *     that STARTS with `SQL:` but yields no segment returns null, never
+     *     a fallback read of the echoed statement.
+     */
+    private static function errorSegment(string $message, ?string $statement = null): ?string
+    {
+        if ($statement !== null) {
+            $prefix = 'SQL:' . $statement . ' ';
+            if (str_starts_with($message, $prefix)) {
+                $rest = substr($message, strlen($prefix));
+
+                return str_starts_with($rest, 'SQLSTATE[') ? $rest : null;
+            }
+        }
+
+        $pos = strrpos($message, 'SQLSTATE[');
+        if ($pos !== false) {
+            return substr($message, $pos);
+        }
+
+        if (str_starts_with($message, 'SQL:')) {
+            return null;
+        }
+
+        return $message;
+    }
+
+    /**
+     * Parse the MySQL error number out of a driver error segment, e.g.
+     * `SQLSTATE[42S21]: Column already exists: 1060 Duplicate column
+     * name 'v'` → 1060. The errno cannot come from the exception object:
+     * both rethrow sites build a fresh `PDOException` with `(int)`-cast
+     * SQLSTATE and no `errorInfo` (server-verified by execution), so the
+     * rendered segment is the only place the code survives. Returns null
+     * for segments without a parseable code (connection failures), where
+     * the caller falls through to the phrase test.
+     */
+    private static function driverErrorCode(string $segment): ?int
+    {
+        if (preg_match('/^SQLSTATE\[[^\]]*\]:\s*[^:]*:\s*(\d+)\b/', $segment, $m) !== 1) {
+            return null;
+        }
+
+        return (int) $m[1];
     }
 }
