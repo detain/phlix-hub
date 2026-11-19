@@ -530,7 +530,8 @@ final class RequestManagerTest extends TestCase
     {
         self::assertFalse(
             (new \ReflectionClass(RequestManager::class))->hasMethod('affectedRows'),
-            'The retired RequestManager affectedRows twin has re-materialised; shared WriteResult::affectedRows is the sole narrowing.',
+            'The retired RequestManager affectedRows twin has re-materialised; '
+            . 'shared WriteResult::affectedRows is the sole narrowing.',
         );
     }
 

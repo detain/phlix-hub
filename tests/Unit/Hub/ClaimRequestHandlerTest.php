@@ -608,7 +608,8 @@ final class ClaimRequestHandlerTest extends TestCase
     {
         self::assertFalse(
             (new \ReflectionClass(ClaimRequestHandler::class))->hasMethod('affectedRows'),
-            'The retired ClaimRequestHandler affectedRows twin has re-materialised; shared WriteResult::affectedRows is the sole narrowing.',
+            'The retired ClaimRequestHandler affectedRows twin has re-materialised; '
+            . 'shared WriteResult::affectedRows is the sole narrowing.',
         );
         self::assertSame(0, WriteResult::affectedRows('0'));
     }

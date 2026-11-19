@@ -190,11 +190,16 @@ final class MysqlErrorTest extends TestCase
             new RecursiveDirectoryIterator($root . '/src', RecursiveDirectoryIterator::SKIP_DOTS)
         );
         foreach ($walk as $file) {
+            /** @var \SplFileInfo $file */
             if (!$file->isFile() || $file->getExtension() !== 'php') {
                 continue;
             }
             $visited++;
-            if (preg_match('/\b(?:final\s+|abstract\s+)?(?:class|interface|trait|enum)\s+MysqlError\b/', (string) file_get_contents($file->getPathname())) === 1) {
+            $declaresTwin = preg_match(
+                '/\b(?:final\s+|abstract\s+)?(?:class|interface|trait|enum)\s+MysqlError\b/',
+                (string) file_get_contents($file->getPathname()),
+            ) === 1;
+            if ($declaresTwin) {
                 $declared[] = str_replace($root . '/', '', $file->getPathname());
             }
         }

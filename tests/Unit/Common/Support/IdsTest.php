@@ -161,7 +161,7 @@ final class IdsTest extends TestCase
      */
     public function testTheMintBodiesDelegateToTheSharedKernel(): void
     {
-        $source = (string) file_get_contents((new \ReflectionClass(Ids::class))->getFileName());
+        $source = (string) file_get_contents((string) (new \ReflectionClass(Ids::class))->getFileName());
         self::assertNotSame('', $source, 'the Ids source scan must never run vacuously.');
         self::assertStringContainsString('return Uuid::v4();', $source);
         self::assertStringContainsString('return Uuid::randomHex($bytes);', $source);
@@ -227,20 +227,30 @@ final class IdsTest extends TestCase
             self::assertIsString($pattern, $fqcn . ' must keep its UUID_PATTERN boundary const.');
             self::assertSame(1, preg_match($pattern, $canonical), $fqcn . ' must accept canonical v4.');
             foreach ($widestThanShared as $label => $id) {
-                self::assertSame(1, preg_match($pattern, $id), $fqcn . ' must still accept: ' . $label . ' (R3 delta vs shared).');
+                self::assertSame(
+                    1,
+                    preg_match($pattern, $id),
+                    $fqcn . ' must still accept: ' . $label . ' (R3 delta vs shared).',
+                );
             }
             foreach ($neverAccepted as $label => $id) {
                 self::assertSame(0, preg_match($pattern, $id), $fqcn . ' must reject: ' . $label . '.');
             }
             foreach ($widestThanShared as $label => $id) {
-                self::assertFalse(Uuid::isV4($id), 'shared validator is narrower on: ' . $label . ' (the frozen delta).');
+                self::assertFalse(
+                    Uuid::isV4($id),
+                    'shared validator is narrower on: ' . $label . ' (the frozen delta).',
+                );
             }
         }
 
         $isVariable = new \ReflectionMethod(Application::class, 'isVariableSegment');
         self::assertTrue((bool) $isVariable->invoke(null, $canonical));
         foreach ($widestThanShared as $label => $id) {
-            self::assertTrue((bool) $isVariable->invoke(null, $id), 'Application::isVariableSegment must still accept: ' . $label . '.');
+            self::assertTrue(
+                (bool) $isVariable->invoke(null, $id),
+                'Application::isVariableSegment must still accept: ' . $label . '.',
+            );
         }
         self::assertFalse((bool) $isVariable->invoke(null, 'health'));
     }
