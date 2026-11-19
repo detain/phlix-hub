@@ -205,6 +205,7 @@
         "tests/Unit/Hub/CookiePolicyOriginLawTest.php": 0.004,
         "tests/Unit/Hub/CookiePolicyProductionInsecureWarnTest.php": 0.003,
         "tests/Unit/Hub/CookiePolicyTest.php": 0.006,
+        "tests/Unit/Hub/CookiePolicyWireParityTest.php": 0.128,
         "tests/Unit/Hub/DeregisterHandlerTest.php": 0.009,
         "tests/Unit/Hub/Dns/StaticZoneManagerTest.php": 0.056,
         "tests/Unit/Hub/DnsAliasManagerTest.php": 0.007,
