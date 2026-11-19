@@ -13,6 +13,7 @@ namespace Phlix\Hub\Http\Controllers;
 
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Http\ControllerErrorFrames;
 use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
@@ -102,7 +103,7 @@ final class AdminUserController
         $id = $params['id'] ?? '';
         $user = $this->users->findById($id);
         if ($user === null) {
-            return $this->notFound();
+            return ControllerErrorFrames::userNotFound();
         }
         return (new Response())->json(['user' => $this->publicUser($user)]);
     }
@@ -191,7 +192,7 @@ final class AdminUserController
         $id = $params['id'] ?? '';
         $existing = $this->users->findById($id);
         if ($existing === null) {
-            return $this->notFound();
+            return ControllerErrorFrames::userNotFound();
         }
 
         $body = $request->body;
@@ -276,7 +277,7 @@ final class AdminUserController
         $id = $params['id'] ?? '';
         $existing = $this->users->findById($id);
         if ($existing === null) {
-            return $this->notFound();
+            return ControllerErrorFrames::userNotFound();
         }
 
         // SH-078 (review hub__webux #7): these are conflicts with the CURRENT
@@ -285,10 +286,10 @@ final class AdminUserController
         // (FederationController's offer_already_responded shape
         // {error: 'Conflict', code, message}). Codes ride unchanged.
         if (($request->userId ?? '') === $id) {
-            return $this->conflict('Cannot delete your own account', 'cannot_delete_self');
+            return ControllerErrorFrames::conflict('cannot_delete_self', 'Cannot delete your own account');
         }
         if ($this->intFlag($existing, 'is_admin') === 1 && $this->users->countAdmins() <= 1) {
-            return $this->conflict('Cannot delete the last admin', 'last_admin');
+            return ControllerErrorFrames::conflict('last_admin', 'Cannot delete the last admin');
         }
 
         $this->users->delete($id);
@@ -309,7 +310,7 @@ final class AdminUserController
         $id = $params['id'] ?? '';
         $existing = $this->users->findById($id);
         if ($existing === null) {
-            return $this->notFound();
+            return ControllerErrorFrames::userNotFound();
         }
 
         $isAdmin = filter_var($request->body['is_admin'] ?? false, FILTER_VALIDATE_BOOLEAN);
@@ -317,10 +318,10 @@ final class AdminUserController
 
         // SH-078 #7: state conflicts answer 409 (see delete() for the law).
         if (!$isAdmin && $actingId === $id) {
-            return $this->conflict('Cannot demote yourself', 'cannot_demote_self');
+            return ControllerErrorFrames::conflict('cannot_demote_self', 'Cannot demote yourself');
         }
         if (!$isAdmin && $this->intFlag($existing, 'is_admin') === 1 && $this->users->countAdmins() <= 1) {
-            return $this->conflict('Cannot demote the last admin', 'last_admin');
+            return ControllerErrorFrames::conflict('last_admin', 'Cannot demote the last admin');
         }
 
         $this->users->setAdmin($id, $isAdmin);
@@ -341,7 +342,7 @@ final class AdminUserController
         $id = $params['id'] ?? '';
         $existing = $this->users->findById($id);
         if ($existing === null) {
-            return $this->notFound();
+            return ControllerErrorFrames::userNotFound();
         }
 
         $newPassword = $this->generatePassword();
@@ -460,32 +461,6 @@ final class AdminUserController
         return is_numeric($value) && (int) $value !== 0 ? 1 : 0;
     }
 
-    /**
-     * 404 — user not found.
-     */
-    private function notFound(): Response
-    {
-        return (new Response())->status(404)->json([
-            'error' => 'User not found',
-            'code'  => 'user_not_found',
-        ]);
-    }
-
-    /**
-     * 409 — a conflict with the resource's current state
-     * (`{ error, code, message }`), mirroring the hub's federation-conflict
-     * shape (review hub__webux #7). The prose lives in `message`; `error`
-     * carries the status-family word, exactly like the shipped
-     * offer_already_responded frame.
-     */
-    private function conflict(string $message, string $code): Response
-    {
-        return (new Response())->status(409)->json([
-            'error'   => 'Conflict',
-            'code'    => $code,
-            'message' => $message,
-        ]);
-    }
 
     /**
      * 400 — field validation failure(s) (`{ error, code, field_errors }`).

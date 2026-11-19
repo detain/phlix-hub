@@ -14,6 +14,7 @@ namespace Phlix\Hub\Http\Controllers;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Hub\RelaySessionManager;
+use Phlix\Hub\Http\ControllerErrorFrames;
 use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
@@ -102,7 +103,7 @@ final class UserQuotaController
     {
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
-            return $this->unauthorized();
+            return ControllerErrorFrames::unauthorized();
         }
 
         return (new Response())->json($this->bandwidthPayload($userId));
@@ -123,7 +124,7 @@ final class UserQuotaController
 
         $targetId = $params['id'] ?? '';
         if ($targetId === '') {
-            return $this->missingUserId();
+            return ControllerErrorFrames::missingUserId();
         }
 
         return (new Response())->json($this->bandwidthPayload($targetId));
@@ -148,7 +149,7 @@ final class UserQuotaController
 
         $targetId = $params['id'] ?? '';
         if ($targetId === '') {
-            return $this->missingUserId();
+            return ControllerErrorFrames::missingUserId();
         }
 
         $body = $request->body;
@@ -218,7 +219,7 @@ final class UserQuotaController
 
         $targetId = $params['id'] ?? '';
         if ($targetId === '') {
-            return $this->missingUserId();
+            return ControllerErrorFrames::missingUserId();
         }
 
         $body = $request->body;
@@ -329,7 +330,7 @@ final class UserQuotaController
     {
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
-            return $this->unauthorized();
+            return ControllerErrorFrames::unauthorized();
         }
         if ($this->users->findAdminById($userId) === null) {
             $this->audit->logPermissionDenied($userId, 'admin.user_quota', $request->method);
@@ -341,21 +342,6 @@ final class UserQuotaController
         return null;
     }
 
-    private function unauthorized(): Response
-    {
-        return (new Response())->status(401)->json([
-            'error' => 'Unauthorized',
-            'code'  => 'auth.required',
-        ]);
-    }
-
-    private function missingUserId(): Response
-    {
-        return (new Response())->status(400)->json([
-            'error' => 'Bad Request',
-            'code'  => 'missing_user_id',
-        ]);
-    }
 
     private function invalidField(string $field): Response
     {

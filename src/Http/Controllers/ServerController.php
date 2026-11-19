@@ -17,6 +17,7 @@ use Phlix\Hub\Hub\HeartbeatHandler;
 use Phlix\Hub\Hub\RenewHandler;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
+use Phlix\Hub\Http\ControllerErrorFrames;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Shared\Hub\HeartbeatDto;
@@ -252,12 +253,7 @@ final class ServerController
                 'SERVER_NOT_FOUND',
                 ['message' => 'Server not found.'],
             ),
-            default => (new Response())->error(
-                500,
-                'hub.internal_error',
-                'HUB_INTERNAL_ERROR',
-                ['message' => 'An unexpected error occurred.'],
-            ),
+            default => ControllerErrorFrames::internalError(),
         };
     }
 }

@@ -398,16 +398,6 @@ final class ControllerRequestsTest extends TestCase
      */
     private function drive(string $class, string $method, Request $request): Response
     {
-        if ($class === MeController::class) {
-            // The only __invoke-shaped entry point in the guard family.
-            $me = new MeController(
-                $this->createMock(AuthManager::class),
-                $this->createMock(ServerInfoHandler::class),
-            );
-
-            return $me($request);
-        }
-
         $controller = match ($class) {
             AdminUpdatesController::class => new AdminUpdatesController(
                 // Final collaborator: real service over mock seams (existing
@@ -477,8 +467,10 @@ final class ControllerRequestsTest extends TestCase
             default => $this->fail('unknown pin target ' . $class),
         };
 
-        // Every remaining entry point takes (Request, params); the guards are
-        // the first statement, so the empty params are never read.
+        // Every entry point drives as (Request, params): the guards are the
+        // first statement, so the empty params are never read; the one
+        // Request-only signature (MeController::__invoke) simply ignores the
+        // surplus argument, which PHP permits for user-defined methods.
         return $controller->{$method}($request, []);
     }
 }

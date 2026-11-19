@@ -14,6 +14,7 @@ namespace Phlix\Hub\Http\Controllers;
 use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Http\ControllerErrorFrames;
 use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
@@ -329,7 +330,7 @@ final class McpController
             // No limiter bucket is minted for a credential-less request: this
             // 401 is cheaper than a limiter write, and letting an anonymous
             // flood create rows would turn the limiter into the amplifier.
-            return $this->unauthorized('auth.required', 'An MCP personal access token is required.');
+            return ControllerErrorFrames::mcpUnauthorized('auth.required', 'An MCP personal access token is required.');
         }
 
         $key = self::RATE_LIMIT_KEY_PREFIX . $request->getTrustedClientIp();
@@ -350,7 +351,7 @@ final class McpController
                 'shaped_as_mcp_token' => McpTokenService::looksLikeMcpToken($presented),
             ]);
 
-            return $this->unauthorized(
+            return ControllerErrorFrames::mcpUnauthorized(
                 'auth.invalid_token',
                 McpTokenService::looksLikeMcpToken($presented)
                     ? 'This MCP token is unknown, expired, or revoked.'
@@ -365,21 +366,6 @@ final class McpController
         return $token;
     }
 
-    /**
-     * The 401 body, with the `WWW-Authenticate` challenge an MCP client looks
-     * for.
-     */
-    private function unauthorized(string $code, string $message): Response
-    {
-        return (new Response())
-            ->status(401)
-            ->header('WWW-Authenticate', 'Bearer realm="phlix-hub-mcp"')
-            ->json([
-                'error' => 'Unauthorized',
-                'code' => $code,
-                'message' => $message,
-            ]);
-    }
 
     // ------------------------------------------------------------------
     // JSON-RPC

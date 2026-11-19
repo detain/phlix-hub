@@ -15,6 +15,7 @@ use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Http\ControllerErrorFrames;
 use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\QuotaFrames;
 use Phlix\Hub\Http\Request;
@@ -68,7 +69,7 @@ final class RequestController
     {
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
-            return $this->unauthorized();
+            return ControllerErrorFrames::unauthorized();
         }
 
         $body = $request->body;
@@ -176,7 +177,7 @@ final class RequestController
     {
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
-            return $this->unauthorized();
+            return ControllerErrorFrames::unauthorized();
         }
 
         /** @var mixed $statusRaw */
@@ -204,7 +205,7 @@ final class RequestController
     {
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
-            return $this->unauthorized();
+            return ControllerErrorFrames::unauthorized();
         }
 
         $requestId = $params['id'] ?? '';
@@ -241,7 +242,7 @@ final class RequestController
     {
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
-            return $this->unauthorized();
+            return ControllerErrorFrames::unauthorized();
         }
 
         $requestId = $params['id'] ?? '';
@@ -457,7 +458,7 @@ final class RequestController
     {
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
-            return $this->unauthorized();
+            return ControllerErrorFrames::unauthorized();
         }
         $admin = $this->users->findAdminById($userId);
         if ($admin === null) {
@@ -470,13 +471,6 @@ final class RequestController
         return null;
     }
 
-    private function unauthorized(): Response
-    {
-        return (new Response())->status(401)->json([
-            'error' => 'Unauthorized',
-            'code'  => 'auth.required',
-        ]);
-    }
 
     /**
      * The M-HUB-23 create budget: {@see \Phlix\Hub\Common\RateLimit\RateLimitProfiles::CLIENT_REQUEST_CREATE},

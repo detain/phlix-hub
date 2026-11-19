@@ -18,6 +18,7 @@ use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Hub\InviteLink;
 use Phlix\Hub\Hub\InviteLinkHandler;
 use Phlix\Hub\Hub\LibraryShare;
+use Phlix\Hub\Http\ControllerErrorFrames;
 use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\QuotaFrames;
@@ -28,7 +29,7 @@ use Phlix\Hub\Http\Response;
  *
  * Every failure here is shown to a signed-in member (or an invitee standing
  * at the accept-invite page) in the portal, so every envelope goes through
- * {@see self::memberError()} — human sentence in `error`, registered machine
+ * {@see ControllerErrorFrames::memberError()} — human sentence in `error`, registered machine
  * code in `code`, `message` mirroring `error`.
  *
  * @package Phlix\Hub\Http\Controllers
@@ -41,14 +42,6 @@ final class InviteLinkController
      * existed (defaults-preservation pin).
      */
     private const BOOT_DEFAULT_EXPIRY_SECONDS = 604800;
-
-    /**
-     * Fail-safe copy for pass-through arms whose handler exception carries no
-     * message at all. The pinned portal client renders the `error` field
-     * verbatim even when it is the empty string, so the wire must never ship
-     * one (review hub__casualgamer M5).
-     */
-    private const GENERIC_PROBLEM = 'Something went wrong on the hub. Please try again.';
 
     /**
      * @param InviteLinkHandler $handler               Invite link handler.
@@ -74,34 +67,6 @@ final class InviteLinkController
         private readonly ?RateLimiterInterface $redeemLimiter = null,
         private readonly ?AuditLogger $audit = null,
     ) {
-    }
-
-    /**
-     * Canonical member-facing error envelope.
-     *
-     * The portal's pinned client (`extractError` in @phlix/ui
-     * `src/api/client.ts`) checks `error` before `message`, so the human
-     * sentence lives in `error`; `code` carries the registered
-     * `@phlix/contracts` machine code (contracts law — stable codes, free
-     * text). `message` mirrors `error` so the same sentence renders under
-     * either client precedence. Whitespace-only pass-through messages are
-     * normalized to {@see self::GENERIC_PROBLEM}.
-     *
-     * @param int    $status  HTTP status code.
-     * @param string $code    Registered stable machine code.
-     * @param string $message Human-facing sentence (pass-through allowed).
-     * @param array<string, scalar> $extra Additional wire keys merged AFTER
-     *                                      `message` (M-HUB-35 quota
-     *                                      discriminators).
-     */
-    private function memberError(int $status, string $code, string $message, array $extra = []): Response
-    {
-        $human = trim($message);
-        if ($human === '') {
-            $human = self::GENERIC_PROBLEM;
-        }
-
-        return (new Response())->error($status, $code, $human, ['message' => $human] + $extra);
     }
 
     /**
@@ -160,12 +125,12 @@ final class InviteLinkController
     {
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
-            return $this->memberError(401, 'auth.required', 'Sign in to create invite links');
+            return ControllerErrorFrames::memberError(401, 'auth.required', 'Sign in to create invite links');
         }
 
         $body = $request->body;
         if ($body === []) {
-            return $this->memberError(400, 'invalid_body', 'A request body is required');
+            return ControllerErrorFrames::memberError(400, 'invalid_body', 'A request body is required');
         }
 
         /** @var mixed $serverId */
@@ -180,7 +145,11 @@ final class InviteLinkController
         $expiresIn = $body['expires_in'] ?? $this->defaultExpirySeconds();
 
         if (!is_string($serverId) || $serverId === '') {
-            return $this->memberError(400, 'missing_server_id', 'Select which server the invite is for');
+            return ControllerErrorFrames::memberError(
+                400,
+                'missing_server_id',
+                'Select which server the invite is for',
+            );
         }
 
         $expiresAt = null;
@@ -219,12 +188,12 @@ final class InviteLinkController
         } catch (InvalidArgumentException $e) {
             $code = $e->getCode();
             if ($code === 403) {
-                return $this->memberError(403, 'not_server_owner', 'You do not own this server');
+                return ControllerErrorFrames::memberError(403, 'not_server_owner', 'You do not own this server');
             }
             if ($code === 400) {
-                return $this->memberError(400, 'invalid_request', $e->getMessage());
+                return ControllerErrorFrames::memberError(400, 'invalid_request', $e->getMessage());
             }
-            return $this->memberError(500, 'unknown_error', self::GENERIC_PROBLEM);
+            return ControllerErrorFrames::memberError(500, 'unknown_error', ControllerErrorFrames::GENERIC_PROBLEM);
         }
     }
 
@@ -235,7 +204,7 @@ final class InviteLinkController
     {
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
-            return $this->memberError(401, 'auth.required', 'Sign in to see your invite links');
+            return ControllerErrorFrames::memberError(401, 'auth.required', 'Sign in to see your invite links');
         }
 
         $links = $this->handler->listForOwner($userId);
@@ -254,12 +223,16 @@ final class InviteLinkController
     {
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
-            return $this->memberError(401, 'auth.required', 'Sign in to revoke an invite link');
+            return ControllerErrorFrames::memberError(401, 'auth.required', 'Sign in to revoke an invite link');
         }
 
         $linkId = $params['id'] ?? '';
         if ($linkId === '') {
-            return $this->memberError(400, 'missing_link_id', 'Select the invite link you want to revoke');
+            return ControllerErrorFrames::memberError(
+                400,
+                'missing_link_id',
+                'Select the invite link you want to revoke',
+            );
         }
 
         try {
@@ -268,12 +241,16 @@ final class InviteLinkController
         } catch (InvalidArgumentException $e) {
             $code = $e->getCode();
             if ($code === 404) {
-                return $this->memberError(404, 'invite_link_not_found', 'That invite link no longer exists');
+                return ControllerErrorFrames::memberError(
+                    404,
+                    'invite_link_not_found',
+                    'That invite link no longer exists',
+                );
             }
             if ($code === 403) {
-                return $this->memberError(403, 'not_link_owner', 'You do not own this invite link');
+                return ControllerErrorFrames::memberError(403, 'not_link_owner', 'You do not own this invite link');
             }
-            return $this->memberError(500, 'unknown_error', self::GENERIC_PROBLEM);
+            return ControllerErrorFrames::memberError(500, 'unknown_error', ControllerErrorFrames::GENERIC_PROBLEM);
         }
     }
 
@@ -287,12 +264,12 @@ final class InviteLinkController
     {
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
-            return $this->memberError(401, 'auth.required', 'Sign in to accept this invite');
+            return ControllerErrorFrames::memberError(401, 'auth.required', 'Sign in to accept this invite');
         }
 
         $token = $params['token'] ?? '';
         if ($token === '') {
-            return $this->memberError(400, 'missing_token', 'This invite link is missing its token');
+            return ControllerErrorFrames::memberError(400, 'missing_token', 'This invite link is missing its token');
         }
 
         // M-HUB-21: budget AFTER the cheap shape gates, BEFORE any DB work.
@@ -311,7 +288,7 @@ final class InviteLinkController
                 // M-HUB-35: converges on the same share choke as share
                 // create, so it ships the same frame — discriminators and
                 // all.
-                return $this->memberError(
+                return ControllerErrorFrames::memberError(
                     409,
                     'quota.exceeded',
                     QuotaFrames::COLLABORATORS_TEXT,
@@ -319,21 +296,29 @@ final class InviteLinkController
                 );
             }
             if ($code === 400) {
-                return $this->memberError(400, 'invalid_invite', $e->getMessage());
+                return ControllerErrorFrames::memberError(400, 'invalid_invite', $e->getMessage());
             }
             if ($code === 404) {
-                return $this->memberError(404, 'invite_link_not_found', 'That invite link no longer exists');
+                return ControllerErrorFrames::memberError(
+                    404,
+                    'invite_link_not_found',
+                    'That invite link no longer exists',
+                );
             }
             if ($code === 410) {
-                return $this->memberError(410, 'invite_expired_or_exhausted', $e->getMessage());
+                return ControllerErrorFrames::memberError(410, 'invite_expired_or_exhausted', $e->getMessage());
             }
             if ($code === 409) {
                 // Redeemer already holds an active share for this exact tuple
                 // (multi-use invite redeemed twice) — a conflict, not a 500.
-                return $this->memberError(409, 'share_exists', 'This library is already shared with you');
+                return ControllerErrorFrames::memberError(
+                    409,
+                    'share_exists',
+                    'This library is already shared with you',
+                );
             }
 
-            return $this->memberError(500, 'unknown_error', self::GENERIC_PROBLEM);
+            return ControllerErrorFrames::memberError(500, 'unknown_error', ControllerErrorFrames::GENERIC_PROBLEM);
         }
     }
 }

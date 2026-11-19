@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Http\Controllers;
 
 use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Http\ControllerErrorFrames;
 use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
@@ -86,7 +87,7 @@ final class McpTokenController
     {
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
-            return self::unauthorized();
+            return ControllerErrorFrames::unauthorized();
         }
 
         return (new Response())->json([
@@ -123,7 +124,7 @@ final class McpTokenController
     {
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
-            return self::unauthorized();
+            return ControllerErrorFrames::unauthorized();
         }
 
         /** @var mixed $rawName */
@@ -171,7 +172,7 @@ final class McpTokenController
     {
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
-            return self::unauthorized();
+            return ControllerErrorFrames::unauthorized();
         }
 
         $tokenId = $params['id'] ?? '';
@@ -228,16 +229,5 @@ final class McpTokenController
             McpScopes::all(),
             static fn (string $scope): bool => $scope !== McpScopes::PLAYBACK_CONTROL,
         ));
-    }
-
-    /**
-     * The shared 401 envelope.
-     */
-    private static function unauthorized(): Response
-    {
-        return (new Response())->status(401)->json([
-            'error' => 'Unauthorized',
-            'code' => 'auth.required',
-        ]);
     }
 }

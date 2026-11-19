@@ -15,6 +15,7 @@ use InvalidArgumentException;
 use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Auth\CurrentPasswordInvalidException;
 use Phlix\Hub\Auth\RateLimitException;
+use Phlix\Hub\Http\ControllerErrorFrames;
 use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
@@ -62,12 +63,9 @@ final class UserPasswordController
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
             // Defensive: AuthMiddleware should have caught this. Return the
-            // same 401 frame as MeController :46-52 so the surface is
+            // same auth-required 401 frame as MeController so the surface is
             // consistent even if the group gate is ever mis-wired.
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'code'  => 'auth.required',
-            ]);
+            return ControllerErrorFrames::unauthorized();
         }
 
         $currentPassword = ControllerRequests::stringField($request, 'current_password');

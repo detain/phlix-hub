@@ -15,6 +15,7 @@ use Phlix\Hub\Hub\HeartbeatHandler;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Hub\TlsCertificateManager;
+use Phlix\Hub\Http\ControllerErrorFrames;
 use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
@@ -71,10 +72,7 @@ final class ServerDetailController
     {
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'code'  => 'auth.required',
-            ]);
+            return ControllerErrorFrames::unauthorized();
         }
 
         $serverId = $params['id'] ?? '';

@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Http\Controllers;
 
 use Phlix\Hub\Hub\LibrarySharingHandler;
+use Phlix\Hub\Http\ControllerErrorFrames;
 use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
@@ -42,10 +43,7 @@ final class LibraryController
     {
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'code' => 'auth.required',
-            ]);
+            return ControllerErrorFrames::unauthorized();
         }
 
         $serverId = $request->query['server_id'] ?? '';

@@ -15,6 +15,7 @@ use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Hub\ClaimRequestHandler;
+use Phlix\Hub\Http\ControllerErrorFrames;
 use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
 use Phlix\Hub\Http\QuotaFrames;
@@ -353,12 +354,7 @@ final class ServerClaimController
                 'Bad Request',
                 ['message' => 'Server name must be 1-255 bytes; version must be 1-32 bytes'],
             ),
-            default => (new Response())->error(
-                500,
-                'hub.internal_error',
-                'HUB_INTERNAL_ERROR',
-                ['message' => 'An unexpected error occurred.'],
-            ),
+            default => ControllerErrorFrames::internalError(),
         };
     }
 }

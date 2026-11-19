@@ -16,6 +16,7 @@ use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Http\ControllerErrorFrames;
 use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
@@ -73,10 +74,7 @@ final class ClientRelayTokenController
     {
         $userId = ControllerRequests::authenticatedUserId($request);
         if ($userId === null) {
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'code' => 'auth.required',
-            ]);
+            return ControllerErrorFrames::unauthorized();
         }
 
         // M-HUB-22: budget BEFORE any ownership read — over-budget traffic

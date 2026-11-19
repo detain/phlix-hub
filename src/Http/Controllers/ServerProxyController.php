@@ -16,6 +16,7 @@ use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Http\ControllerErrorFrames;
 use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\ConnectionResponseSink;
 use Phlix\Hub\Relay\RelayProxyBridge;
@@ -995,7 +996,7 @@ final class ServerProxyController
             // HB-4.6b LANDMINE: unauthenticated floods take this cheap 401 —
             // NOT a limiter write. The proxy limiter is deliberately placed
             // AFTER this auth gate so an unauthed request never mints a bucket.
-            return (new Response())->error(401, 'auth.required', 'Unauthorized');
+            return ControllerErrorFrames::unauthorized();
         }
 
         // HB-4.6b: rate limit AFTER the auth gate, keyed by the proven user id
