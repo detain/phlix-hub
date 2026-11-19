@@ -232,14 +232,9 @@ final class AuthController
     {
         $retryAfter = $e->retryAfterSeconds();
 
-        return (new Response())
-            ->status(429)
-            ->header('Retry-After', (string) $retryAfter)
-            ->json([
-                'error' => 'Too Many Requests',
-                'code' => 'rate_limited',
-                'message' => RateLimitException::retryAfterMessage($retryAfter),
-            ]);
+        return Response::rateLimited($retryAfter, [
+            'message' => RateLimitException::retryAfterMessage($retryAfter),
+        ]);
     }
 
     /**

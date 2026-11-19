@@ -111,10 +111,7 @@ final class ServerController
             // Precede the InvalidArgumentException mapping so a limiter trip
             // maps to 429 + Retry-After rather than being folded into a
             // generic error by mapError(). WS surfaces do NOT reach here.
-            return (new Response())
-                ->status(429)
-                ->header('Retry-After', (string) $e->retryAfterSeconds())
-                ->json(['error' => 'Too Many Requests', 'code' => 'rate_limited']);
+            return Response::rateLimited($e->retryAfterSeconds());
         } catch (\InvalidArgumentException $e) {
             return $this->mapError($e->getMessage());
         }

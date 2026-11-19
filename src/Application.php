@@ -272,13 +272,13 @@ final class Application
      * exercised directly by tests so the proxy/jwks central-mapping path (whose
      * controllers throw rather than map locally) has coverage. HTTP-only — the
      * WS surfaces reject with a close 1013 and never call this.
+     *
+     * W4 PREP: the frame is composed once in {@see Response::rateLimited()} —
+     * the hub-side seam mirroring the server's, byte-identical per A-04/M-16.
      */
     public static function rateLimitResponse(RateLimitException $e): Response
     {
-        return (new Response())
-            ->status(429)
-            ->header('Retry-After', (string) $e->retryAfterSeconds())
-            ->json(['error' => 'Too Many Requests', 'code' => 'rate_limited']);
+        return Response::rateLimited($e->retryAfterSeconds());
     }
 
     /**

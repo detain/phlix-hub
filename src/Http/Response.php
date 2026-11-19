@@ -231,6 +231,60 @@ class Response
     }
 
     /**
+     * Canonical `{error, code}` envelope body for a tripped limiter (M-16).
+     *
+     * W4 PREP: the single home of the two literals the hub once hand-rolled at
+     * five dispatch/catch sites ({@see \Phlix\Hub\Application::rateLimitResponse()},
+     * ServerController heartbeat catch, AlexaSignatureMiddleware, and the two
+     * auth throttles' additive 3-key frames). Byte-identical to the server's
+     * twin seam (A-04 / M-16): the W3 shared `Envelope` adoption then becomes a
+     * mechanical swap of this method's body.
+     *
+     * @return array<string, string>
+     */
+    private static function rateLimitedBody(): array
+    {
+        return ['error' => 'Too Many Requests', 'code' => 'rate_limited'];
+    }
+
+    /**
+     * The single `Retry-After` formatter for limiter replies.
+     *
+     * The exception/state layers already clamp the value non-negative; the
+     * wire law (RFC 9110 §10.2.3 delta-seconds) is a plain integer string.
+     */
+    private static function retryAfterHeader(int $retryAfterSeconds): string
+    {
+        return (string) $retryAfterSeconds;
+    }
+
+    /**
+     * The canonical HTTP 429 envelope: status + `Retry-After` + `{error, code}`.
+     *
+     * `Retry-After` rides BEFORE the JSON encode so the header order on the
+     * wire stays `Retry-After`, `Content-Type`, `Cache-Control` — the shape the
+     * corpus pins ({@see \Phlix\Hub\Tests\Unit\Http\EnvelopeWireCorpusTest}).
+     * `$extra` merges additive keys after `error`/`code` (left-biased union,
+     * exactly like {@see self::error()}) — the auth throttles use it for their
+     * `message` sentence (HUB-19) without re-hand-rolling the frame.
+     *
+     * @param int                  $retryAfterSeconds Seconds until the window resets.
+     * @param array<string, mixed> $extra             Additive top-level keys.
+     *
+     * @return self
+     *
+     * @throws \JsonException If encoding fails.
+     */
+    public static function rateLimited(int $retryAfterSeconds, array $extra = []): self
+    {
+        $response = (new self())
+            ->status(429)
+            ->header('Retry-After', self::retryAfterHeader($retryAfterSeconds));
+
+        return $response->json(self::rateLimitedBody() + $extra);
+    }
+
+    /**
      * HTML response shortcut.
      *
      * @param string   $html       HTML body.

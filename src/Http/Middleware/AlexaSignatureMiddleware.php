@@ -290,10 +290,7 @@ final class AlexaSignatureMiddleware
             self::RATE_LIMIT_KEY_PREFIX . $request->getTrustedClientIp(),
         );
         if ($state->limited) {
-            return (new Response())
-                ->status(429)
-                ->header('Retry-After', (string) $state->retryAfter(time()))
-                ->json(['error' => 'Too Many Requests', 'code' => 'rate_limited']);
+            return Response::rateLimited($state->retryAfter(time()));
         }
 
         try {

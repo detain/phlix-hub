@@ -15,6 +15,7 @@ use InvalidArgumentException;
 use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Auth\CurrentPasswordInvalidException;
 use Phlix\Hub\Auth\RateLimitException;
+use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 
@@ -58,8 +59,8 @@ final class UserPasswordController
      */
     public function changePassword(Request $request): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
+        $userId = ControllerRequests::authenticatedUserId($request);
+        if ($userId === null) {
             // Defensive: AuthMiddleware should have caught this. Return the
             // same 401 frame as MeController :46-52 so the surface is
             // consistent even if the group gate is ever mis-wired.
@@ -136,13 +137,8 @@ final class UserPasswordController
     {
         $retryAfter = $e->retryAfterSeconds();
 
-        return (new Response())
-            ->status(429)
-            ->header('Retry-After', (string) $retryAfter)
-            ->json([
-                'error' => 'Too Many Requests',
-                'code' => 'rate_limited',
-                'message' => RateLimitException::retryAfterMessage($retryAfter),
-            ]);
+        return Response::rateLimited($retryAfter, [
+            'message' => RateLimitException::retryAfterMessage($retryAfter),
+        ]);
     }
 }
