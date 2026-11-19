@@ -22,6 +22,7 @@ use Phlix\Hub\Common\Support\ProcessLocalTopology;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Hub\Stats\Metrics\MetricsFlushService;
+use Phlix\Shared\Support\Json;
 use Psr\Container\ContainerInterface;
 use Throwable;
 use Workerman\Connection\TcpConnection;
@@ -34,7 +35,6 @@ use function is_array;
 use function is_file;
 use function is_readable;
 use function is_string;
-use function json_decode;
 use function spl_object_id;
 use function time;
 
@@ -681,10 +681,21 @@ final class RelayWorker
         $connId = spl_object_id($connection);
 
         try {
-            /** @var array<string, mixed>|null $hello */
-            $hello = json_decode($data, true, 2, JSON_THROW_ON_ERROR);
+            /** @var mixed $hello */
+            $hello = Json::decodeInbound($data, 2);
         } catch (Throwable $e) {
+            // The seam rethrows ONLY the depth-exceeded class (malformed is its
+            // documented null arm below), so this parser_error now names the
+            // structural failure specifically.
             $this->rejectHelloBeforeTunnel($connection, 'invalid_hello', 'json_decode_failed', $e->getMessage());
+            return;
+        }
+
+        if ($hello === null) {
+            // Malformed bytes: same wire close reason and same shape-failure
+            // class as the historical throw arm; the seam carries no parser
+            // message for this class, so the log line loses only that field.
+            $this->rejectHelloBeforeTunnel($connection, 'invalid_hello', 'json_decode_failed');
             return;
         }
 

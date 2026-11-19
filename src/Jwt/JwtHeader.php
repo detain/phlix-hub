@@ -13,6 +13,7 @@ namespace Phlix\Hub\Jwt;
 
 use JsonException;
 use Phlix\Shared\Security\Base64Url;
+use Phlix\Shared\Support\Json;
 
 /**
  * Parses JWT header bytes without validating the token signature.
@@ -24,7 +25,11 @@ use Phlix\Shared\Security\Base64Url;
  *
  * The segment decode is the shared {@see Base64Url} STRICT arm since wave
  * S2 — out-of-alphabet input collapses to `''`, which the JSON parse below
- * rejects exactly as the historical `false` check did.
+ * rejects exactly as the historical `false` check did. The parse itself rides
+ * the shared inbound seam {@see Json::decodeInbound()} under the documented
+ * depth-2 header cap: malformed bytes take its null arm and an over-deep
+ * header rethrows — both map to "no usable header", i.e. null, exactly as
+ * the historical throw-on-everything call did.
  *
  * @package Phlix\Hub\Jwt
  */
@@ -46,14 +51,18 @@ final class JwtHeader
         }
 
         try {
-            /** @var array<string, mixed> $header */
-            $header = json_decode(Base64Url::decode($parts[0], true), true, 2, JSON_THROW_ON_ERROR);
-            /** @var string|null $kid */
-            $kid = $header['kid'] ?? null;
-
-            return is_string($kid) && $kid !== '' ? $kid : null;
+            /** @var mixed $header */
+            $header = Json::decodeInbound(Base64Url::decode($parts[0], true), 2);
         } catch (JsonException) {
+            // Depth-exceeded arm: the seam's only rethrow class. Historically
+            // every parse-failure class landed here; malformed now arrives as
+            // the null below. Same verdict — an unusable header is null.
             return null;
         }
+
+        /** @var string|null $kid */
+        $kid = is_array($header) ? ($header['kid'] ?? null) : null;
+
+        return is_string($kid) && $kid !== '' ? $kid : null;
     }
 }

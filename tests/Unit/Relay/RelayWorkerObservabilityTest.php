@@ -92,8 +92,14 @@ final class RelayWorkerObservabilityTest extends TestCase
 
     // ---- F-4: HELLO boundary rejects now warn -----------------------------
 
-    public function testHelloJsonDecodeFailureWarnsWithReasonAndParserError(): void
+    public function testHelloJsonDecodeFailureWarnsWithShapeClassAndWireReason(): void
     {
+        // DECODE-ADOPT disclosed flip: the malformed class no longer carries a
+        // `parser_error` field — the shared seam's null arm has no parser
+        // message (JSON_THROW_ON_ERROR leaves json_last_error NONE), and this
+        // lane refuses to fabricate one. Wire bytes are UNCHANGED: same
+        // 'invalid_hello' close reason and same 'json_decode_failed' shape
+        // class. The depth class still carries the parser message (next test).
         $relay = new RelayWorker($this->buildContainer(), 0);
 
         $serverWs = $this->createMock(TcpConnection::class);
@@ -105,8 +111,26 @@ final class RelayWorkerObservabilityTest extends TestCase
         self::assertStringContainsString('Relay: server HELLO rejected before tunnel creation', $log);
         self::assertStringContainsString('"reason":"invalid_hello"', $log);
         self::assertStringContainsString('"shape_failure":"json_decode_failed"', $log);
-        self::assertStringContainsString('parser_error', $log);
+        self::assertStringNotContainsString('parser_error', $log);
         self::assertSame(0, RelayWorker::getActiveConnectionCount());
+    }
+
+    public function testHelloOverDeepJsonWarnsWithTheSeamParserError(): void
+    {
+        // The seam rethrows ONLY the depth class, so when `parser_error`
+        // appears it now names a structural failure specifically — the
+        // exact message stays 'Maximum stack depth exceeded', identical to
+        // the pre-seam behavior for this class.
+        $relay = new RelayWorker($this->buildContainer(), 0);
+
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->expects($this->once())->method('close')->with('invalid_hello');
+
+        $relay->onMessage($serverWs, str_repeat('[', 600) . str_repeat(']', 600));
+
+        $log = $this->capturedLoggerOutput();
+        self::assertStringContainsString('"shape_failure":"json_decode_failed"', $log);
+        self::assertStringContainsString('"parser_error":"Maximum stack depth exceeded"', $log);
     }
 
     public function testHelloScalarJsonWarnsWithNotAnObjectShapeFailure(): void

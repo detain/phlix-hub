@@ -1320,4 +1320,28 @@ final class FederationFrameHandlerTest extends TestCase
         $handler->handleBinaryFrame('hub-1', '', 7); // DISCONNECTED frame type value
         self::addToAssertionCount(1);
     }
+
+    // ---- DECODE-ADOPT: over-depth text frames keep the wire verdict ----
+
+    public function testHandleTextFrameRejectsOverDeepJsonWithTheInvalidJsonPayloadVerdict(): void
+    {
+        // The seam rethrows the depth class; the wire close reason stays the
+        // historical 'Invalid JSON payload' (byte-identical to the pre-seam
+        // throw arm pinned by testHandleTextFrameRejectsInvalidJson above).
+        $deep = str_repeat('[', 600) . str_repeat(']', 600);
+        $result = $this->handler()->handleTextFrame('hub-1', $deep, $this->recordingConnection());
+
+        self::assertSame('Invalid JSON payload', $result);
+    }
+
+    public function testHandleTextFrameRejectsNullLiteralWithTheInvalidJsonPayloadVerdict(): void
+    {
+        // Seam null arm (the `null` literal is indistinguishable from
+        // malformed at the seam contract): same wire verdict as a syntax
+        // error, exactly as the pre-seam plain decode produced (null ->
+        // !is_array -> 'Invalid JSON payload').
+        $result = $this->handler()->handleTextFrame('hub-1', 'null', $this->recordingConnection());
+
+        self::assertSame('Invalid JSON payload', $result);
+    }
 }

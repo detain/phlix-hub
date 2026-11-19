@@ -18,10 +18,10 @@ use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Shared\Relay\RelayFrameType;
+use Phlix\Shared\Support\Json;
 use Throwable;
 use Workerman\Connection\ConnectionInterface;
 
-use function json_decode;
 use function json_encode;
 
 /**
@@ -132,9 +132,15 @@ final class FederationFrameHandler
         }
 
         try {
-            /** @var array<string, mixed>|null $decoded */
-            $decoded = json_decode($jsonPayload, true, 4, JSON_THROW_ON_ERROR);
+            /** @var mixed $decoded */
+            $decoded = Json::decodeInbound($jsonPayload, 4);
         } catch (Throwable) {
+            return 'Invalid JSON payload';
+        }
+
+        if ($decoded === null) {
+            // Malformed bytes: the seam's documented null arm. The wire close
+            // reason stays byte-identical to the historical throw arm.
             return 'Invalid JSON payload';
         }
 
@@ -577,8 +583,8 @@ final class FederationFrameHandler
 
         $reason = 'unknown';
         try {
-            /** @var array<string, mixed>|null $decoded */
-            $decoded = json_decode($payload, true, 2, JSON_THROW_ON_ERROR);
+            /** @var mixed $decoded */
+            $decoded = Json::decodeInbound($payload, 2);
             if (is_array($decoded) && isset($decoded['reason'])) {
                 /** @var mixed $rawReason */
                 $rawReason = $decoded['reason'];
@@ -789,8 +795,8 @@ final class FederationFrameHandler
         }
 
         try {
-            /** @var array<string, mixed>|null $data */
-            $data = json_decode($payload, true, 4, JSON_THROW_ON_ERROR);
+            /** @var mixed $data */
+            $data = Json::decodeInbound($payload, 4);
         } catch (Throwable) {
             return;
         }

@@ -15,13 +15,13 @@ use Phlix\Hub\Federation\FederationConnectionManager;
 use Phlix\Hub\Federation\FederationFrameHandler;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\InvalidFrameTypeException;
+use Phlix\Shared\Support\Json;
 use RuntimeException;
 use Throwable;
 use Workerman\Connection\ConnectionInterface;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Websocket;
 
-use function json_decode;
 use function ord;
 use function spl_object_id;
 
@@ -219,7 +219,7 @@ final class FederationRelayController
         // Otherwise it must parse as a JSON object/array to be handshake text.
         try {
             /** @var mixed $decoded */
-            $decoded = json_decode($data, true, 512, JSON_THROW_ON_ERROR);
+            $decoded = Json::decodeInbound($data);
             return is_array($decoded);
         } catch (Throwable) {
             return false;

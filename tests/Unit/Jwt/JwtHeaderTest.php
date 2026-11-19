@@ -132,4 +132,25 @@ final class JwtHeaderTest extends TestCase
 
         self::assertSame('test-key', $kid);
     }
+
+    public function testKidReturnsNullForMalformedHeaderJson(): void
+    {
+        // DECODE-ADOPT characterization: the seam's malformed arm is null;
+        // the pre-seam throw landed on the same null verdict. No observable
+        // change — this pin locks that.
+        $b64 = static fn (string $s): string => rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
+
+        self::assertNull(JwtHeader::kid($b64('{not json') . '.payload.signature'));
+    }
+
+    public function testKidReturnsNullForOverDeepHeaderSegment(): void
+    {
+        // Depth ceiling 2 is this site's explicit per-site policy, now passed
+        // as the seam's depth argument. Over-deep rethrows and lands on the
+        // same null verdict as before.
+        $b64 = static fn (string $s): string => rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
+        $headerJson = '{"kid":"deep-test","x":{"y":{"z":1}}}';
+
+        self::assertNull(JwtHeader::kid($b64($headerJson) . '.payload.signature'));
+    }
 }

@@ -21,6 +21,7 @@ use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayHttpRequestCodec;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
+use Phlix\Shared\Support\Json;
 use SplObjectStorage;
 use Throwable;
 use Workerman\Connection\TcpConnection;
@@ -30,7 +31,6 @@ use function array_shift;
 use function count;
 use function is_array;
 use function is_string;
-use function json_decode;
 use function json_encode;
 use function microtime;
 use function strlen;
@@ -454,9 +454,12 @@ final class Tunnel implements TunnelInterface
     private function handleHelloFrame(string $data): void
     {
         try {
-            /** @var array<string, mixed>|null $hello */
-            $hello = json_decode($data, true, 2, JSON_THROW_ON_ERROR);
+            /** @var mixed $hello */
+            $hello = Json::decodeInbound($data, 2);
         } catch (\JsonException $e) {
+            // The seam rethrows ONLY the depth-exceeded class; malformed is its
+            // documented null arm and falls through to the not-an-object reject
+            // below (identical close reason, log without the parser message).
             $this->logger->warning('Relay: malformed HELLO payload', [
                 'server_id' => $this->serverId,
                 'tunnel_id' => $this->tunnelId,

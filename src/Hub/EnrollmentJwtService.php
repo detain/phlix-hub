@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Hub;
 
 use Phlix\Shared\Security\Base64Url;
+use Phlix\Shared\Support\Json;
 
 /**
  * Issues and validates Ed25519-signed enrollment JWTs for servers.
@@ -200,7 +201,7 @@ class EnrollmentJwtService
         // EdDSA, so reject anything else outright.
         try {
             /** @var mixed $header */
-            $header = json_decode(Base64Url::decode($headerEncoded, true), true, 512, JSON_THROW_ON_ERROR);
+            $header = Json::decodeInbound(Base64Url::decode($headerEncoded, true));
         } catch (\JsonException) {
             return ['payload' => null, 'reason' => 'malformed'];
         }
@@ -231,9 +232,12 @@ class EnrollmentJwtService
         }
 
         try {
-            /** @var array<string, mixed> $payload */
-            $payload = json_decode(Base64Url::decode($payloadEncoded, true), true, 512, JSON_THROW_ON_ERROR);
+            /** @var mixed $payload */
+            $payload = Json::decodeInbound(Base64Url::decode($payloadEncoded, true));
         } catch (\JsonException) {
+            return ['payload' => null, 'reason' => 'malformed'];
+        }
+        if (!is_array($payload)) {
             return ['payload' => null, 'reason' => 'malformed'];
         }
 

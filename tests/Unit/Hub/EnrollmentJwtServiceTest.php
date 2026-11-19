@@ -280,4 +280,48 @@ final class EnrollmentJwtServiceTest extends TestCase
         $sig = sodium_crypto_sign_detached("{$h}.{$p}", $privateKey);
         return "{$h}.{$p}." . $b64($sig);
     }
+
+    public function testClassifyMalformedPayloadSegmentWithValidSignatureIsMalformed(): void
+    {
+        // DECODE-ADOPT characterization: with kid/alg/typ/signature all
+        // passing, the payload decode's null arm (malformed) must land on the
+        // 'malformed' reason exactly as the pre-seam throw arm did. No auth
+        // taxonomy change — reason classes byte-identical.
+        $b64 = static fn (string $d): string => rtrim(strtr(base64_encode($d), '+/', '-_'), '=');
+        $keyPair = $this->keyManager->getOrCreateKeyPair();
+        $kid = $this->keyManager->getKid();
+        $header = $b64((string) json_encode(['alg' => 'EdDSA', 'typ' => 'JWT', 'kid' => $kid]));
+        $payload = $b64('{not json');
+        $privateKey = $keyPair['private'];
+        if ($privateKey === '') {
+            self::fail('the key manager must return a non-empty private key');
+        }
+        $sig = $b64(sodium_crypto_sign_detached("{$header}.{$payload}", $privateKey));
+
+        self::assertSame(
+            'malformed',
+            $this->service->classifyEnrollmentJwt("{$header}.{$payload}.{$sig}", $kid),
+        );
+    }
+
+    public function testClassifyOverDeepPayloadSegmentWithValidSignatureIsMalformed(): void
+    {
+        // Depth-exceeded rides the seam's documented rethrow into the same
+        // catch that produced 'malformed' pre-migration — identical reason.
+        $b64 = static fn (string $d): string => rtrim(strtr(base64_encode($d), '+/', '-_'), '=');
+        $keyPair = $this->keyManager->getOrCreateKeyPair();
+        $kid = $this->keyManager->getKid();
+        $header = $b64((string) json_encode(['alg' => 'EdDSA', 'typ' => 'JWT', 'kid' => $kid]));
+        $payload = $b64(str_repeat('[', 600) . str_repeat(']', 600));
+        $privateKey = $keyPair['private'];
+        if ($privateKey === '') {
+            self::fail('the key manager must return a non-empty private key');
+        }
+        $sig = $b64(sodium_crypto_sign_detached("{$header}.{$payload}", $privateKey));
+
+        self::assertSame(
+            'malformed',
+            $this->service->classifyEnrollmentJwt("{$header}.{$payload}.{$sig}", $kid),
+        );
+    }
 }

@@ -107,4 +107,43 @@ final class RequestTest extends TestCase
 
         self::assertSame('198.51.100.10', $request->getTrustedClientIp());
     }
+
+    // ---- DECODE-ADOPT: inbound body decode rides the shared seam ----
+
+    public function testFromWorkermanThrowsOnOverDeepJsonBodyAtTheSeamCeiling(): void
+    {
+        // DECODE-ADOPT FLIP: this used to land as a silently emptied body;
+        // the shared inbound seam rethrows the depth class so the HTTP
+        // dispatch barrier answers a logged 500 instead.
+        $body = str_repeat('[', 600) . str_repeat(']', 600);
+        $buffer = "POST /api/v1/media HTTP/1.1\r\nHost: hub.example.com\r\n"
+            . "Content-Type: application/json\r\nContent-Length: " . strlen($body) . "\r\n\r\n" . $body;
+
+        $this->expectException(\JsonException::class);
+
+        Request::fromWorkerman(new WorkermanRequest($buffer));
+    }
+
+    public function testFromWorkermanMalformedJsonBodyKeepsTheEmptyBodyContract(): void
+    {
+        $body = '{not json';
+        $buffer = "POST /api/v1/media HTTP/1.1\r\nHost: hub.example.com\r\n"
+            . "Content-Type: application/json\r\nContent-Length: " . strlen($body) . "\r\n\r\n" . $body;
+
+        $request = Request::fromWorkerman(new WorkermanRequest($buffer));
+
+        self::assertSame($body, $request->rawBody);
+        self::assertSame([], $request->body);
+    }
+
+    public function testFromWorkermanValidJsonBodyStillPopulatesTheBody(): void
+    {
+        $body = '{"rating":8}';
+        $buffer = "POST /api/v1/media HTTP/1.1\r\nHost: hub.example.com\r\n"
+            . "Content-Type: application/json\r\nContent-Length: " . strlen($body) . "\r\n\r\n" . $body;
+
+        $request = Request::fromWorkerman(new WorkermanRequest($buffer));
+
+        self::assertSame(['rating' => 8], $request->body);
+    }
 }

@@ -21,6 +21,7 @@ use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Hub\Relay\InvalidFrameTypeException;
 use Phlix\Shared\Relay\RelayFrameType;
+use Phlix\Shared\Support\Json;
 use RuntimeException;
 use Throwable;
 use Workerman\Connection\AsyncTcpConnection;
@@ -1792,7 +1793,7 @@ class FederationPeerManager
         if ($this->isTextFrame($data)) {
             try {
                 /** @var mixed $decoded */
-                $decoded = json_decode($data, true, 4, JSON_THROW_ON_ERROR);
+                $decoded = Json::decodeInbound($data, 4);
             } catch (Throwable) {
                 return false;
             }
@@ -1925,8 +1926,8 @@ class FederationPeerManager
     private function handleTextFrame(string $data): void
     {
         try {
-            /** @var array<string, mixed>|null $msg */
-            $msg = json_decode($data, true, 4, JSON_THROW_ON_ERROR);
+            /** @var mixed $msg */
+            $msg = Json::decodeInbound($data, 4);
         } catch (Throwable) {
             return;
         }
@@ -1935,6 +1936,8 @@ class FederationPeerManager
             return;
         }
 
+        /** @var array<string, mixed> $msg Re-narrowing identical to the
+         *  pre-seam `@var` on the decode: JSON-inbound keys are strings. */
         $this->dispatchTextMessage($msg);
     }
 
@@ -2288,8 +2291,8 @@ class FederationPeerManager
     {
         $reason = 'master_disconnect';
         try {
-            /** @var array<string, mixed>|null $decoded */
-            $decoded = json_decode($payload, true, 2, JSON_THROW_ON_ERROR);
+            /** @var mixed $decoded */
+            $decoded = Json::decodeInbound($payload, 2);
             if (is_array($decoded) && isset($decoded['reason'])) {
                 /** @var mixed $rawReason */
                 $rawReason = $decoded['reason'];
@@ -2351,8 +2354,8 @@ class FederationPeerManager
         }
 
         try {
-            /** @var array<string, mixed>|null $data */
-            $data = json_decode($payload, true, 4, JSON_THROW_ON_ERROR);
+            /** @var mixed $data */
+            $data = Json::decodeInbound($payload, 4);
         } catch (Throwable) {
             return;
         }
@@ -2910,7 +2913,7 @@ class FederationPeerManager
         // Otherwise check if it's a valid UTF-8 JSON object/array
         try {
             /** @var mixed $decoded */
-            $decoded = json_decode($data, true, 512, JSON_THROW_ON_ERROR);
+            $decoded = Json::decodeInbound($data);
             return is_array($decoded);
         } catch (Throwable) {
             return false;

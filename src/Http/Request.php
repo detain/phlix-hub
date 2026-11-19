@@ -11,7 +11,9 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Http;
 
+use JsonException;
 use Phlix\Hub\Common\Http\TrustedProxyResolver;
+use Phlix\Shared\Support\Json;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 
@@ -300,12 +302,20 @@ class Request
     }
 
     /**
-     * Decode a JSON request body to an array, returning an empty array
-     * when the payload is empty or malformed.
+     * Decode a JSON request body to an array, returning an empty array when
+     * the payload is empty or malformed (the shared inbound seam
+     * {@see Json::decodeInbound()} null arm mapped onto the existing empty
+     * contract). Nesting beyond the seam's named inbound-depth ceiling is a
+     * structural failure, not a typo: that rethrown JsonException escapes this
+     * method on purpose and is answered by the HTTP dispatch barrier
+     * (Application onMessage) with a logged 500 instead of a silently
+     * emptied body.
      *
      * @param string $raw Raw body bytes.
      *
      * @return array<string, mixed>
+     *
+     * @throws JsonException When nesting exceeds the inbound-depth ceiling.
      */
     private static function decodeJsonBody(string $raw): array
     {
@@ -313,7 +323,7 @@ class Request
             return [];
         }
         /** @var mixed $decoded */
-        $decoded = json_decode($raw, true);
+        $decoded = Json::decodeInbound($raw);
         if (!is_array($decoded)) {
             return [];
         }
