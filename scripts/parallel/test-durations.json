@@ -156,6 +156,7 @@
         "tests/Unit/Http/Controllers/WorkermanHeaderBoundaryTest.php": 0.013,
         "tests/Unit/Http/CookieAuthCeremonyTest.php": 0.004,
         "tests/Unit/Http/CorsPolicyTest.php": 0.005,
+        "tests/Unit/Http/EnvelopeWireCorpusTest.php": 0.02,
         "tests/Unit/Http/HttpRequestBodyCapTest.php": 0.002,
         "tests/Unit/Http/Middleware/AdminMiddlewareTest.php": 0.002,
         "tests/Unit/Http/Middleware/AlexaRejectionCodeMapLawTest.php": 0.011,
