@@ -515,10 +515,7 @@ class Router
     private function notFound(): Response
     {
         return (new Response())
-            ->status(404)
-            ->json([
-                'error' => 'The requested resource was not found',
-                'code' => 'not_found',
+            ->error(404, 'not_found', 'The requested resource was not found', [
                 'message' => 'The requested resource was not found',
             ]);
     }

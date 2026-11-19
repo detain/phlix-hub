@@ -88,26 +88,20 @@ final class RequestController
         $episodeRaw = $body['episode'] ?? null;
 
         if (!is_string($typeRaw) || !in_array($typeRaw, ['movie', 'series'], true)) {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code'  => 'invalid_type',
+            return (new Response())->error(400, 'invalid_type', 'Bad Request', [
                 'message' => 'Request type must be "movie" or "series"',
             ]);
         }
 
         $tmdbId = is_numeric($tmdbIdRaw) ? (int) $tmdbIdRaw : 0;
         if ($tmdbId <= 0) {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code'  => 'invalid_tmdb_id',
+            return (new Response())->error(400, 'invalid_tmdb_id', 'Bad Request', [
                 'message' => 'TMDB ID must be a positive integer',
             ]);
         }
 
         if (!is_string($titleRaw) || $titleRaw === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code'  => 'missing_title',
+            return (new Response())->error(400, 'missing_title', 'Bad Request', [
                 'message' => 'Title is required',
             ]);
         }
@@ -140,9 +134,7 @@ final class RequestController
         // pair (QuotaFrames law, M-HUB-35) — kind `requests`, reset
         // `on_release` (the block clears when the admin works the queue).
         if ($this->manager->countPendingForUser($userId) >= RequestManager::MAX_PENDING_REQUESTS_PER_USER) {
-            return (new Response())->status(409)->json([
-                'error' => QuotaFrames::REQUESTS_TEXT,
-                'code' => 'quota.exceeded',
+            return (new Response())->error(409, 'quota.exceeded', QuotaFrames::REQUESTS_TEXT, [
                 'message' => QuotaFrames::REQUESTS_TEXT,
                 ...QuotaFrames::discriminator(QuotaFrames::KIND_REQUESTS, QuotaFrames::RESET_ON_RELEASE),
             ]);
@@ -210,24 +202,15 @@ final class RequestController
 
         $requestId = $params['id'] ?? '';
         if ($requestId === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code'  => 'missing_request_id',
-            ]);
+            return (new Response())->error(400, 'missing_request_id', 'Bad Request');
         }
 
         $result = $this->manager->getRequestById($requestId);
         if ($result === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code'  => 'request_not_found',
-            ]);
+            return (new Response())->error(404, 'request_not_found', 'Not Found');
         }
         if ($result['user_id'] !== $userId) {
-            return (new Response())->status(403)->json([
-                'error' => 'Forbidden',
-                'code'  => 'not_request_owner',
-            ]);
+            return (new Response())->error(403, 'not_request_owner', 'Forbidden');
         }
 
         return (new Response())->json(['request' => $result]);
@@ -247,24 +230,15 @@ final class RequestController
 
         $requestId = $params['id'] ?? '';
         if ($requestId === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code'  => 'missing_request_id',
-            ]);
+            return (new Response())->error(400, 'missing_request_id', 'Bad Request');
         }
 
         $existing = $this->manager->getRequestById($requestId);
         if ($existing === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code'  => 'request_not_found',
-            ]);
+            return (new Response())->error(404, 'request_not_found', 'Not Found');
         }
         if ($existing['user_id'] !== $userId) {
-            return (new Response())->status(403)->json([
-                'error' => 'Forbidden',
-                'code'  => 'not_request_owner',
-            ]);
+            return (new Response())->error(403, 'not_request_owner', 'Forbidden');
         }
 
         $this->manager->deleteRequest($requestId);
@@ -320,18 +294,12 @@ final class RequestController
 
         $requestId = $params['id'] ?? '';
         if ($requestId === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code'  => 'missing_request_id',
-            ]);
+            return (new Response())->error(400, 'missing_request_id', 'Bad Request');
         }
 
         $existing = $this->manager->getRequestById($requestId);
         if ($existing === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code'  => 'request_not_found',
-            ]);
+            return (new Response())->error(404, 'request_not_found', 'Not Found');
         }
 
         $outcome = $this->manager->approveRequest($requestId);
@@ -345,20 +313,19 @@ final class RequestController
             // shape; the 500 survives for the genuine backend refusal, where
             // the Radarr/Sonarr blame is finally true).
             return match ($outcome) {
-                RequestTransitionResult::NotPending => (new Response())->status(409)->json([
-                    'error'   => 'This request was already approved or denied',
-                    'code'    => 'approve_failed',
-                    'message' => 'This request was already approved or denied',
-                ]),
-                RequestTransitionResult::NotFound => (new Response())->status(404)->json([
-                    'error' => 'Not Found',
-                    'code'  => 'request_not_found',
-                ]),
-                default => (new Response())->status(500)->json([
-                    'error'   => 'Internal Server Error',
-                    'code'    => 'approve_failed',
-                    'message' => 'Failed to approve the request. Check the Radarr/Sonarr configuration',
-                ]),
+                RequestTransitionResult::NotPending => (new Response())->error(
+                    409,
+                    'approve_failed',
+                    'This request was already approved or denied',
+                    ['message' => 'This request was already approved or denied'],
+                ),
+                RequestTransitionResult::NotFound => (new Response())->error(404, 'request_not_found', 'Not Found'),
+                default => (new Response())->error(
+                    500,
+                    'approve_failed',
+                    'Internal Server Error',
+                    ['message' => 'Failed to approve the request. Check the Radarr/Sonarr configuration'],
+                ),
             };
         }
 
@@ -390,18 +357,12 @@ final class RequestController
 
         $requestId = $params['id'] ?? '';
         if ($requestId === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code'  => 'missing_request_id',
-            ]);
+            return (new Response())->error(400, 'missing_request_id', 'Bad Request');
         }
 
         $existing = $this->manager->getRequestById($requestId);
         if ($existing === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code'  => 'request_not_found',
-            ]);
+            return (new Response())->error(404, 'request_not_found', 'Not Found');
         }
 
         $body = $request->body;
@@ -420,20 +381,19 @@ final class RequestController
             // documents that it never returns it — kept as the fail-loud
             // default so a future side-effect limb cannot silently 409).
             return match ($outcome) {
-                RequestTransitionResult::NotPending => (new Response())->status(409)->json([
-                    'error'   => 'This request was already approved or denied',
-                    'code'    => 'deny_failed',
-                    'message' => 'This request was already approved or denied',
-                ]),
-                RequestTransitionResult::NotFound => (new Response())->status(404)->json([
-                    'error' => 'Not Found',
-                    'code'  => 'request_not_found',
-                ]),
-                default => (new Response())->status(500)->json([
-                    'error'   => 'Failed to deny the request. Try again',
-                    'code'    => 'deny_failed',
-                    'message' => 'Failed to deny the request. Try again',
-                ]),
+                RequestTransitionResult::NotPending => (new Response())->error(
+                    409,
+                    'deny_failed',
+                    'This request was already approved or denied',
+                    ['message' => 'This request was already approved or denied'],
+                ),
+                RequestTransitionResult::NotFound => (new Response())->error(404, 'request_not_found', 'Not Found'),
+                default => (new Response())->error(
+                    500,
+                    'deny_failed',
+                    'Failed to deny the request. Try again',
+                    ['message' => 'Failed to deny the request. Try again'],
+                ),
             };
         }
 
@@ -463,10 +423,7 @@ final class RequestController
         $admin = $this->users->findAdminById($userId);
         if ($admin === null) {
             $this->audit->logPermissionDenied($userId, 'admin.requests', $request->method);
-            return (new Response())->status(403)->json([
-                'error' => 'Forbidden',
-                'code'  => 'admin_required',
-            ]);
+            return (new Response())->error(403, 'admin_required', 'Forbidden');
         }
         return null;
     }

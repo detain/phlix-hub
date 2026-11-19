@@ -1099,9 +1099,7 @@ final class ServerProxyController
                 'path' => $path,
             ]);
 
-            return (new Response())->status(403)->json([
-                'error' => 'Forbidden',
-                'code' => 'proxy.scope_denied',
+            return (new Response())->error(403, 'proxy.scope_denied', 'Forbidden', [
                 'message' => 'This method/path is not exposed through the relay proxy.',
             ]);
         }
@@ -1114,9 +1112,7 @@ final class ServerProxyController
                 'path' => $path,
             ]);
 
-            return (new Response())->status(403)->json([
-                'error' => 'Forbidden',
-                'code' => 'proxy.scope_denied',
+            return (new Response())->error(403, 'proxy.scope_denied', 'Forbidden', [
                 'message' => 'This method/path is not exposed through the relay proxy.',
             ]);
         }

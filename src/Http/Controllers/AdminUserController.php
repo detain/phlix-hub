@@ -476,9 +476,7 @@ final class AdminUserController
      */
     private function fieldErrors(array $fieldErrors): Response
     {
-        return (new Response())->status(400)->json([
-            'error'        => 'Validation failed',
-            'code'         => 'validation_failed',
+        return (new Response())->error(400, 'validation_failed', 'Validation failed', [
             'field_errors' => $fieldErrors,
         ]);
     }

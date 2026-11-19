@@ -179,11 +179,8 @@ final class SubdomainController
             $this->dnsAliasManager->refreshCertificate($serverIdFromPath);
         } catch (\RuntimeException $e) {
             return (new Response())
-                ->status(501)
                 ->header('Link', '<https://detain.github.io/phlix-docs/hub-admin/tls>; rel="help"')
-                ->json([
-                    'error' => 'NOT_IMPLEMENTED',
-                    'code' => 'tls.acme_not_implemented',
+                ->error(501, 'tls.acme_not_implemented', 'NOT_IMPLEMENTED', [
                     'message' => $e->getMessage(),
                     'docs' => 'https://detain.github.io/phlix-docs/hub-admin/tls',
                 ]);

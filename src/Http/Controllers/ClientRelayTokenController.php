@@ -88,19 +88,13 @@ final class ClientRelayTokenController
         $serverId = $params['id'] ?? '';
         $server = $this->serverInfo->getServerInfo($serverId);
         if ($server === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code' => 'server.not_found',
-            ]);
+            return (new Response())->error(404, 'server.not_found', 'Not Found');
         }
 
         if ($server->userId !== $userId) {
             $this->audit->logPermissionDenied($userId, $serverId, 'relay_token.mint');
 
-            return (new Response())->status(403)->json([
-                'error' => 'Forbidden',
-                'code' => 'server.not_owned',
-            ]);
+            return (new Response())->error(403, 'server.not_owned', 'Forbidden');
         }
 
         $minted = $this->tokens->mint($userId, $serverId);

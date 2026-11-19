@@ -52,10 +52,7 @@ final class MeController
         }
         $user = $this->auth->getCurrentUser($userId);
         if ($user === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code'  => 'user.not_found',
-            ]);
+            return (new Response())->error(404, 'user.not_found', 'Not Found');
         }
         $servers = $this->serverInfo->getServersForUser($userId);
         return (new Response())->json([

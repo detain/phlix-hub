@@ -160,10 +160,7 @@ final class RelayController
         return (new Response())
             ->header('Link', '<' . $docsUrl . '>; rel="help"')
             ->header('X-WS-Endpoint', $wsEndpoint)
-            ->status(501)
-            ->json([
-                'error'   => 'NOT_IMPLEMENTED_VIA_HTTP',
-                'code'    => 'relay.ws_http_endpoint',
+            ->error(501, 'relay.ws_http_endpoint', 'NOT_IMPLEMENTED_VIA_HTTP', [
                 'message' => 'The relay tunnel must be established via WebSocket.'
                     . ' Connect to ' . $wsEndpoint . ' with your enrollment JWT.',
                 'ws_endpoint' => $wsEndpoint,

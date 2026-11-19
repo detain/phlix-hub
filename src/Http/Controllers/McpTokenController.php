@@ -136,9 +136,7 @@ final class McpTokenController
         $scopes = is_array($rawScopes) ? McpScopes::fromArray($rawScopes) : McpScopes::readOnly();
 
         if ($scopes === []) {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code' => 'mcp_token.no_valid_scopes',
+            return (new Response())->error(400, 'mcp_token.no_valid_scopes', 'Bad Request', [
                 'message' => 'At least one known scope is required.',
                 'available_scopes' => $this->availableScopes(),
             ]);
@@ -180,10 +178,7 @@ final class McpTokenController
             // Unknown id, already revoked, and "belongs to somebody else" are
             // deliberately indistinguishable: distinguishing them would turn
             // this endpoint into an oracle for other users' token ids.
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code' => 'mcp_token.not_found',
-            ]);
+            return (new Response())->error(404, 'mcp_token.not_found', 'Not Found');
         }
 
         $this->audit->logAdminAction($userId, 'mcp_token.revoke', $tokenId, []);

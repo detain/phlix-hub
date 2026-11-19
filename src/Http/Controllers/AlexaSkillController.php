@@ -211,10 +211,7 @@ final class AlexaSkillController
                 'params' => implode(',', array_keys($params)),
             ]);
 
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code' => 'alexa.malformed_envelope',
-            ]);
+            return (new Response())->error(400, 'alexa.malformed_envelope', 'Bad Request');
         }
 
         return match ($envelope->type()) {

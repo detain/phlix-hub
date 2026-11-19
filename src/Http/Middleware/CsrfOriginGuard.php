@@ -79,9 +79,6 @@ final class CsrfOriginGuard
             return null;
         }
 
-        return (new Response())->status(403)->json([
-            'error' => 'CSRF validation failed',
-            'code' => 'csrf.invalid_origin',
-        ]);
+        return (new Response())->error(403, 'csrf.invalid_origin', 'CSRF validation failed');
     }
 }

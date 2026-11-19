@@ -334,10 +334,7 @@ final class UserQuotaController
         }
         if ($this->users->findAdminById($userId) === null) {
             $this->audit->logPermissionDenied($userId, 'admin.user_quota', $request->method);
-            return (new Response())->status(403)->json([
-                'error' => 'Forbidden',
-                'code'  => 'admin_required',
-            ]);
+            return (new Response())->error(403, 'admin_required', 'Forbidden');
         }
         return null;
     }
@@ -345,18 +342,14 @@ final class UserQuotaController
 
     private function invalidField(string $field): Response
     {
-        return (new Response())->status(400)->json([
-            'error'   => 'Bad Request',
-            'code'    => 'invalid_quota',
+        return (new Response())->error(400, 'invalid_quota', 'Bad Request', [
             'message' => sprintf('"%s" must be a non-negative integer within range.', $field),
         ]);
     }
 
     private function invalidThrottle(): Response
     {
-        return (new Response())->status(400)->json([
-            'error'   => 'Bad Request',
-            'code'    => 'invalid_throttle',
+        return (new Response())->error(400, 'invalid_throttle', 'Bad Request', [
             'message' => sprintf(
                 '"throttle_bps" must be one of the allowed levels (%s).',
                 implode(', ', self::ALLOWED_THROTTLE_BPS),

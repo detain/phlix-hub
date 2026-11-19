@@ -233,9 +233,7 @@ final class McpController
         }
 
         if (!self::acceptsEventStream($request->getHeader('Accept'))) {
-            return (new Response())->status(406)->json([
-                'error' => 'Not Acceptable',
-                'code' => 'mcp.sse_not_acceptable',
+            return (new Response())->error(406, 'mcp.sse_not_acceptable', 'Not Acceptable', [
                 'message' => 'GET /mcp opens a Server-Sent Events stream. Send '
                     . 'Accept: text/event-stream, or use POST /mcp for JSON-RPC.',
             ]);
@@ -300,9 +298,7 @@ final class McpController
             return null;
         }
 
-        return (new Response())->status(400)->json([
-            'error' => 'Bad Request',
-            'code' => 'mcp.unsupported_protocol_version',
+        return (new Response())->error(400, 'mcp.unsupported_protocol_version', 'Bad Request', [
             'message' => 'This hub does not implement MCP protocol revision "' . $presented
                 . '". Re-run initialize and use the revision it returns.',
             'supported' => McpProtocol::SUPPORTED,

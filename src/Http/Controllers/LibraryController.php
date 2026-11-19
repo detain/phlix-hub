@@ -48,18 +48,12 @@ final class LibraryController
 
         $serverId = $request->query['server_id'] ?? '';
         if (!is_string($serverId) || $serverId === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code' => 'missing_server_id',
-            ]);
+            return (new Response())->error(400, 'missing_server_id', 'Bad Request');
         }
 
         // Verify the user owns this server.
         if (!$this->sharingHandler->isServerOwnedByUser($serverId, $userId)) {
-            return (new Response())->status(403)->json([
-                'error' => 'Forbidden',
-                'code' => 'not_server_owner',
-            ]);
+            return (new Response())->error(403, 'not_server_owner', 'Forbidden');
         }
 
         // Get distinct (library_id, library_name) pairs from library_shares.

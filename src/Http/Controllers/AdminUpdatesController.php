@@ -159,10 +159,7 @@ final class AdminUpdatesController
         if ($this->users->findAdminById($userId) === null) {
             $this->audit->logPermissionDenied($userId, 'admin.updates', $request->method);
 
-            return (new Response())->status(403)->json([
-                'error' => 'Forbidden',
-                'code'  => 'admin_required',
-            ]);
+            return (new Response())->error(403, 'admin_required', 'Forbidden');
         }
 
         return null;

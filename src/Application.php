@@ -294,11 +294,8 @@ final class Application
     public static function maintenanceResponse(): Response
     {
         return (new Response())
-            ->status(503)
             ->header('Retry-After', (string) self::MAINTENANCE_RETRY_AFTER_SECONDS)
-            ->json([
-                'error' => 'This hub is under maintenance. Try again shortly.',
-                'code'  => 'provider_unavailable',
+            ->error(503, 'provider_unavailable', 'This hub is under maintenance. Try again shortly.', [
                 // Disambiguation leg (HUB-49): the catalog copy for this code speaks of
                 // an authentication provider; the real cause rides in `detail`.
                 'detail' => 'Hub maintenance mode (hub.maintenance_mode) is on; '

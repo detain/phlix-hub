@@ -201,8 +201,8 @@ final class ErrorCodesContractTest extends TestCase
         'Http/Response.php::error' => 'swept:error@2',
         'Http/Response.php::errorBody' => 'swept:errorBody@1',
         'Relay/FrameEncoder.php::error' => 'swept:error@2',
-        'Http/Controllers/AdminUserController.php::conflict' => 'swept:conflict@2',
-        'Http/Controllers/McpController.php::unauthorized' => 'swept:unauthorized@1',
+        'Http/ControllerErrorFrames.php::conflict' => 'swept:conflict@1',
+        'Http/ControllerErrorFrames.php::mcpUnauthorized' => 'swept:mcpUnauthorized@1',
         'SyncPlay/SyncPlayRelayWorker.php::sendCanonicalError' => 'swept:sendCanonicalError@2',
         // — excluded, with reasons —
         'Http/Middleware/AlexaSignatureMiddleware.php::reject' =>
@@ -260,12 +260,14 @@ final class ErrorCodesContractTest extends TestCase
         [
             'file' => 'Http/Controllers/AdminUserController.php',
             'call' => 'conflict',
-            'positions' => [2],
+            // Post-HUBCTRL the call rides the kit's conflict(CODE, message) —
+            // the inverted per-file builder is gone; code is position 1.
+            'positions' => [1],
             'staticReceivers' => null,
         ],
         [
             'file' => 'Http/Controllers/McpController.php',
-            'call' => 'unauthorized',
+            'call' => 'mcpUnauthorized',
             'positions' => [1],
             'staticReceivers' => null,
         ],
@@ -327,28 +329,20 @@ final class ErrorCodesContractTest extends TestCase
      * @var array<string, string>
      */
     private const array OPAQUE_CODE_FEEDS = [
-        'Http/Controllers/AuthController.php::errorFrame::error@2' =>
-            'hop: errorFrame(int $status, string $code, string $message) forwards its own'
-            . ' string-typed $code parameter into (new Response())->error(...) — the inner'
-            . ' variable hop inherits the direct call-site sweep at errorFrame@2 above',
-        'Http/Controllers/InviteLinkController.php::memberError::error@2' =>
-            'hop: memberError(int $status, string $code, string $message) forwards its own'
-            . ' string-typed $code into (new Response())->error(...); every call site in that'
-            . ' file passes a registered literal code (unchanged from the pre-M5 `'
-            . "code' => …` envelopes), byte-pinned per arm by"
-            . ' \\Phlix\\Hub\\Tests\\Unit\\Http\\Controllers\\MemberErrorProseTest',
-        'Http/Controllers/LibraryShareController.php::memberError::error@2' =>
-            'hop: memberError(int $status, string $code, string $message) forwards its own'
-            . ' string-typed $code into (new Response())->error(...); every call site in that'
-            . ' file passes a registered literal code (unchanged from the pre-M5 `'
-            . "code' => …` envelopes), byte-pinned per arm by"
-            . ' \\Phlix\\Hub\\Tests\\Unit\\Http\\Controllers\\MemberErrorProseTest',
-        'Http/Controllers/UserPasswordController.php::errorFrame::error@2' =>
-            'hop: errorFrame(int $status, string $code, string $message) forwards its own'
-            . ' string-typed $code into (new Response())->error(...); every call site in that'
-            . ' file passes a registered literal code (auth.missing_credentials,'
-            . ' auth.invalid_credentials, validation_failed), each arm byte-pinned by'
+        'Http/ControllerErrorFrames.php::errorFrame::error@2' =>
+            'hop: the kit errorFrame(int $status, string $code, string $message) forwards its own'
+            . ' string-typed $code parameter into (new Response())->error(...); call sites live in'
+            . ' AuthController/UserPasswordController and pass registered literal codes —'
+            . ' AuthController\'s are swept directly at errorFrame@2 above, UserPasswordController\'s'
+            . ' arms are byte-pinned by'
             . ' \\Phlix\\Hub\\Tests\\Unit\\Http\\Controllers\\UserPasswordControllerTest',
+        'Http/ControllerErrorFrames.php::memberError::error@2' =>
+            'hop: the kit memberError(int $status, string $code, string $message, array $extra)'
+            . ' forwards its own string-typed $code into (new Response())->error(...); the'
+            . ' InviteLinkController/LibraryShareController call sites pass a registered literal'
+            . ' code at every arm (unchanged from the pre-M5 `'
+            . "code' => …` envelopes), byte-pinned per arm by"
+            . ' \\Phlix\\Hub\\Tests\\Unit\\Http\\Controllers\\MemberErrorProseTest',
         'Http/Middleware/AlexaSignatureMiddleware.php::reject::error@2' =>
             'hop: reject() emits (new Response())->error(400, $wireCode, $code) where $wireCode'
             . ' is a REJECTION_CODE_MAP value — registered dotted twins AND the whole frame'

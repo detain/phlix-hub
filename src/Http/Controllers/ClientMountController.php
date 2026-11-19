@@ -180,10 +180,7 @@ final class ClientMountController
         if ($request->getHeader('Upgrade') !== 'websocket') {
             return (new Response())
                 ->header('X-WS-Endpoint', $wsEndpoint)
-                ->status(426)
-                ->json([
-                    'error' => 'UPGRADE_REQUIRED',
-                    'code' => 'relay.client_ws_endpoint',
+                ->error(426, 'relay.client_ws_endpoint', 'UPGRADE_REQUIRED', [
                     'message' => 'The client relay tunnel must be established via WebSocket. Connect to '
                         . $wsEndpoint . ' with your client relay token.' . $unavailableNote,
                     'ws_endpoint' => $wsEndpoint,
@@ -193,10 +190,7 @@ final class ClientMountController
 
         return (new Response())
             ->header('X-WS-Endpoint', $wsEndpoint)
-            ->status(501)
-            ->json([
-                'error' => 'NOT_IMPLEMENTED_VIA_HTTP',
-                'code' => 'relay.client_ws_endpoint',
+            ->error(501, 'relay.client_ws_endpoint', 'NOT_IMPLEMENTED_VIA_HTTP', [
                 'message' => 'The client relay tunnel must be established via WebSocket. Connect to '
                     . $wsEndpoint . ' with your client relay token.' . $unavailableNote,
                 'ws_endpoint' => $wsEndpoint,
