@@ -1,5 +1,5 @@
 {
-    "generatedFrom": "31cc3467 + HUB-ENV HttpEnvelopeAdoptionTest serial junit, clean-checkout bless",
+    "generatedFrom": "b3146f8a + HUB-TLS WsTlsBootTest serial junit, clean-checkout bless",
     "unit": {
         "tests/Common/Database/MigrationRunnerTest.php": 0.023,
         "tests/Health/HealthControllerTest.php": 0.007,
@@ -120,6 +120,7 @@
         "tests/Unit/Http/Controllers/AuthControllerTest.php": 0.225,
         "tests/Unit/Http/Controllers/ClientMountControllerTest.php": 0.001,
         "tests/Unit/Http/Controllers/ClientRelayTokenControllerTest.php": 0.005,
+        "tests/Unit/Http/Controllers/ControllerErrorFramesTest.php": 0.032,
         "tests/Unit/Http/Controllers/CookieDualEmitTest.php": 0.015,
         "tests/Unit/Http/Controllers/CookieOriginAuthRoutesTest.php": 0.005,
         "tests/Unit/Http/Controllers/CookiePolicyWiringGuardTest.php": 0.018,
@@ -307,6 +308,7 @@
         "tests/Unit/Relay/WebSocketCloseFrameTest.php": 0.005,
         "tests/Unit/Relay/WorkerBindHostAndCloseTest.php": 0.002,
         "tests/Unit/Relay/WsTlsContextTest.php": 0.001,
+        "tests/Unit/Relay/WsTlsBootTest.php": 0.018,
         "tests/Unit/Requests/RequestManagerAutoApproveTest.php": 0.003,
         "tests/Unit/Requests/RequestManagerTest.php": 0.015,
         "tests/Unit/Requests/RequestNotificationTest.php": 0.002,
