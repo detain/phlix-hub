@@ -812,6 +812,10 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         // (`bool $hstsEligible = false,`) legitimately carry the comma form.
         $this->assertStringNotContainsString('$hstsEligible = true;', $source);
         $this->assertStringNotContainsString('$hstsEligible = false;', $source);
-        $this->assertStringNotContainsString('$hstsEligible = CookiePolicy::', $source, 'the closure must not compute eligibility inline beside the seam');
+        $this->assertStringNotContainsString(
+            '$hstsEligible = CookiePolicy::',
+            $source,
+            'the closure must not compute eligibility inline beside the seam',
+        );
     }
 }
