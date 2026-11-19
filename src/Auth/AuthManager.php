@@ -670,14 +670,20 @@ class AuthManager
      * throw the hub's historical collapsed text; they NEVER leak which arm
      * fired onto the wire.
      *
-     * @param string      $userId    Signed `sub` of the presented token.
-     * @param string      $sessionId The `sid` claim (non-null by caller gate).
-     * @param string|null $jti       The presented token's `jti`.
+     * @param string      $userId           Signed `sub` of the presented token.
+     * @param string      $sessionId        The `sid` claim (non-null by caller gate).
+     * @param string|null $jti              The presented token's `jti`.
+     * @param bool        $afterLostConsume Internal (SRV-S16 twin): this pass runs
+     *     after a lost atomic consume, so a second loss must refuse, never loop.
      *
      * @throws InvalidArgumentException On every family refusal.
      */
-    private function adjudicateRefreshFamily(string $userId, string $sessionId, ?string $jti): void
-    {
+    private function adjudicateRefreshFamily(
+        string $userId,
+        string $sessionId,
+        ?string $jti,
+        bool $afterLostConsume = false,
+    ): void {
         $store = $this->tokenSessions;
 
         // (a) A family-carrying token against an unwired store cannot be
@@ -728,7 +734,26 @@ class AuthManager
 
         // (h) Live grant: consume BEFORE the caller mints (see the refresh()
         // docblock — the ordering is the whole anti-theft timing argument).
-        $store->markGrantConsumed($jti);
+        // The consume is an ARBITER (SRV-S16 twin): true means THIS request
+        // flipped the row; false means a concurrent rotation won it between
+        // the read above and this atomic write.
+        if ($store->markGrantConsumed($jti)) {
+            return;
+        }
+
+        // Lost the race: re-adjudicate ONCE from a fresh read. The winner's
+        // stamp is committed by now or it never will be — an in-window
+        // consumption is the benign multi-tab race (arm g rotates on), an
+        // out-of-window one is the reuse verdict (arm f kills the family),
+        // a vanished row is the unknown-grant refusal (arm c). A SECOND lost
+        // flip is a state no read can vouch for: refuse with the server
+        // arbiter's audit reason — the literal admin surfaces read
+        // side-by-side across hosts — behind the hub's collapsed wire text.
+        if ($afterLostConsume) {
+            $this->refuseFamily($userId, $sessionId, $jti, 'refresh_grant_consume_lost');
+        }
+
+        $this->adjudicateRefreshFamily($userId, $sessionId, $jti, true);
     }
 
     /**

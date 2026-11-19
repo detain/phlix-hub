@@ -311,21 +311,42 @@ class TokenSessionRepository
     }
 
     /**
-     * Mark the presented refresh token as used (rotation consumed it).
+     * Mark the presented refresh token as used (rotation consumed it) —
+     * and report WHO won.
      *
-     * The `AND consumed_at IS NULL` guard keeps a double-consume from moving
-     * the timestamp — the idempotence the grace window is measured from.
+     * The `AND consumed_at IS NULL` guard makes the flip atomic: exactly one
+     * UPDATE per grant can change the row, and this method is the arbiter
+     * that says which caller it was. `true` means THIS statement flipped
+     * `consumed_at` from NULL; `false` means it did not — a concurrent
+     * rotation consumed the grant first (the live double-spend this port
+     * closes: while the answer was `void`, the hub could not observe
+     * lose-the-race and two same-grant refreshes BOTH minted), the row is
+     * gone, or the vendor answered something this statement cannot vouch
+     * for. Every unwrappable answer reads as LOST so callers fail toward
+     * re-adjudication, never toward minting. The second call no longer
+     * moving the stamp — the idempotence the grace window is measured from
+     * — is unchanged law, now paired with the verdict.
+     *
+     * Server twin: SRV-S16. The hub-side caller that turns a `false` into a
+     * fresh adjudication is AuthManager::adjudicateRefreshFamily().
      *
      * @param string $jti Presented token's `jti`.
      *
-     * @return void
+     * @return bool True when THIS call consumed the grant; false when the
+     *              row was already spent, vanished, or the answer cannot be
+     *              vouched for.
      */
-    public function markGrantConsumed(string $jti): void
+    public function markGrantConsumed(string $jti): bool
     {
-        $this->db->query(
+        /** @var mixed $result */
+        $result = $this->db->query(
             'UPDATE auth_refresh_grants SET consumed_at = NOW() WHERE jti = :jti AND consumed_at IS NULL',
             ['jti' => $jti],
         );
+
+        // Measured vendor contract (workerman/mysql query()): an UPDATE
+        // answers int rowCount; any other shape is not an answer to PIN.
+        return is_int($result) && $result >= 1;
     }
 
     /**

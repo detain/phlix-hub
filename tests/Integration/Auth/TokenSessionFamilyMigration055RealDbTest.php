@@ -38,8 +38,10 @@ use Phlix\Hub\Auth\TokenSessionRepository;
 use Phlix\Hub\Common\Database\MigrationRunner;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
 use Phlix\Hub\Common\Support\Ids;
+use PDOException;
 use PHPUnit\Framework\Attributes\Group;
 use Phlix\Hub\Tests\Support\Narrow;
+use Workerman\MySQL\Connection;
 
 use function array_column;
 use function array_map;
@@ -221,17 +223,25 @@ final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCas
         $jti = 'jti-reuse-00000000000000000000bb';
         $this->store->recordGrant($jti, $family);
 
-        $this->store->markGrantConsumed($jti);
+        // SRV-S16 twin: the consume is an ARBITER, not a fire-and-forget.
+        // The first flip wins, the second consume of the same row loses,
+        // and a jti this store never minted consumes nothing.
+        self::assertTrue($this->store->markGrantConsumed($jti), 'the first consume flips the row');
         $first = $this->store->findGrant($jti, self::GRACE_SECONDS);
         self::assertNotNull($first);
         self::assertTrue($first['consumed']);
         self::assertTrue($first['withinGrace'], 'immediate replay is the race, not the theft');
 
         // A second consume attempt must NOT move the first stamp (the
-        // UPDATE's consumed_at IS NULL guard, convicted on real rows).
+        // UPDATE's consumed_at IS NULL guard, convicted on real rows) —
+        // and it must ANSWER false, which is the hub's lost-race signal.
         $before = $this->consumedAtOf($jti);
-        $this->store->markGrantConsumed($jti);
+        self::assertFalse($this->store->markGrantConsumed($jti), 'the second consume of the same jti LOSES');
         self::assertSame($before, $this->consumedAtOf($jti));
+        self::assertFalse(
+            $this->store->markGrantConsumed('jti-ghost-000000000000000000b1'),
+            'an unknown jti consumes nothing',
+        );
 
         // The adjudicator's kill arm, executed for real: family dies.
         $this->store->revokeSession($family, 'refresh_token_reuse');
@@ -239,6 +249,76 @@ final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCas
         self::assertNotNull($after);
         self::assertSame('revoked', $after['sessionStatus']);
         self::assertFalse($this->store->isSessionActive($family));
+    }
+
+    /**
+     * SRV-S16 twin — the arbiter under REAL row contention: two connections,
+     * one grant. The winner's flip holds the row lock inside its open
+     * transaction (this is exactly the window the double-spend bug lived in:
+     * the hub could not SEE the loser before this port). The loser queues on
+     * the lock (convicted by the short innodb timeout firing), and once the
+     * winner commits, the loser's flip answers FALSE against the consumed
+     * row — exactly one true across the race. The rollback leg pins the
+     * other half of the contract: an uncommitted winner never consumed
+     * anything, and the next consume still wins.
+     */
+    public function testTwoConnectionsContendingForOneGrantProduceExactlyOneWinner(): void
+    {
+        $user = $this->seedUser('cp055race');
+        $family = $this->store->createSession($user);
+
+        $jti = 'jti-race-00000000000000000000f1';
+        $this->store->recordGrant($jti, $family);
+
+        $loser = new TokenSessionRepository($this->secondConnectionWithShortLockWait());
+
+        self::assertTrue($this->db->beginTrans());
+        try {
+            self::assertTrue(
+                $this->store->markGrantConsumed($jti),
+                'the winner flips the row (answer true, transaction still open)',
+            );
+
+            $blocked = false;
+            try {
+                $loser->markGrantConsumed($jti);
+            } catch (PDOException) {
+                // Lock wait timeout on the loser's own connection: the
+                // contention the arbiter exists for. (Measured vendor
+                // contract: non-gone-away SQL errors throw; the winner's
+                // transaction is a DIFFERENT connection and stays open.)
+                $blocked = true;
+            }
+            self::assertTrue($blocked, 'the loser must queue behind the winner row lock');
+
+            self::assertTrue($this->db->commitTrans());
+
+            self::assertFalse(
+                $loser->markGrantConsumed($jti),
+                'after the winner commits, the loser sees the consumed row and LOSES',
+            );
+        } finally {
+            // Safe no-op once committed; unwinds the lock on any red path.
+            $this->db->rollBackTrans();
+        }
+
+        self::assertNotNull($this->consumedAtOf($jti), 'the winner stamp survived the race');
+
+        // Rollback leg: an uncommitted flip is NOT a consumption.
+        $jti2 = 'jti-rb2-00000000000000000000f2';
+        $this->store->recordGrant($jti2, $family);
+        self::assertTrue($this->db->beginTrans());
+        try {
+            self::assertTrue($this->store->markGrantConsumed($jti2));
+        } finally {
+            // Rolls back the uncommitted flip; no-op if it was committed.
+            self::assertTrue($this->db->rollBackTrans());
+        }
+        self::assertTrue(
+            $this->store->markGrantConsumed($jti2),
+            'a rolled-back winner never consumed — the verdict is the committed row state',
+        );
+        self::assertFalse($this->store->markGrantConsumed($jti2), 'and the fresh consume is now spent');
     }
 
     // ------------------------------------------------------------------
@@ -428,6 +508,25 @@ final class TokenSessionFamilyMigration055RealDbTest extends RealDatabaseTestCas
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    /**
+     * A SECOND real connection to the same schema with a one-second InnoDB
+     * lock-wait: the contention probe for the arbiter race above. Deliberate
+     * mirror of the harness's own connection parameters.
+     */
+    private function secondConnectionWithShortLockWait(): Connection
+    {
+        $db = new Connection(
+            (string) getenv('HUB_TEST_DB_HOST'),
+            (int) (getenv('HUB_TEST_DB_PORT') ?: '3306'),
+            (string) (getenv('HUB_TEST_DB_USER') ?: 'root'),
+            (string) (getenv('HUB_TEST_DB_PASSWORD') ?: ''),
+            (string) getenv('HUB_TEST_DB_NAME'),
+        );
+        $db->query('SET SESSION innodb_lock_wait_timeout = 1');
+
+        return $db;
+    }
 
     private function seedUser(string $username): string
     {

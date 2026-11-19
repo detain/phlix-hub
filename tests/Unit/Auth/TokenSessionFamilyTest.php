@@ -149,8 +149,9 @@ final class TokenSessionFamilyTest extends TestCase
                 'consumed' => false, 'withinGrace' => false,
             ]);
         $store->method('markGrantConsumed')->willReturnCallback(
-            static function () use (&$log): void {
+            static function () use (&$log): bool {
                 $log[] = 'consumed';
+                return true;
             }
         );
         $store->method('recordGrant')->willReturnCallback(
@@ -174,6 +175,152 @@ final class TokenSessionFamilyTest extends TestCase
 
         $jwt = new JwtHandler(self::SECRET);
         self::assertSame('fam-1', self::sessionOf($jwt->validateRefreshTokenWithSession($rotated['refresh_token'])));
+    }
+
+    /**
+     * SRV-S16 twin — LOST CONSUME, winner IN WINDOW: the first read said
+     * live, the atomic flip answered false — a concurrent rotation won the
+     * row between read and write. The fresh re-read shows it consumed inside
+     * the grace window: the benign multi-tab race. The presentation rotates
+     * on inside the family — exactly one re-read, no second consume attempt,
+     * no revocation, no audit entry.
+     */
+    public function testLostConsumeReadjudicatesAnInWindowWinnerAsTheBenignRace(): void
+    {
+        $presented = $this->familyRefreshToken('fam-1');
+        $jti = self::jtiOf((new JwtHandler(self::SECRET))->validateTokenWithSession($presented));
+
+        $live = ['jti' => $jti, 'sessionId' => 'fam-1', 'sessionStatus' => 'active',
+            'consumed' => false, 'withinGrace' => false];
+        $wonInWindow = ['jti' => $jti, 'sessionId' => 'fam-1', 'sessionStatus' => 'active',
+            'consumed' => true, 'withinGrace' => true];
+
+        $store = $this->createMock(TokenSessionRepository::class);
+        $reads = [$live, $wonInWindow];
+        $store->expects(self::exactly(2))
+            ->method('findGrant')
+            ->with($jti, 10)
+            ->willReturnCallback(static function () use (&$reads): ?array {
+                return array_shift($reads);
+            });
+        $store->expects(self::once())->method('markGrantConsumed')->with($jti)->willReturn(false);
+        $store->expects(self::never())->method('revokeSession');
+        $store->expects(self::once())->method('recordGrant');
+
+        $audited = [];
+        $rotated = $this->manager($store, auditSink: $audited)->refresh($presented);
+
+        self::assertSame([], $audited, 'the benign lost race audits nothing');
+        self::assertSame(
+            'fam-1',
+            self::sessionOf((new JwtHandler(self::SECRET))->validateRefreshTokenWithSession($rotated['refresh_token'])),
+            'the benign race rotates INSIDE the family',
+        );
+    }
+
+    /**
+     * SRV-S16 twin — LOST CONSUME, winner OUTSIDE WINDOW: the re-read shows
+     * the grant consumed long enough ago that the grace window closed — a
+     * theft verdict, routed through the exact reuse arm a sequential replay
+     * takes: family killed with 'refresh_token_reuse', presentation refused
+     * with the hub's collapsed text, nothing minted.
+     */
+    public function testLostConsumeRoutesAnOutOfWindowWinnerThroughReuseRevocation(): void
+    {
+        $presented = $this->familyRefreshToken('fam-1');
+        $jti = self::jtiOf((new JwtHandler(self::SECRET))->validateTokenWithSession($presented));
+
+        $live = ['jti' => $jti, 'sessionId' => 'fam-1', 'sessionStatus' => 'active',
+            'consumed' => false, 'withinGrace' => false];
+        $wonOutside = ['jti' => $jti, 'sessionId' => 'fam-1', 'sessionStatus' => 'active',
+            'consumed' => true, 'withinGrace' => false];
+
+        $store = $this->createMock(TokenSessionRepository::class);
+        $reads = [$live, $wonOutside];
+        $store->method('findGrant')
+            ->willReturnCallback(static function () use (&$reads): ?array {
+                return array_shift($reads);
+            });
+        $store->expects(self::once())->method('markGrantConsumed')->willReturn(false);
+        $store->expects(self::once())
+            ->method('revokeSession')
+            ->with('fam-1', 'refresh_token_reuse');
+        $store->expects(self::never())->method('recordGrant');
+
+        $audited = [];
+        $this->expectExceptionMessage('Invalid or expired refresh token');
+        try {
+            $this->manager($store, auditSink: $audited)->refresh($presented);
+        } finally {
+            self::assertSame([['refresh_token_reuse', [
+                'user_id' => self::USER_ID, 'context' => 'refresh', 'session_id' => 'fam-1', 'jti' => $jti,
+            ]]], $audited);
+        }
+    }
+
+    /**
+     * SRV-S16 twin — LOST CONSUME ON A VANISHED GRANT: the row was swept
+     * between the read and the flip. The re-read answers null and the
+     * unknown-grant arm fails closed; nothing is minted, nothing revoked.
+     */
+    public function testLostConsumeOnAVanishedGrantFailsClosed(): void
+    {
+        $presented = $this->familyRefreshToken('fam-1');
+        $jti = self::jtiOf((new JwtHandler(self::SECRET))->validateTokenWithSession($presented));
+
+        $live = ['jti' => $jti, 'sessionId' => 'fam-1', 'sessionStatus' => 'active',
+            'consumed' => false, 'withinGrace' => false];
+
+        $store = $this->createMock(TokenSessionRepository::class);
+        $reads = [$live, null];
+        $store->method('findGrant')
+            ->willReturnCallback(static function () use (&$reads): ?array {
+                return array_shift($reads);
+            });
+        $store->expects(self::once())->method('markGrantConsumed')->willReturn(false);
+        $store->expects(self::never())->method('revokeSession');
+        $store->expects(self::never())->method('recordGrant');
+
+        $audited = [];
+        $this->expectException(InvalidArgumentException::class);
+        try {
+            $this->manager($store, auditSink: $audited)->refresh($presented);
+        } finally {
+            self::assertSame('refresh_grant_unknown', $audited[0][0] ?? 'NOT-REACHED');
+        }
+    }
+
+    /**
+     * SRV-S16 twin — LOST CONSUME TWICE: every read says the grant is live
+     * and every atomic flip still answers false. One re-adjudication is the
+     * budget; losing again is a state the statement cannot vouch for, so it
+     * mints NOTHING and refuses with the server arbiter's audit reason
+     * 'refresh_grant_consume_lost' — the literal admin surfaces read
+     * side-by-side with the server's — behind the hub's collapsed wire text.
+     */
+    public function testConsumeLostTwiceRefusesWithTheArbiterReason(): void
+    {
+        $presented = $this->familyRefreshToken('fam-1');
+        $jti = self::jtiOf((new JwtHandler(self::SECRET))->validateTokenWithSession($presented));
+
+        $live = ['jti' => $jti, 'sessionId' => 'fam-1', 'sessionStatus' => 'active',
+            'consumed' => false, 'withinGrace' => false];
+
+        $store = $this->createMock(TokenSessionRepository::class);
+        $store->method('findGrant')->willReturn($live);
+        $store->expects(self::exactly(2))->method('markGrantConsumed')->willReturn(false);
+        $store->expects(self::never())->method('revokeSession');
+        $store->expects(self::never())->method('recordGrant');
+
+        $audited = [];
+        $this->expectExceptionMessage('Invalid or expired refresh token');
+        try {
+            $this->manager($store, auditSink: $audited)->refresh($presented);
+        } finally {
+            self::assertSame([['refresh_grant_consume_lost', [
+                'user_id' => self::USER_ID, 'context' => 'refresh', 'session_id' => 'fam-1', 'jti' => $jti,
+            ]]], $audited);
+        }
     }
 
     public function testUnwiredStoreMintsTheLegacyShapeExactly(): void
