@@ -82,7 +82,7 @@ final class RequiredPhpExtensionsTest extends TestCase
         'sodium' => ['sodium_crypto_sign_verify_detached', 'src/Hub/EnrollmentJwtService.php'],
         'mbstring' => ['mb_substr', 'src/Http/Middleware/AlexaSignatureMiddleware.php'],
         'json' => ['json_decode', 'src/Http/Middleware/AlexaSignatureMiddleware.php'],
-        'hash' => ['hash_hmac', 'src/Auth/JwtHandler.php'],
+        'hash' => ['hash', 'src/Hub/ClientRelayTokenService.php'],
         'filter' => ['filter_var', 'src/Common/Http/TrustedProxyResolver.php'],
         'ctype' => ['ctype_digit', 'src/Common/Http/TrustedProxyResolver.php'],
         'posix' => ['posix_kill', 'src/Common/Support/WorkermanProcessReloader.php'],

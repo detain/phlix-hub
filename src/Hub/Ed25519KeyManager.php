@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Hub;
 
 use Closure;
+use Phlix\Shared\Security\Ed25519Pem;
 use RuntimeException;
 
 /**
@@ -254,7 +255,7 @@ final class Ed25519KeyManager
     public function getPublicKeyJwk(): array
     {
         $pair = $this->getOrCreateKeyPair();
-        return $this->jwkFor($pair['public'], $this->getKid());
+        return Ed25519Pem::toJwk($pair['public'], $this->getKid());
     }
 
     /**
@@ -271,7 +272,7 @@ final class Ed25519KeyManager
     {
         $jwks = [];
         foreach ($this->getActivePublicKeys() as $key) {
-            $jwks[] = $this->jwkFor($key['public'], $key['kid']);
+            $jwks[] = Ed25519Pem::toJwk($key['public'], $key['kid']);
         }
         return $jwks;
     }
@@ -326,7 +327,7 @@ final class Ed25519KeyManager
      */
     public function getKid(): string
     {
-        return $this->kid ??= $this->fingerprint($this->getOrCreateKeyPair()['public']);
+        return $this->kid ??= Ed25519Pem::fingerprint($this->getOrCreateKeyPair()['public']);
     }
 
     /**
@@ -375,9 +376,12 @@ final class Ed25519KeyManager
         $secretKey = substr($keyPair, 0, 64);
         $publicKey = substr($keyPair, 64);
 
-        $pem = "-----BEGIN ED25519 PRIVATE KEY-----\n"
-            . $this->base64Encode($secretKey) . "\n"
-            . "-----END ED25519 PRIVATE KEY-----\n";
+        // Native PEM writer from the shared kernel (wave S2): the server
+        // dialect — base64url body, 64-char folding, same `ED25519 PRIVATE
+        // KEY` label. Format-local: {@see Ed25519Pem::parsePem()} reads this
+        // and the historical one-line plain-base64 hub files alike, so a
+        // swapped writer never orphans an existing key.
+        $pem = Ed25519Pem::buildPem($secretKey);
 
         $dir = $this->ensureDirectory(dirname($this->keyPath));
         $this->writeSecretAtomically($pem, $this->keyPath, $dir);
@@ -561,28 +565,34 @@ final class Ed25519KeyManager
     }
 
     /**
-     * Build a JWK array for a raw 32-byte Ed25519 public key + kid.
+     * Extract the full 64-byte Ed25519 keypair from a PEM string.
      *
-     * @return array<string, mixed>
+     * Parse work is the shared kernel's (wave S2): {@see Ed25519Pem::parsePem()}
+     * reads this hub's historical one-line plain-base64 native files, the
+     * server-dialect native files this writer now emits, and standard PKCS#8
+     * Ed25519 blocks alike. The kernel's native arm takes the first 64 bytes of
+     * an oversized body (the server's `strlen >= 64` posture, adjudicated
+     * incidental in the kernel docblock); the hub's historical exact-64
+     * rejection survives here as the fail-loud mapping of every parse failure,
+     * so a corrupt signing key still stops boot loudly rather than being
+     * silently regenerated (see {@see self::loadStoredKeyPair()}).
+     *
+     * @param string $pem PEM-encoded key.
+     *
+     * @return array{private: string, public: string}
+     *
+     * @throws RuntimeException When the PEM carries no parseable Ed25519 key.
      */
-    private function jwkFor(string $publicKey, string $kid): array
+    private function extractKeyPair(string $pem): array
     {
-        return [
-            'kty' => 'OKP',
-            'crv' => 'Ed25519',
-            'x' => $this->base64UrlEncode($publicKey),
-            'kid' => $kid,
-            'use' => 'sig',
-            'alg' => 'EdDSA',
-        ];
-    }
+        $parsed = Ed25519Pem::parsePem($pem);
+        if ($parsed === null) {
+            throw new RuntimeException(
+                'Ed25519 private key could not be parsed (expected a 64-byte Ed25519 key: native or PKCS#8).',
+            );
+        }
 
-    /**
-     * Deterministic kid fingerprint of a raw public key.
-     */
-    private function fingerprint(string $publicKey): string
-    {
-        return $this->base64UrlEncode(hash('sha256', $publicKey, true));
+        return ['private' => $parsed['secret'], 'public' => $parsed['public']];
     }
 
     /**
@@ -594,26 +604,9 @@ final class Ed25519KeyManager
     }
 
     /**
-     * Extract the full 64-byte Ed25519 keypair from a PEM string.
-     *
-     * @param string $pem PEM-encoded key.
-     *
-     * @return array{private: string, public: string}
-     */
-    private function extractKeyPair(string $pem): array
-    {
-        $key = trim($pem);
-        $key = (string) preg_replace('#-----(BEGIN|END) ED25519 PRIVATE KEY-----#', '', $key);
-        $key = str_replace(["\r", "\n", ' '], '', $key);
-        $decoded = $this->base64Decode($key);
-        if (strlen($decoded) !== 64) {
-            throw new RuntimeException('Ed25519 private key must be exactly 64 bytes.');
-        }
-        return ['private' => $decoded, 'public' => substr($decoded, 32)];
-    }
-
-    /**
-     * Standard base64 encode.
+     * Standard base64 encode — the PREVIOUS-KEY SIDECAR's own file format
+     * (JSON + plain base64), deliberately not base64url and not cryptographic
+     * key material on the wire; custody-local, so it stays.
      */
     private function base64Encode(string $data): string
     {
@@ -621,19 +614,11 @@ final class Ed25519KeyManager
     }
 
     /**
-     * Standard base64 decode.
+     * Standard base64 decode — inverse of {@see self::base64Encode()}.
      */
     private function base64Decode(string $data): string
     {
         $decoded = base64_decode($data, true);
         return $decoded !== false ? $decoded : '';
-    }
-
-    /**
-     * Base64URL encode (no padding, '-' instead of '+', '_' instead of '/').
-     */
-    private function base64UrlEncode(string $data): string
-    {
-        return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
     }
 }

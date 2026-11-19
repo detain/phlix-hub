@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Jwt;
 
 use JsonException;
+use Phlix\Shared\Security\Base64Url;
 
 /**
  * Parses JWT header bytes without validating the token signature.
@@ -20,6 +21,10 @@ use JsonException;
  * appears in the JWT header JSON. All Ed25519 enrollment JWT handling
  * across the hub extracts this value identically — this class eliminates
  * the duplicated parse-logic that previously lived in 8 separate files.
+ *
+ * The segment decode is the shared {@see Base64Url} STRICT arm since wave
+ * S2 — out-of-alphabet input collapses to `''`, which the JSON parse below
+ * rejects exactly as the historical `false` check did.
  *
  * @package Phlix\Hub\Jwt
  */
@@ -41,13 +46,8 @@ final class JwtHeader
         }
 
         try {
-            $decoded = base64_decode(strtr($parts[0], '-_', '+/'), true);
-            if ($decoded === false) {
-                return null;
-            }
-
             /** @var array<string, mixed> $header */
-            $header = json_decode($decoded, true, 2, JSON_THROW_ON_ERROR);
+            $header = json_decode(Base64Url::decode($parts[0], true), true, 2, JSON_THROW_ON_ERROR);
             /** @var string|null $kid */
             $kid = $header['kid'] ?? null;
 

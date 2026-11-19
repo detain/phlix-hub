@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Hub;
 
+use Phlix\Shared\Security\Base64Url;
+
 /**
  * Issues and validates Ed25519-signed enrollment JWTs for servers.
  *
@@ -20,6 +22,11 @@ namespace Phlix\Hub\Hub;
  *   - Issuer: "phlix-hub"
  *   - Subject: server UUID assigned by the hub at claim time
  *   - TTL: 7 days (604800 seconds)
+ *
+ * The base64url codec arms are the shared kernel's ({@see Base64Url}) as of
+ * wave S2 — same bijections, strict decode arm preserved — while the EdDSA
+ * mint/verify pipeline and its machine-readable rejection reasons below are
+ * hub-local law (HS256 has no share here).
  *
  * @package Phlix\Hub\Hub
  */
@@ -116,8 +123,8 @@ class EnrollmentJwtService
             'server_id' => $serverId,
         ];
 
-        $headerEncoded = $this->base64UrlEncode(json_encode($header, JSON_THROW_ON_ERROR));
-        $payloadEncoded = $this->base64UrlEncode(json_encode($payload, JSON_THROW_ON_ERROR));
+        $headerEncoded = Base64Url::encode(json_encode($header, JSON_THROW_ON_ERROR));
+        $payloadEncoded = Base64Url::encode(json_encode($payload, JSON_THROW_ON_ERROR));
 
         $keyPair = $this->keyManager->getOrCreateKeyPair();
         /** @var non-empty-string $privateKey */
@@ -126,7 +133,7 @@ class EnrollmentJwtService
             "{$headerEncoded}.{$payloadEncoded}",
             $privateKey,
         );
-        $signatureEncoded = $this->base64UrlEncode($signature);
+        $signatureEncoded = Base64Url::encode($signature);
 
         return "{$headerEncoded}.{$payloadEncoded}.{$signatureEncoded}";
     }
@@ -193,7 +200,7 @@ class EnrollmentJwtService
         // EdDSA, so reject anything else outright.
         try {
             /** @var mixed $header */
-            $header = json_decode($this->base64UrlDecode($headerEncoded), true, 512, JSON_THROW_ON_ERROR);
+            $header = json_decode(Base64Url::decode($headerEncoded, true), true, 512, JSON_THROW_ON_ERROR);
         } catch (\JsonException) {
             return ['payload' => null, 'reason' => 'malformed'];
         }
@@ -212,7 +219,7 @@ class EnrollmentJwtService
             return ['payload' => null, 'reason' => 'malformed'];
         }
 
-        $signature = $this->base64UrlDecode($signatureEncoded);
+        $signature = Base64Url::decode($signatureEncoded, true);
 
         if ($signature === '') {
             return ['payload' => null, 'reason' => 'bad_signature'];
@@ -225,7 +232,7 @@ class EnrollmentJwtService
 
         try {
             /** @var array<string, mixed> $payload */
-            $payload = json_decode($this->base64UrlDecode($payloadEncoded), true, 512, JSON_THROW_ON_ERROR);
+            $payload = json_decode(Base64Url::decode($payloadEncoded, true), true, 512, JSON_THROW_ON_ERROR);
         } catch (\JsonException) {
             return ['payload' => null, 'reason' => 'malformed'];
         }
@@ -257,22 +264,5 @@ class EnrollmentJwtService
     public function getHubBaseUrl(): string
     {
         return rtrim($this->hubBaseUrl, '/');
-    }
-
-    /**
-     * Base64URL encode (no padding).
-     */
-    private function base64UrlEncode(string $data): string
-    {
-        return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
-    }
-
-    /**
-     * Base64URL decode.
-     */
-    private function base64UrlDecode(string $data): string
-    {
-        $decoded = base64_decode(strtr($data, '-_', '+/'), true);
-        return $decoded !== false ? $decoded : '';
     }
 }

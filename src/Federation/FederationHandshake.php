@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Federation;
 
 use InvalidArgumentException;
+use Phlix\Shared\Security\Base64Url;
 use SodiumException;
 
 use function base64_decode;
@@ -19,7 +20,6 @@ use function base64_encode;
 use function hex2bin;
 use function preg_match;
 use function random_bytes;
-use function rtrim;
 use function sodium_crypto_sign_detached;
 use function sodium_crypto_sign_verify_detached;
 use function str_repeat;
@@ -241,13 +241,18 @@ final class FederationHandshake
     /**
      * Base64-url encode without padding.
      *
+     * Thin delegate to the shared {@see Base64Url::encode()} (wave S2) — the
+     * same RFC 4648 §5 bijection every historical hub/server copy computed;
+     * kept as a named seam because {@see self::newNonce()} and the federation
+     * wire readers speak through it.
+     *
      * @param string $bytes Raw bytes.
      *
      * @return string base64url token.
      */
     public static function base64UrlEncode(string $bytes): string
     {
-        return rtrim(strtr(base64_encode($bytes), '+/', '-_'), '=');
+        return Base64Url::encode($bytes);
     }
 
     /**

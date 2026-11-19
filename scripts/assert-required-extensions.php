@@ -106,10 +106,12 @@ const REQUIRED_EXTENSIONS = [
             . 'every API request/response body in the hub.',
     ],
     'hash' => [
-        'symbol' => 'hash_hmac',
-        'source' => 'src/Auth/JwtHandler.php',
-        'why' => 'HS256 JWT signing plus the constant-time hash_equals() comparison that stops the '
-            . 'signature check being a timing oracle.',
+        'symbol' => 'hash',
+        'source' => 'src/Hub/ClientRelayTokenService.php',
+        'why' => 'SHA-256 hashing of relay tokens and claim codes on the auth path, plus the '
+            . 'constant-time hash_equals() comparison that stops every signature/digest check '
+            . 'being a timing oracle. (HS256 signing itself moved to the shared kernel '
+            . 'Phlix\\Shared\\Security\\Jwt at v0.56.0 — ext/hash is required for both.)',
     ],
     'filter' => [
         'symbol' => 'filter_var',

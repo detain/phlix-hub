@@ -13,6 +13,8 @@ namespace Phlix\Hub\Auth;
 
 use InvalidArgumentException;
 use Phlix\Shared\Auth\JwtClaims;
+use Phlix\Shared\Auth\SessionFamily;
+use Phlix\Shared\Security\Jwt;
 use Throwable;
 
 /**
@@ -36,21 +38,18 @@ use Throwable;
 final class JwtHandler
 {
     /**
-     * The only signing algorithm this handler mints or accepts.
-     */
-    private const string ALGORITHM = 'HS256';
-
-    /**
      * JWT claim carrying the session-family id (CP-029 / D-1a — the hub twin
-     * of the server's `JwtHandler::CLAIM_SESSION_ID`, same literal). The
-     * shared {@see JwtClaims} DTO is a fixed-field value object and does NOT
-     * model this key: it rides the payload map beside the DTO, survives
+     * of the server's `JwtHandler::CLAIM_SESSION_ID`, same literal, now
+     * aliased to the shared {@see SessionFamily::CLAIM_SESSION_ID} SSOT —
+     * FQCN references and the 'sid' wire bytes are unchanged). The shared
+     * {@see JwtClaims} DTO is a fixed-field value object and does NOT model
+     * this key: it rides the payload map beside the DTO, survives
      * encode/decode untouched, and is read only through
      * {@see self::sessionIdClaim()} / the `*WithSession()` seams below.
      * Unknown-key tolerance of `JwtClaims::fromPayload()` is what makes this
      * legal — verified, and pinned by the family suite's legacy-shape legs.
      */
-    public const string CLAIM_SESSION_ID = 'sid';
+    public const string CLAIM_SESSION_ID = SessionFamily::CLAIM_SESSION_ID;
 
     /**
      * Secret used for HMAC signing. Must be at least 32 bytes for HS256.
@@ -426,89 +425,39 @@ final class JwtHandler
     /**
      * Encode a payload as a signed JWT string.
      *
+     * Delegates to the shared {@see Jwt::create()} kernel (wave S2 / DESIGN
+     * §0, M-01): the mint header is the fixed `{"alg":"HS256","typ":"JWT"}`
+     * pair in that key order, serialized exactly as this method did before,
+     * so minted tokens are byte-identical to the pre-delegation shape.
+     *
      * @param array<string, mixed> $payload Already shaped per {@see JwtClaims::toPayload()}.
      *
      * @throws \JsonException When the payload contains non-encodable data.
      */
     private function encode(array $payload): string
     {
-        $header = ['alg' => self::ALGORITHM, 'typ' => 'JWT'];
-        $headerEncoded = $this->base64UrlEncode(json_encode($header, JSON_THROW_ON_ERROR));
-        $payloadEncoded = $this->base64UrlEncode(json_encode($payload, JSON_THROW_ON_ERROR));
-        $signature = hash_hmac('sha256', "{$headerEncoded}.{$payloadEncoded}", $this->secretKey, true);
-        $signatureEncoded = $this->base64UrlEncode($signature);
-        return "{$headerEncoded}.{$payloadEncoded}.{$signatureEncoded}";
+        return Jwt::create($payload, $this->secretKey);
     }
 
     /**
      * Decode and signature-verify a JWT string.
      *
+     * Delegates to the shared {@see Jwt::verify()} kernel — the canonical
+     * decode order this class originated (segment count → header JSON with
+     * `JSON_THROW_ON_ERROR` → alg/typ pin BEFORE any signature work →
+     * `hash_equals` HMAC check → payload object, string keys only) now lives
+     * there verbatim; rejections arrive as {@see \Phlix\Shared\Security\JwtException}.
+     * The only caller, {@see self::validateTokenWithSession()}, catches
+     * `Throwable` and maps every rejection to null exactly as before, so the
+     * observable validation behavior is unmoved.
+     *
      * @return array<string, mixed> Decoded payload.
      *
-     * @throws InvalidArgumentException When the token is malformed or the signature does not verify.
-     * @throws \JsonException When the payload is not valid JSON.
+     * @throws \Phlix\Shared\Security\JwtException When the token is malformed, the
+     *         header lies about alg/typ, or the signature does not verify.
      */
     private function decode(string $token): array
     {
-        $parts = explode('.', $token);
-        if (count($parts) !== 3) {
-            throw new InvalidArgumentException('Malformed JWT (expected 3 dot-separated segments).');
-        }
-        [$headerEncoded, $payloadEncoded, $signature] = $parts;
-
-        // Pin alg/typ from the header BEFORE verifying the signature so an
-        // attacker can't downgrade to `alg:none` or confuse us into using a
-        // different algorithm (alg-confusion). Defense-in-depth: we only ever
-        // sign with HS256, so anything else is rejected outright.
-        $header = json_decode($this->base64UrlDecode($headerEncoded), true, 512, JSON_THROW_ON_ERROR);
-        if (!is_array($header)) {
-            throw new InvalidArgumentException('JWT header did not decode to an object.');
-        }
-        if (($header['alg'] ?? null) !== self::ALGORITHM) {
-            throw new InvalidArgumentException('Unexpected JWT alg (expected HS256).');
-        }
-        if (isset($header['typ']) && $header['typ'] !== 'JWT') {
-            throw new InvalidArgumentException('Unexpected JWT typ (expected JWT).');
-        }
-
-        $expectedSignature = $this->base64UrlEncode(
-            hash_hmac('sha256', "{$headerEncoded}.{$payloadEncoded}", $this->secretKey, true),
-        );
-        if (!hash_equals($expectedSignature, $signature)) {
-            throw new InvalidArgumentException('JWT signature mismatch.');
-        }
-
-        $decoded = json_decode($this->base64UrlDecode($payloadEncoded), true, 512, JSON_THROW_ON_ERROR);
-        if (!is_array($decoded)) {
-            throw new InvalidArgumentException('JWT payload did not decode to an object.');
-        }
-        /** @var array<string, mixed> $payload */
-        $payload = [];
-        /**
-         * @var mixed $value
-         * @psalm-suppress MixedAssignment
-         */
-        foreach ($decoded as $key => $value) {
-            if (is_string($key)) {
-                $payload[$key] = $value;
-            }
-        }
-        return $payload;
-    }
-
-    /**
-     * Base64URL encode (no padding, '+' → '-', '/' → '_').
-     */
-    private function base64UrlEncode(string $data): string
-    {
-        return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
-    }
-
-    /**
-     * Base64URL decode (inverse of {@see self::base64UrlEncode()}).
-     */
-    private function base64UrlDecode(string $data): string
-    {
-        return (string) base64_decode(strtr($data, '-_', '+/'), true);
+        return Jwt::verify($token, $this->secretKey)->payload;
     }
 }
