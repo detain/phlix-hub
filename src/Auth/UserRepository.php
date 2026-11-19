@@ -443,7 +443,7 @@ class UserRepository
      * lockstep with any change to the canonical options; PasswordHasherTest
      * pins the embedded parameters against the SSOT constant.
      */
-    private const TIMING_BURN_DUMMY_HASH =
+    private const string TIMING_BURN_DUMMY_HASH =
         '$argon2id$v=19$m=65536,t=4,p=1$ajhMV1lZWk0wNUZYMUJJeA'
         . '$GnAZV0jZAc3B24RwsTj5qLoSiy6ITh4BFMMHxFIDdSQ';
 

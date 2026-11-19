@@ -39,7 +39,7 @@ class Response
      * canonical (shared library) is the wave-3 extraction, deliberately not
      * this lane's stopgap.
      */
-    public const STRICT_TRANSPORT_SECURITY_VALUE = 'max-age=31536000; includeSubDomains';
+    public const string STRICT_TRANSPORT_SECURITY_VALUE = 'max-age=31536000; includeSubDomains';
 
     public int $statusCode = 200;
 
