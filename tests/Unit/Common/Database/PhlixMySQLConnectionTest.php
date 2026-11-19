@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Common\Database;
 
+use Phlix\Hub\Common\Database\MysqlError;
 use Phlix\Hub\Common\Database\PhlixMySQLConnection;
 use Phlix\Hub\Tests\Support\SwooleFixtureProcess;
 use Phlix\Hub\Tests\Support\TransactionLockConnection;
@@ -572,5 +573,64 @@ final class PhlixMySQLConnectionTest extends TestCase
             'holder:free',
             'token:back',
         ], $events, "child output (falsy begin must not claim the lock) was:\n" . $result['stdout']);
+    }
+
+    /**
+     * TXMUTEX-A A7: the non-gone wrapper execute() throws must carry the
+     * original exception as previous AND copy its errorInfo, so
+     * MysqlError::driverCode() stays authoritative on our own throw. The
+     * 'SQL:' message rendering and the SQLSTATE-as-int code stay unchanged
+     * (byte-compatible wire surface — this only restores driver evidence).
+     */
+    public function testTheNonQueryFailureWrapperCarriesErrorInfoAndPrevious(): void
+    {
+        $conn = TransactionLockConnection::create();
+
+        $pdo = new class ('sqlite::memory:') extends \PDO {
+            public ?\PDOException $lastThrown = null;
+
+            /**
+             * @param array<int, mixed> $options
+             */
+            #[\ReturnTypeWillChange]
+            public function prepare(string $query, array $options = [])
+            {
+                $e = new \PDOException(
+                    "SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry 'x' for key 'PRIMARY'",
+                    23000
+                );
+                $e->errorInfo = ['23000', 1062, "Duplicate entry 'x' for key 'PRIMARY'"];
+                $this->lastThrown = $e;
+
+                throw $e;
+            }
+        };
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+
+        $ref = new ReflectionClass(PhlixMySQLConnection::class);
+        $pdoProp = $ref->getProperty('pdo');
+        $pdoProp->setAccessible(true);
+        $pdoProp->setValue($conn, $pdo);
+
+        $exec = $ref->getMethod('execute');
+        $exec->setAccessible(true);
+        try {
+            $exec->invoke($conn, "INSERT INTO t VALUES ('x')", []);
+            self::fail('the fabricated duplicate-key failure must propagate');
+        } catch (\PDOException $caught) {
+            self::assertNotSame($pdo->lastThrown, $caught, 'the wrapper is a NEW exception, not the raw one');
+            self::assertSame(
+                $pdo->lastThrown,
+                $caught->getPrevious(),
+                'the wrapper must carry the original as previous (TXMUTEX-A A7)'
+            );
+            self::assertSame(
+                1062,
+                MysqlError::driverCode($caught->errorInfo),
+                'driverCode() must stay authoritative on the rethrown wrapper'
+            );
+            self::assertSame(23000, (int) $caught->getCode(), 'the SQLSTATE-as-int code must be preserved');
+            self::assertStringStartsWith('SQL:', $caught->getMessage(), 'the SQL: rendering must be preserved');
+        }
     }
 }
