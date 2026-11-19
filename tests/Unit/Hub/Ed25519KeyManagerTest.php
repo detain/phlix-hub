@@ -7,6 +7,7 @@ namespace Phlix\Hub\Tests\Unit\Hub;
 use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 
 /**
  * Unit tests for {@see Ed25519KeyManager}.
@@ -291,5 +292,64 @@ final class Ed25519KeyManagerTest extends TestCase
         $expired = new Ed25519KeyManager($this->keyPath, static fn (): int => $afterExpiry);
         self::assertNull($expired->getPublicKeyForKid($oldKid));
         self::assertCount(1, $expired->getActivePublicKeys());
+    }
+
+    /**
+     * Sign-seam differential pins (S2 cure, srv ee9f1c4c WebAuthn-parity
+     * precedent): stored key files reach the parser with ZERO upstream
+     * validation and their secrets feed every federation sign, so accept/
+     * reject semantics here ARE signing security. These cases pin the legacy
+     * hub dialect byte-for-byte against the shared kernel's differing posture
+     * (oversized bodies fail loud — the kernel would truncate; marker-less
+     * files load — the kernel would reject) while the additive modern writer
+     * dialect keeps round-tripping.
+     */
+    public function testSignSeamDifferentialOversizedLegacyBodyFailsLoud(): void
+    {
+        // 65-byte decoded body in a marked standard-base64 file: the
+        // pre-delegation parser threw 'Ed25519 private key must be exactly 64
+        // bytes.'; the delegated one silently truncated to the first 64 bytes
+        // (kernel `strlen >= 64` posture) and let a corrupted key sign anyway.
+        $oversized = base64_encode(str_repeat('A', 65));
+        file_put_contents(
+            $this->keyPath,
+            "-----BEGIN ED25519 PRIVATE KEY-----\n{$oversized}\n-----END ED25519 PRIVATE KEY-----\n",
+        );
+
+        $manager = new Ed25519KeyManager($this->keyPath);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Ed25519 private key must be exactly 64 bytes.');
+        $manager->getOrCreateKeyPair();
+    }
+
+    public function testSignSeamDifferentialMarkerLessLegacyBodyStillLoads(): void
+    {
+        // The historical parser never required the PEM markers; the kernel's
+        // native arm does, so a kernel-only delegation REJECTED files the hub
+        // had always accepted. Legacy parity = these keep loading intact.
+        $keyPair = sodium_crypto_sign_keypair();
+        $secret = substr($keyPair, 0, 64);
+        file_put_contents($this->keyPath, base64_encode($secret));
+
+        $pair = (new Ed25519KeyManager($this->keyPath))->getOrCreateKeyPair();
+
+        self::assertSame($secret, $pair['private']);
+        self::assertSame(substr($secret, 32), $pair['public']);
+    }
+
+    public function testSignSeamDifferentialKernelFoldedWriterFileRoundTrips(): void
+    {
+        // Additive modern arm (banked v0.57 modernization): the file THIS
+        // writer emits is kernel-folded base64url — the legacy arm cannot read
+        // it, so the modern discriminator must keep catching it or fresh
+        // installs break on the first reload.
+        $first = new Ed25519KeyManager($this->keyPath);
+        $kid = $first->getKid();
+
+        $reloaded = new Ed25519KeyManager($this->keyPath);
+
+        self::assertSame($kid, $reloaded->getKid(), 'writer-emitted file reloads via the modern arm');
+        self::assertStringNotContainsString("\n\n", (string) file_get_contents($this->keyPath));
     }
 }

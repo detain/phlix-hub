@@ -567,15 +567,32 @@ final class Ed25519KeyManager
     /**
      * Extract the full 64-byte Ed25519 keypair from a PEM string.
      *
-     * Parse work is the shared kernel's (wave S2): {@see Ed25519Pem::parsePem()}
-     * reads this hub's historical one-line plain-base64 native files, the
-     * server-dialect native files this writer now emits, and standard PKCS#8
-     * Ed25519 blocks alike. The kernel's native arm takes the first 64 bytes of
-     * an oversized body (the server's `strlen >= 64` posture, adjudicated
-     * incidental in the kernel docblock); the hub's historical exact-64
-     * rejection survives here as the fail-loud mapping of every parse failure,
-     * so a corrupt signing key still stops boot loudly rather than being
-     * silently regenerated (see {@see self::loadStoredKeyPair()}).
+     * Two parse dialects, one strict gate (sign-seam differential, r1 class):
+     *  1. The LEGACY hub file body — one-line (CR/LF/space-stripped) STANDARD
+     *     base64 of the exact 64-byte raw keypair, marked or marker-less —
+     *     parses under the hub's historical rules, byte-identical to the
+     *     pre-delegation body (wave S2, 87007df1^): an OVERSIZED decoded body
+     *     FAILS LOUD with the historical exception. The shared kernel's native
+     *     arm would instead truncate to its first 64 bytes (the server's
+     *     `strlen >= 64` posture); that softening is NOT admissible on this
+     *     load seam feeding every federation sign operation
+     *     ({@see \Phlix\Hub\Federation\FederationPeerManager} +
+     *     {@see \Phlix\Hub\Federation\FederationFrameHandler} consume the
+     *     secret), because a corrupted key file must stop boot loudly rather
+     *     than sign with a silently truncated secret.
+     *  2. MODERN files — this writer's kernel-folded base64url/64-fold
+     *     server-dialect bodies (detected by alphabet) and non-ED25519-labeled
+     *     PEM blocks such as PKCS#8 (detected by label) — delegate to
+     *     {@see Ed25519Pem::parsePem()}. Both arms are ADDITIVE acceptance
+     *     beyond the legacy dialect, required so a generate-then-load
+     *     round-trip of freshly written keys succeeds; modernizing the legacy
+     *     arm itself (fold-tolerant parsing with kept strictness) is banked
+     *     for the v0.57 charter, not shipped here.
+     *
+     * A malformed hybrid (standard body corrupted into containing `-`/`_`)
+     * falls to the kernel arm and fails loud with the modern message; the
+     * exception TYPE (RuntimeException) is invariant across both arms and
+     * every reject path, which is what callers branch on.
      *
      * @param string $pem PEM-encoded key.
      *
@@ -585,14 +602,54 @@ final class Ed25519KeyManager
      */
     private function extractKeyPair(string $pem): array
     {
-        $parsed = Ed25519Pem::parsePem($pem);
-        if ($parsed === null) {
-            throw new RuntimeException(
-                'Ed25519 private key could not be parsed (expected a 64-byte Ed25519 key: native or PKCS#8).',
-            );
+        if ($this->isModernKeyFileDialect($pem)) {
+            $parsed = Ed25519Pem::parsePem($pem);
+            if ($parsed === null) {
+                throw new RuntimeException(
+                    'Ed25519 private key could not be parsed (expected a 64-byte Ed25519 key: native or PKCS#8).',
+                );
+            }
+
+            return ['private' => $parsed['secret'], 'public' => $parsed['public']];
         }
 
-        return ['private' => $parsed['secret'], 'public' => $parsed['public']];
+        // Legacy body below: byte-identical to the pre-delegation parser (wave
+        // S2 sign-seam differential; srv ee9f1c4c WebAuthn-parity precedent) —
+        // exact-64 standard-base64 rule kept loud, marker-less files kept
+        // loadable. Do not "tidy" this into the kernel call.
+        $key = trim($pem);
+        $key = (string) preg_replace('#-----(BEGIN|END) ED25519 PRIVATE KEY-----#', '', $key);
+        $key = str_replace(["\r", "\n", ' '], '', $key);
+        $decoded = $this->base64Decode($key);
+        if (strlen($decoded) !== 64) {
+            throw new RuntimeException('Ed25519 private key must be exactly 64 bytes.');
+        }
+
+        return ['private' => $decoded, 'public' => substr($decoded, 32)];
+    }
+
+    /**
+     * Does this stored key file use a MODERN dialect the legacy parser cannot
+     * read? Two discriminators, both cheap and content-local: a PEM label
+     * other than the hub's ED25519 PRIVATE KEY (PKCS#8 et al.) or a body
+     * carrying base64url-only characters (`-`/`_`), which the kernel-folded
+     * writer (Ed25519Pem::buildPem) emits but the historical one-line standard
+     * alphabet never can. Standard-alphabet bodies — legacy files in both
+     * marked and marker-less shapes — deliberately stay on the legacy arm so
+     * their exact-64 strictness is enforced by the hub, not the kernel.
+     */
+    private function isModernKeyFileDialect(string $pem): bool
+    {
+        $labeled = preg_match('/-----BEGIN ([A-Z0-9 ]+)-----/', $pem, $matches) === 1;
+        if ($labeled && $matches[1] !== 'ED25519 PRIVATE KEY') {
+            return true;
+        }
+
+        $body = trim($pem);
+        $body = (string) preg_replace('#-----(BEGIN|END) ED25519 PRIVATE KEY-----#', '', $body);
+        $body = str_replace(["\r", "\n", ' '], '', $body);
+
+        return preg_match('/[-_]/', $body) === 1;
     }
 
     /**
