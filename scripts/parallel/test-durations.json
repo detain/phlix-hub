@@ -270,6 +270,7 @@
         "tests/Unit/Relay/FrameBufferOverflowExceptionTest.php": 0.001,
         "tests/Unit/Relay/FrameDecoderTest.php": 0.034,
         "tests/Unit/Relay/FrameEncoderTest.php": 0.003,
+        "tests/Unit/Relay/FrameWireCorpusTest.php": 0.014,
         "tests/Unit/Relay/IdleReaperTest.php": 0.028,
         "tests/Unit/Relay/InboundHandshakeGuardTest.php": 0.015,
         "tests/Unit/Relay/InboundPackageCapTest.php": 0.009,
