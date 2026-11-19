@@ -26,6 +26,21 @@ use Workerman\Protocols\Http\Response as WorkermanResponse;
  */
 class Response
 {
+    /**
+     * HSTS value emitted on https-scheme responses (HUB-4).
+     *
+     * Static mirror of the phlix-server policy default: the server composes
+     * the identical literal from `SecurityHeadersPolicy::DEFAULT_HSTS_MAX_AGE`
+     * (one year) plus its non-configurable `includeSubDomains` limb
+     * (`src/Server/Http/Middleware/SecurityHeaders.php`). The server additionally
+     * re-reads `security.hsts_max_age_seconds` live behind a 60s memo — that
+     * settings coupling is server-specific; the hub header surface has none, so
+     * the default is frozen as a constant here. Folding the two hosts onto one
+     * canonical (shared library) is the wave-3 extraction, deliberately not
+     * this lane's stopgap.
+     */
+    public const STRICT_TRANSPORT_SECURITY_VALUE = 'max-age=31536000; includeSubDomains';
+
     public int $statusCode = 200;
 
     /** @var array<string, string> */
@@ -351,11 +366,20 @@ class Response
      * flag, and again inside that class on the exact response shape — so no
      * ordinary response changes encoder.
      *
+     * @param bool $hstsEligible Whether the browser-visible scheme of this
+     *                           exchange is https (HUB-4). Only then is
+     *                           {@see self::STRICT_TRANSPORT_SECURITY_VALUE}
+     *                           attached; the gate lives at the call sites
+     *                           ({@see \Phlix\Hub\Application}), which read the
+     *                           https first-hop limb of the hub's CookiePolicy
+     *                           scheme law — plaintext localhost/dev posture
+     *                           ships no HSTS.
+     *
      * @return WorkermanResponse
      */
-    public function toWorkermanResponse(): WorkermanResponse
+    public function toWorkermanResponse(bool $hstsEligible = false): WorkermanResponse
     {
-        $headers = $this->withDefaultSecurityHeaders($this->headers);
+        $headers = $this->withDefaultSecurityHeaders($this->headers, $hstsEligible);
         $response = $this->headOnly
             ? new BodylessResponse($this->statusCode, $headers, $this->body)
             : new WorkermanResponse($this->statusCode, $headers, $this->body);
@@ -383,6 +407,13 @@ class Response
      *    hub pages (SPA shell, OAuth consent, error screens) must never be
      *    click-jacked inside an attacker frame. Same pairing the consent
      *    screen applies manually in `OAuthController::secure()`.
+     *  - `Strict-Transport-Security` (HUB-4) on eligible responses only:
+     *    the hub sits behind the same HAProxy front end as the server, and a
+     *    user-facing admin/SSO flow without HSTS is exactly the downgrade
+     *    hole bug #9 closed on the server side. Emission is conditional
+     *    because the hub's scheme truth arrives per-request (https first
+     *    hop); the server twin emits unconditionally — disclosed posture
+     *    delta, both documented at their respective surfaces.
      *
      * Explicitly-set headers always win — each default is applied only when
      * the field is absent (case-insensitively, per RFC 9110 §5), so callers
@@ -390,10 +421,11 @@ class Response
      * duplicated.
      *
      * @param array<string, string> $headers
+     * @param bool                  $hstsEligible See {@see self::toWorkermanResponse()}.
      *
      * @return array<string, string>
      */
-    private function withDefaultSecurityHeaders(array $headers): array
+    private function withDefaultSecurityHeaders(array $headers, bool $hstsEligible = false): array
     {
         $present = [];
         $contentType = '';
@@ -407,6 +439,10 @@ class Response
 
         if (!isset($present['x-content-type-options'])) {
             $headers['X-Content-Type-Options'] = 'nosniff';
+        }
+
+        if ($hstsEligible && !isset($present['strict-transport-security'])) {
+            $headers['Strict-Transport-Security'] = self::STRICT_TRANSPORT_SECURITY_VALUE;
         }
 
         if (str_starts_with($contentType, 'text/html')) {

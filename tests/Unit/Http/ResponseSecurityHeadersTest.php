@@ -80,4 +80,38 @@ final class ResponseSecurityHeadersTest extends TestCase
         self::assertStringContainsString("X-Content-Type-Options: nosniff\r\n", $rendered);
         self::assertStringContainsString("X-Frame-Options: DENY\r\n", $rendered);
     }
+
+    // ---- HUB-4: HSTS on the https-scheme response surface ------------------
+
+    public function testEligibleResponseCarriesHsts(): void
+    {
+        $rendered = (string) (new Response())->json(['ok' => true])->toWorkermanResponse(true);
+
+        self::assertStringContainsString(
+            'Strict-Transport-Security: ' . Response::STRICT_TRANSPORT_SECURITY_VALUE . "\r\n",
+            $rendered,
+        );
+    }
+
+    public function testHstsAbsentWithoutSchemeEligibility(): void
+    {
+        // The dev/plaintext posture (no https first hop) must never ship HSTS:
+        // a max-age pinned by a mislabelled plaintext answer would arm itself
+        // on the browser's first accidental https visit to the host.
+        $rendered = (string) (new Response())->json(['ok' => true])->toWorkermanResponse();
+
+        self::assertStringNotContainsString('Strict-Transport', $rendered);
+    }
+
+    public function testExplicitHstsWinsAndIsNeverDuplicated(): void
+    {
+        $rendered = (string) (new Response())
+            ->json(['ok' => true])
+            ->header('strict-transport-security', 'max-age=0')
+            ->toWorkermanResponse(true);
+        $lower = strtolower($rendered);
+
+        self::assertSame(1, substr_count($lower, 'strict-transport-security:'));
+        self::assertStringContainsString('strict-transport-security: max-age=0', $lower);
+    }
 }

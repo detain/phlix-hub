@@ -30,6 +30,7 @@ use Phlix\Hub\Runtime\CoroutineHooks;
 use Phlix\Hub\SyncPlay\ChannelPendingCommandPusher;
 use Phlix\Hub\SyncPlay\PendingCommandPusherInterface;
 use Phlix\Hub\SyncPlay\SyncPlayRelayWorker;
+use Phlix\Hub\Hub\CookiePolicy;
 use Phlix\Hub\Hub\MaintenanceGate;
 use Phlix\Hub\Http\Controllers\AdminDashboardController;
 use Phlix\Hub\Http\Controllers\AdminUpdatesController;
@@ -340,6 +341,8 @@ final class Application
      * @param int         $size            File size in bytes.
      * @param string|null $ifNoneMatch     Raw If-None-Match request header.
      * @param string|null $ifModifiedSince Raw If-Modified-Since request header.
+     * @param bool        $hstsEligible    Attach HSTS (HUB-4; see
+     *                                     {@see Response::STRICT_TRANSPORT_SECURITY_VALUE}).
      *
      * @return array{status: int, headers: array<string, string>}
      */
@@ -350,6 +353,7 @@ final class Application
         int $size,
         ?string $ifNoneMatch,
         ?string $ifModifiedSince,
+        bool $hstsEligible = false,
     ): array {
         // Baseline security headers on the static path (F3) — this route bypasses
         // the Response builder, so `nosniff` (and frame protection for HTML) is
@@ -358,6 +362,12 @@ final class Application
         if (str_starts_with(strtolower($mime), 'text/html')) {
             $security['X-Frame-Options'] = 'DENY';
             $security['Content-Security-Policy'] = "frame-ancestors 'none'";
+        }
+        if ($hstsEligible) {
+            // HUB-4: HSTS rides the static surface too. The header map here is
+            // hub-owned (no caller-supplied headers can collide on this route),
+            // so the eligibility limb alone decides.
+            $security['Strict-Transport-Security'] = Response::STRICT_TRANSPORT_SECURITY_VALUE;
         }
 
         if ($isHashedAsset) {
@@ -573,6 +583,7 @@ final class Application
      * @param string|null $ifModifiedSince  Raw If-Modified-Since header.
      * @param string|null $acceptEncoding   Raw Accept-Encoding header (HUB-39:
      *                                      gzip tier for hashed text assets).
+     * @param bool        $hstsEligible     Attach HSTS (HUB-4) to the decision.
      */
     public static function buildStaticFastPathResponse(
         string $disposition,
@@ -581,6 +592,7 @@ final class Application
         ?string $ifNoneMatch,
         ?string $ifModifiedSince,
         ?string $acceptEncoding = null,
+        bool $hstsEligible = false,
     ): \Workerman\Protocols\Http\Response {
         $real = $file['real'];
         // Extension-first MIME map — mime_content_type() sniffs content via
@@ -624,6 +636,7 @@ final class Application
             $file['size'],
             $ifNoneMatch,
             $ifModifiedSince,
+            $hstsEligible,
         );
 
         if ($decision['status'] === 304) {
@@ -2505,6 +2518,13 @@ final class Application
             $startBytesRead = $collector !== null ? $connection->bytesRead : 0;
             $startBytesWritten = $collector !== null ? $connection->bytesWritten : 0;
             $status = 200;
+            // HUB-4: HSTS rides only responses whose browser-visible scheme is
+            // https. HAProxy is this hub's only TLS terminator, so the https
+            // first-hop limb of the hub's CookiePolicy scheme law is exactly
+            // what the browser sees; plaintext dev/localhost ships no HSTS.
+            /** @var string|null $forwardedProto */
+            $forwardedProto = $request->header('x-forwarded-proto');
+            $hstsEligible = CookiePolicy::isHttpsForwarded(is_string($forwardedProto) ? $forwardedProto : null);
             try {
                 // 1. Static-file fast path. Serve files under public/
                 //    directly (CSS, JS, images, fonts). GET and HEAD only —
@@ -2548,6 +2568,7 @@ final class Application
                             is_string($ifNoneMatch) ? $ifNoneMatch : null,
                             is_string($ifModifiedSince) ? $ifModifiedSince : null,
                             is_string($acceptEncoding) ? $acceptEncoding : null,
+                            $hstsEligible,
                         );
                         $status = $resp->getStatusCode();
                         $connection->send($resp);
@@ -2562,7 +2583,7 @@ final class Application
                 $bodyViolation = self::bodyCapViolation($request);
                 if ($bodyViolation !== null) {
                     $status = 413;
-                    $connection->send($bodyViolation->toWorkermanResponse());
+                    $connection->send($bodyViolation->toWorkermanResponse($hstsEligible));
 
                     return;
                 }
@@ -2579,7 +2600,7 @@ final class Application
                 //     MaintenanceGate docblock for the posture rationale.
                 if (str_starts_with($path, '/api/') && $maintenanceGate->shouldBlock($path)) {
                     $status = 503;
-                    $connection->send(self::maintenanceResponse()->toWorkermanResponse());
+                    $connection->send(self::maintenanceResponse()->toWorkermanResponse($hstsEligible));
 
                     return;
                 }
@@ -2646,7 +2667,7 @@ final class Application
                         $connection->close();
                     }
                 } else {
-                    $connection->send($response->toWorkermanResponse());
+                    $connection->send($response->toWorkermanResponse($hstsEligible));
                 }
             } catch (RateLimitException $e) {
                 // Central 429 mapping for any limiter trip that bubbles out of
@@ -2657,7 +2678,7 @@ final class Application
                 // locally first (AuthController login*, ServerController::heartbeat);
                 // this is the backstop for everything else (proxy/jwks/...).
                 $status = 429;
-                $connection->send(self::rateLimitResponse($e)->toWorkermanResponse());
+                $connection->send(self::rateLimitResponse($e)->toWorkermanResponse($hstsEligible));
             } catch (Throwable $e) {
                 $status = 500;
                 $logger?->error('Unhandled exception in hub request', [
@@ -2672,7 +2693,7 @@ final class Application
                 $error = (new Response())
                     ->status(500)
                     ->json(['error' => 'Internal Server Error']);
-                $connection->send($error->toWorkermanResponse());
+                $connection->send($error->toWorkermanResponse($hstsEligible));
             } finally {
                 // Record the request on EVERY path (success, static file, early
                 // return, or exception), mirroring the server's HttpHandler.

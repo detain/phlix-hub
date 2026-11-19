@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit;
 
 use Phlix\Hub\Application;
+use Phlix\Hub\Http\Response;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
 use Phlix\Hub\Tests\Support\Narrow;
@@ -711,5 +712,55 @@ final class ApplicationStaticAssetCacheTest extends TestCase
             $packed += $gz === null ? $size : strlen($gz);
         }
         $this->assertGreaterThan(2_000_000, $raw - $packed, "raw={$raw} gz={$packed}");
+    }
+
+    // ---- HUB-4: HSTS on the static fast-path surface -----------------------
+
+    public function testStaticDecisionCarriesHstsOnlyWhenEligible(): void
+    {
+        $mtime = 1_700_000_000;
+        $size = 4096;
+
+        $eligible = Application::computeStaticCacheDecision(self::CSS_MIME, false, $mtime, $size, null, null, true);
+        $default = Application::computeStaticCacheDecision(self::CSS_MIME, false, $mtime, $size, null, null);
+        $hashed = Application::computeStaticCacheDecision(self::CSS_MIME, true, $mtime, $size, null, null, true);
+
+        self::assertSame(Response::STRICT_TRANSPORT_SECURITY_VALUE, $eligible['headers']['Strict-Transport-Security']);
+        self::assertSame(Response::STRICT_TRANSPORT_SECURITY_VALUE, $hashed['headers']['Strict-Transport-Security']);
+        self::assertArrayNotHasKey('Strict-Transport-Security', $default['headers']);
+    }
+
+    public function testStaticNotModifiedArmAlsoCarriesHstsWhenEligible(): void
+    {
+        $mtime = 1_700_000_000;
+        $size = 4096;
+        $etag = $this->etagFor($mtime, $size);
+
+        $decision = Application::computeStaticCacheDecision(self::CSS_MIME, false, $mtime, $size, $etag, null, true);
+
+        self::assertSame(304, $decision['status']);
+        self::assertSame(Response::STRICT_TRANSPORT_SECURITY_VALUE, $decision['headers']['Strict-Transport-Security']);
+    }
+
+    public function testFastPathWireCarriesHstsOnlyWhenEligible(): void
+    {
+        $file = $this->staticFileShape(self::NON_HASHED_ASSET);
+
+        $with = (string) Application::buildStaticFastPathResponse(
+            'body',
+            self::NON_HASHED_ASSET,
+            $file,
+            null,
+            null,
+            null,
+            true,
+        );
+        $without = (string) Application::buildStaticFastPathResponse('body', self::NON_HASHED_ASSET, $file, null, null);
+
+        self::assertStringContainsString(
+            'Strict-Transport-Security: ' . Response::STRICT_TRANSPORT_SECURITY_VALUE . "\r\n",
+            $with,
+        );
+        self::assertStringNotContainsString('Strict-Transport', $without);
     }
 }
