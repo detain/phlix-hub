@@ -327,7 +327,9 @@ jobs:
         # with the standalone runner the deploy scripts use, so a migration that
         # cannot apply to an empty MySQL 8 database fails HERE rather than on a
         # production box. It is a genuine gate: MigrationRunner::applyFile()
-        # rethrows any statement error and scripts/run-migrations.php exits 1 on it
+        # rethrows any statement error whose driver errno is not on the runner's
+        # closed idempotent list (S159/HUB-5.1) and scripts/run-migrations.php
+        # exits 1 on it
         # (verified locally: an unreachable database exits 1, a replay of an
         # already-applied chain prints "Nothing to do" and exits 0). Do NOT add
         # `|| true` or `continue-on-error` — read the error and fix the migration.
