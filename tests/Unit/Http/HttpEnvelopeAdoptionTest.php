@@ -272,6 +272,7 @@ final class HttpEnvelopeAdoptionTest extends TestCase
         $audit = $this->createMock(AuditLogger::class);
 
         $unauthenticated = (new AdminMiddleware($repo, $audit))(new Request());
+        self::assertNotNull($unauthenticated);
         $this->assertWireEnvelope(
             $unauthenticated,
             401,
@@ -283,6 +284,7 @@ final class HttpEnvelopeAdoptionTest extends TestCase
         $request         = new Request();
         $request->userId = 'u-1';
         $forbidden       = (new AdminMiddleware($repo, $audit))($request);
+        self::assertNotNull($forbidden);
         $this->assertWireEnvelope(
             $forbidden,
             403,
