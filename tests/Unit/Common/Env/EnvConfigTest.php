@@ -196,6 +196,7 @@ final class EnvConfigTest extends TestCase
             'True mixed' => ['True', true],
             'yes' => ['yes', true],
             'YES' => ['YES', true],
+            'Yes mixed' => ['Yes', true],
             'on' => ['on', true],
             'ON upper' => ['ON', true],
             'zero' => ['0', false],
