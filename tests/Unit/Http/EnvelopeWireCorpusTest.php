@@ -100,6 +100,9 @@ final class EnvelopeWireCorpusTest extends TestCase
         ];
     }
 
+    /**
+     * @param array<string, string> $headers exact header map expected on the wire
+     */
     #[DataProvider('errorEnvelopeProvider')]
     public function testErrorFamilyWireBytesArePinned(
         Response $response,

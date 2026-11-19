@@ -142,6 +142,30 @@ class Response
     }
 
     /**
+     * Is a header already present, regardless of the spelling it was set with?
+     *
+     * HTTP field names are case-insensitive (RFC 9110 §5.1), but `$headers`
+     * is a plain PHP array whose keys are case-SENSITIVE — a caller writing
+     * `header('cache-control', ...)` would otherwise slip past a bare
+     * `isset($this->headers['Cache-Control'])` check and get a DUPLICATE
+     * header line on the wire. This is the phlix-server Response twin of the
+     * same private guard (A-03: the two repos' Cache-Control seed checks
+     * drifted exactly here; the hub now shares the server's case-insensitive
+     * law).
+     */
+    private function hasHeader(string $name): bool
+    {
+        $needle = strtolower($name);
+        foreach (array_keys($this->headers) as $key) {
+            if (strtolower((string) $key) === $needle) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * JSON-encode `$data` as the response body and set Content-Type.
      *
      * The encode is COMPACT (minors campaign M-HUB-09): the hub's REST wire
@@ -175,7 +199,7 @@ class Response
         // own Cache-Control beforehand keeps it (e.g. HubJwksController's
         // `public, max-age=3600`), and one setting it afterwards overwrites
         // via header(). Mirrors the phlix-server twin landed the same day.
-        if (! isset($this->headers['Cache-Control'])) {
+        if (! $this->hasHeader('Cache-Control')) {
             $this->headers['Cache-Control'] = 'no-store';
         }
         $this->body = json_encode($data, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
@@ -305,7 +329,7 @@ class Response
         // (see the serving layer). This only seeds a default — a caller that set
         // its own Cache-Control beforehand keeps its value, and one that sets it
         // afterwards overwrites this via header(). Mirrors phlix-server Response.
-        if (! isset($this->headers['Cache-Control'])) {
+        if (! $this->hasHeader('Cache-Control')) {
             $this->headers['Cache-Control'] = 'no-cache';
         }
         $this->body = $html;

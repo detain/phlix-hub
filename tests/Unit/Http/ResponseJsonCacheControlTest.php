@@ -84,4 +84,46 @@ final class ResponseJsonCacheControlTest extends TestCase
 
         self::assertSame('no-cache', $response->headers['Cache-Control'] ?? null);
     }
+
+    public function testLowercaseCacheControlPreSetIsNotDuplicatedByTheJsonSeed(): void
+    {
+        // A-03, server-side L-7 port. HTTP header names are case-insensitive,
+        // so a caller writing `header('cache-control', ...)` means the SAME
+        // header as the canonical spelling — the json() seed must recognise
+        // it and stay out of the way. While the guard compared array keys
+        // case-sensitively, a lowercase pre-set produced TWO Cache-Control
+        // lines on the wire (caller's + seeded 'no-store'), and RFC 9110
+        // semantics for a doubled header are nobody's friend. This pin
+        // reddens at the parent (pre-fix) and greens with the case-insensitive
+        // hasHeader() guard adopted from phlix-server Response.
+        $response = (new Response())
+            ->header('cache-control', 'public, max-age=3600')
+            ->json(['ok' => true]);
+
+        self::assertSame(
+            ['cache-control'],
+            array_values(array_filter(
+                array_keys($response->headers),
+                static fn (string $name): bool => strtolower($name) === 'cache-control'
+            ))
+        );
+        self::assertSame('public, max-age=3600', $response->headers['cache-control'] ?? null);
+    }
+
+    public function testLowercaseCacheControlPreSetIsNotDuplicatedByTheHtmlSeed(): void
+    {
+        // Same bug class on the html() no-cache seed — the second A-03 site.
+        $response = (new Response())
+            ->header('cache-control', 'private, max-age=5')
+            ->html('<!doctype html><p>x</p>');
+
+        self::assertSame(
+            ['cache-control'],
+            array_values(array_filter(
+                array_keys($response->headers),
+                static fn (string $name): bool => strtolower($name) === 'cache-control'
+            ))
+        );
+        self::assertSame('private, max-age=5', $response->headers['cache-control'] ?? null);
+    }
 }
