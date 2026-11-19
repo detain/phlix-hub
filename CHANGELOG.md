@@ -12,6 +12,50 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Refactor [S2] — `phlix-shared` v0.56.0 adoption: the security kernels become delegates — 2026-11-19
+
+- `detain/phlix-shared` pinned `^0.55.1` → `^0.56.0` (composer lock resolves the
+  GitHub dist of tag `v0.56.0`, object `6ec92218`, peel `785e805` — packagist-sync
+  gate passed before the update; DESIGN `/tmp/opencode/refactor-exec-1119/SHARED-056-DESIGN.md` §S2).
+- Delegated to the shared kernels, hub behavior byte-identical (public signatures
+  unmoved, wire bytes and frames unmoved): `Auth/JwtHandler` (HS256 mint/verify →
+  `Security\Jwt`, `sid` claim → `Auth\SessionFamily`, base64url pair deleted),
+  `OAuth/Pkce` (thin shim over `Security\Pkce` — the S256-only law and both
+  `\A/\z` regex arms are the shared body now), `Hub/Ed25519KeyManager` +
+  `Hub/EnrollmentJwtService` + `Jwt/JwtHeader` + `Federation/FederationHandshake`
+  (PEM/JWK/fingerprint/base64url → `Security\{Ed25519Pem,Base64Url}`; the kid stays
+  the full 43-char fingerprint per owner row O-2), `Http/Middleware/CsrfOriginGuard`
+  (verb limb → `Security\OriginPolicy::stateChangingMethod`; the header law keeps
+  riding `Hub\CookiePolicy` until that file's live seat folds it kernel-side),
+  `Auth/AuthManager` (refusal identifiers → `Auth\FamilyRefusalReason` enum values,
+  rotation grace → `SessionFamily::ROTATION_GRACE_SECONDS`; the `markGrantConsumed(): bool`
+  seam is kept — enum-ification would move a signature, filed as a v0.57 charter row),
+  and `SyncPlay/SyncPlayRelayWorker` (ms clock → `Support\Clock::unixMs()` round law,
+  seven throwing encodes → `Support\Json::encode($x, 0)` with the hub's live style set
+  passed explicitly per DESIGN M-13, and the 19-type canonical catalog +
+  server-only refusal set now alias `Relay\SyncPlayDialect` constants in the hub's
+  declaration order — the LW-082-b binding test and every wire suite stayed green
+  unmodified, which IS the identity proof).
+- `scripts/assert-required-extensions.php` + its drift twin re-point the `ext-hash`
+  citation: `hash_hmac` moved into the shared `Jwt` kernel, so the security-path
+  witness is now `Hub/ClientRelayTokenService.php`'s live `hash('sha256', …)` —
+  required-extension status unchanged, the prose stays true.
+- `phpunit.xml` gains `displayDetailsOnSkippedTests="true"` (skip names surface in
+  console output; the S173 junit-based integration gate is unaffected).
+- Landed by other lanes and credited rather than re-done: the `getenv "0"`-swallow
+  fail-opens fix (ea2e4f40), the refresh consume-arbiter (62df7f0d),
+  PasswordHasher mirror (33f70375), CSPRNG/Ids (0d3b1456), revoked-family
+  retirements (db2d9edd), Router/HookDelivery forward-ports (6322a06b/b1e0c1f6),
+  response-envelope seams (f9b25cce era), TLS boot collapse (b3146f8a/f0292216),
+  console JsonOutput fold (47715678).
+- Deferred with the components' absence from the v0.56.0 release (SHR-S1…S5 were
+  cut from the tag): RateLimit engine, Http envelope/reason-phrase kit,
+  Database/Uuid/WriteResult, SettingsCodec, Updates/Metrics VOs, LivenessWindows,
+  and the shared-side grammar enforcement — which stays UNenforced hub-side as a
+  separate owner row. The federation reconnect ladder keeps its delay-as-state
+  `min(d×2, cap)` arithmetic (shared `Backoff::stepped` is attempt-indexed;
+  converting the park-at-cap state machine is a charter row, not a math swap).
+
 ### Refactor [HUB-MYSQLERR] — `MysqlError` becomes the single MySQL error detector (D-16 twin) — 2026-11-19
 
 - New `Phlix\Hub\Common\Database\MysqlError` (body twin of the phlix-server class,
