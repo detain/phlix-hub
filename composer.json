@@ -19,6 +19,7 @@
         "workerman/workerman": "~5.1"
     },
     "require-dev": {
+        "detain/phlix-testkit": "dev-master@dev",
         "mockery/mockery": "^1.6",
         "phpstan/phpstan": "^2.0",
         "phpunit/phpunit": "^12.5",
@@ -46,5 +47,19 @@
         "cs": "@php scripts/assert-phpcs-corpus.php",
         "psalm": "psalm --no-progress",
         "start": "php start.php start"
-    }
+    },
+    "extra": {
+        "phlix": {
+            "testkitPinNote": "detain/phlix-testkit sits in require-dev as a path repo (dev-master@dev, symlink:false) mirroring the local kit tree; the lock entry dist.reference records the kit sha at install. Honest form today: the kit is unpublished (no tag exists, origin carries only a stale pre-split scaffold, anonymous archive URLs 404). Release pinning rides a future tag - at cut-over this entry migrates to the estate zipball-sha form used by detain/phlix-shared, and the repositories path entry drops (precedent: server 3260bf75 path-era -> 9fe18fa9 drop-dev-path)."
+        }
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "/home/sites/phlix/phlix-testkit",
+            "options": {
+                "symlink": false
+            }
+        }
+    ]
 }
