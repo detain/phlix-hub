@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Hub;
 
-use Phlix\Hub\Common\Database\UpsertSyntax;
+use Phlix\Shared\Database\UpsertSyntax;
 use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Common\Support\Ids;

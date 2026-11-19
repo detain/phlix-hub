@@ -670,7 +670,7 @@ final class MetricsFlushServiceTest extends TestCase
     public function testEveryMetricsUpsertIsRewrittenPerServerFlavor(): void
     {
         foreach (['10.6.18-MariaDB' => false, '8.0.46' => true] as $version => $alias) {
-            \Phlix\Hub\Common\Database\UpsertSyntax::detect($version);
+            \Phlix\Shared\Database\UpsertSyntax::detect($version);
             $this->queries = [];
             $registry  = new MetricsRegistry(10);
             $collector = new MetricsCollector($registry, true);
@@ -683,7 +683,7 @@ final class MetricsFlushServiceTest extends TestCase
             try {
                 $this->service($collector)->flush(1, 1005);
             } finally {
-                \Phlix\Hub\Common\Database\UpsertSyntax::reset();
+                \Phlix\Shared\Database\UpsertSyntax::reset();
             }
 
             $upserts = $this->queriesMatching('ON DUPLICATE KEY UPDATE');

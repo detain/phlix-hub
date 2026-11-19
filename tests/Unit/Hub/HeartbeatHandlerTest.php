@@ -284,7 +284,7 @@ final class HeartbeatHandlerTest extends TestCase
     public function testBatchedLibraryUpsertIsRewrittenPerServerFlavor(): void
     {
         foreach (['10.6.18-MariaDB' => false, '8.0.46' => true] as $version => $alias) {
-            \Phlix\Hub\Common\Database\UpsertSyntax::detect($version);
+            \Phlix\Shared\Database\UpsertSyntax::detect($version);
             $serverId = 'server-flavor-test';
             $captured = '';
             $db = $this->createMock(Connection::class);
@@ -318,7 +318,7 @@ final class HeartbeatHandlerTest extends TestCase
             try {
                 $handler->handle($serverId, $jwtService->createEnrollmentJwt($serverId), $heartbeat);
             } finally {
-                \Phlix\Hub\Common\Database\UpsertSyntax::reset();
+                \Phlix\Shared\Database\UpsertSyntax::reset();
             }
 
             self::assertNotSame('', $captured, "{$version}: no library upsert issued");

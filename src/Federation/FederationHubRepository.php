@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Federation;
 
-use Phlix\Hub\Common\Database\UpsertSyntax;
+use Phlix\Shared\Database\UpsertSyntax;
 use Workerman\MySQL\Connection;
 
 /**

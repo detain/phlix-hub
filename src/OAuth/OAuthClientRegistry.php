@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\OAuth;
 
-use Phlix\Hub\Common\Database\UpsertSyntax;
+use Phlix\Shared\Database\UpsertSyntax;
 use InvalidArgumentException;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\Support\Ids;
