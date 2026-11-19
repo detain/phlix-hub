@@ -17,6 +17,7 @@ use Phlix\Hub\Alexa\AlexaMediaGateway;
 use Phlix\Hub\Alexa\AlexaPhrases;
 use Phlix\Hub\Alexa\AlexaSpeech;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\SyncPlay\PendingCommandPusherInterface;
@@ -437,8 +438,8 @@ final class AlexaSkillController
         }
 
         $top = $items[0];
-        $mediaId = self::stringField($top, 'id');
-        $name = self::stringField($top, 'name');
+        $mediaId = ControllerRequests::trimmedString($top, 'id');
+        $name = ControllerRequests::trimmedString($top, 'name');
         if ($mediaId === null || $name === null) {
             $this->logger->warning('Alexa media search returned an unusable row', [
                 'server_id' => $serverId,
@@ -485,7 +486,7 @@ final class AlexaSkillController
             if (($row['relayActive'] ?? null) !== true) {
                 continue;
             }
-            $id = self::stringField($row, 'serverId');
+            $id = ControllerRequests::trimmedString($row, 'serverId');
             if ($id !== null) {
                 return ['refusal' => null, 'serverId' => $id];
             }
@@ -518,7 +519,7 @@ final class AlexaSkillController
             return null;
         }
 
-        return self::stringKeyed($item);
+        return ControllerRequests::stringKeyed($item);
     }
 
     /**
@@ -550,12 +551,12 @@ final class AlexaSkillController
             $facts[] = AlexaSpeech::render(AlexaPhrases::FACT_YEAR, ['year' => $year]);
         }
 
-        $rating = self::stringField($item, 'rating');
+        $rating = ControllerRequests::trimmedString($item, 'rating');
         if ($rating !== null && ($wanted === null || $wanted === 'rating')) {
             $facts[] = AlexaSpeech::render(AlexaPhrases::FACT_RATING, ['rating' => $rating]);
         }
 
-        $overview = self::stringField($item, 'overview');
+        $overview = ControllerRequests::trimmedString($item, 'overview');
         if ($overview !== null && ($wanted === null || $wanted === 'summary')) {
             $facts[] = AlexaSpeech::render(AlexaPhrases::FACT_SUMMARY, [
                 'summary' => self::clamp($overview, self::SUMMARY_MAX_CHARS),
@@ -698,56 +699,10 @@ final class AlexaSkillController
             if (!is_array($row)) {
                 continue;
             }
-            $rows[] = self::stringKeyed($row);
+            $rows[] = ControllerRequests::stringKeyed($row);
         }
 
         return $rows;
-    }
-
-    /**
-     * Re-key an arbitrary decoded array so its keys are provably `string`.
-     *
-     * Built with {@see array_combine()} rather than a
-     * `foreach ($source as $k => $v) { $typed[(string) $k] = $v; }` loop, and the
-     * distinction is not cosmetic. The loop binds each decoded value to a `mixed`
-     * variable, which Psalm's errorLevel 1 refuses (`MixedAssignment`) — PHPStan
-     * level 9 does NOT, so the loop passed one analyser and failed the other.
-     * `array_combine()` never names the values at all, and the key type is
-     * DERIVED from the mapper's `: string` return rather than merely asserted.
-     * {@see \Phlix\Hub\Mcp\McpToolContext::decode()} solves the identical problem
-     * the identical way; this is that idiom, not a new one.
-     *
-     * A JSON object's numeric-looking key (`{"0": …}`) decodes to an `int` and is
-     * CAST here rather than dropped, so no field of the server's payload is lost
-     * on the way to {@see stringField()}.
-     *
-     * @param array<array-key, mixed> $source
-     *
-     * @return array<string, mixed>
-     */
-    private static function stringKeyed(array $source): array
-    {
-        return array_combine(
-            array_map(static fn (int|string $key): string => (string) $key, array_keys($source)),
-            $source,
-        );
-    }
-
-    /**
-     * A non-empty, trimmed string field.
-     *
-     * @param array<string, mixed> $source
-     */
-    private static function stringField(array $source, string $key): ?string
-    {
-        /** @var mixed $value */
-        $value = $source[$key] ?? null;
-        if (!is_string($value)) {
-            return null;
-        }
-        $trimmed = trim($value);
-
-        return $trimmed !== '' ? $trimmed : null;
     }
 
     /**

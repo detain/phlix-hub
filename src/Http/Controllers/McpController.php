@@ -14,6 +14,7 @@ namespace Phlix\Hub\Http\Controllers;
 use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Mcp\JsonRpc;
@@ -482,7 +483,7 @@ final class McpController
         // leave stringKeyed()'s `!is_array()` branch unreachable from
         // production — a live guard that nothing runs, which is the shape this
         // codebase keeps mistaking for coverage.
-        $params = self::stringKeyed($rawParams);
+        $params = ControllerRequests::stringKeyedParams($rawParams);
 
         try {
             return match ($rawMethod) {
@@ -580,7 +581,7 @@ final class McpController
         // Also deliberately without `?? []` — see dispatchJsonRpc(). An absent
         // `arguments`, and an explicit `"arguments": null`, both arrive here as
         // `null` and collapse in stringKeyed().
-        $arguments = self::stringKeyed($params['arguments'] ?? null);
+        $arguments = ControllerRequests::stringKeyedParams($params['arguments'] ?? null);
 
         $outcome = $this->registry->call($name, $arguments, $context);
 
@@ -617,34 +618,6 @@ final class McpController
             'isError' => $status >= 400,
             '_meta' => ['phlix/httpStatus' => $status],
         ];
-    }
-
-    /**
-     * Coerce an arbitrary decoded value into a string-keyed map.
-     *
-     * JSON-RPC `params` may legitimately be an array (positional) or absent;
-     * neither is usable by the by-name tool arguments MCP defines, and both
-     * collapse to `[]` here rather than to something half-read.
-     *
-     * @param mixed $raw
-     *
-     * @return array<string, mixed>
-     */
-    private static function stringKeyed(mixed $raw): array
-    {
-        if (!is_array($raw)) {
-            return [];
-        }
-
-        // `ARRAY_FILTER_USE_KEY` guarantees every surviving key is a string, but
-        // Psalm cannot derive that: its array_filter provider only applies the
-        // callback's assertions when no third argument is present, so with a
-        // flag it hands back the *original* key type. The `@var` states the
-        // fact the filter already enforces. Same idiom as `Http\Router`.
-        /** @var array<string, mixed> $out */
-        $out = array_filter($raw, 'is_string', ARRAY_FILTER_USE_KEY);
-
-        return $out;
     }
 
     /**

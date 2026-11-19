@@ -13,6 +13,7 @@ namespace Phlix\Hub\Http\Controllers;
 
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\OAuth\AuthorizationCodeService;
@@ -148,8 +149,8 @@ final class OAuthController
         }
 
         $query       = $request->query;
-        $clientId    = self::str($query, 'client_id');
-        $redirectUri = self::str($query, 'redirect_uri');
+        $clientId    = ControllerRequests::stringOrEmpty($query, 'client_id');
+        $redirectUri = ControllerRequests::stringOrEmpty($query, 'redirect_uri');
 
         // ---- Non-redirectable failures -------------------------------------
         $client = $this->clients->find($clientId);
@@ -177,9 +178,9 @@ final class OAuthController
         }
 
         // ---- Redirectable failures -----------------------------------------
-        $state = self::strOrNull($query, 'state');
+        $state = ControllerRequests::optionalString($query, 'state');
 
-        $responseType = self::str($query, 'response_type');
+        $responseType = ControllerRequests::stringOrEmpty($query, 'response_type');
         if (!hash_equals(self::RESPONSE_TYPE_CODE, $responseType)) {
             return $this->redirectError(
                 $redirectUri,
@@ -189,7 +190,7 @@ final class OAuthController
             );
         }
 
-        $method = self::str($query, 'code_challenge_method');
+        $method = ControllerRequests::stringOrEmpty($query, 'code_challenge_method');
         if (!Pkce::isSupportedMethod($method)) {
             // Covers BOTH an explicit `plain` and an absent parameter. RFC 7636
             // would default the absent case to `plain`; this server does not.
@@ -201,7 +202,7 @@ final class OAuthController
             );
         }
 
-        $challenge = self::str($query, 'code_challenge');
+        $challenge = ControllerRequests::stringOrEmpty($query, 'code_challenge');
         if (!Pkce::isValidChallenge($challenge)) {
             return $this->redirectError(
                 $redirectUri,
@@ -211,7 +212,7 @@ final class OAuthController
             );
         }
 
-        $requested = OAuthScopes::parse(self::str($query, 'scope'));
+        $requested = OAuthScopes::parse(ControllerRequests::stringOrEmpty($query, 'scope'));
         if ($requested === []) {
             // No default grant: "nothing recognised" is a refusal, never
             // "give it the usual".
@@ -259,7 +260,7 @@ final class OAuthController
             return $this->errorPage(401, 'Sign-in required', 'You must be signed in to authorise an application.');
         }
 
-        $ticket = self::str($request->body, ConsentScreen::FIELD_TICKET);
+        $ticket = ControllerRequests::stringOrEmpty($request->body, ConsentScreen::FIELD_TICKET);
         if ($ticket === '') {
             $this->refuse('oauth.consent.no_ticket', ['user_id' => $userId]);
 
@@ -315,7 +316,8 @@ final class OAuthController
             );
         }
 
-        if (!hash_equals(ConsentScreen::DECISION_ALLOW, self::str($request->body, ConsentScreen::FIELD_DECISION))) {
+        $decision = ControllerRequests::stringOrEmpty($request->body, ConsentScreen::FIELD_DECISION);
+        if (!hash_equals(ConsentScreen::DECISION_ALLOW, $decision)) {
             // Anything that is not exactly "allow" — including "deny", a blank
             // field, and a value invented by a client — is a refusal.
             return $this->redirectError(
@@ -377,7 +379,7 @@ final class OAuthController
         unset($params);
 
         $body      = $request->body;
-        $grantType = self::str($body, 'grant_type');
+        $grantType = ControllerRequests::stringOrEmpty($body, 'grant_type');
 
         $client = $this->authenticateClient($request);
         if ($client === null) {
@@ -418,9 +420,9 @@ final class OAuthController
     private function exchangeAuthorizationCode(Request $request, OAuthClient $client): Response
     {
         $body        = $request->body;
-        $verifier    = self::str($body, 'code_verifier');
-        $rawCode     = self::str($body, 'code');
-        $redirectUri = self::str($body, 'redirect_uri');
+        $verifier    = ControllerRequests::stringOrEmpty($body, 'code_verifier');
+        $rawCode     = ControllerRequests::stringOrEmpty($body, 'code');
+        $redirectUri = ControllerRequests::stringOrEmpty($body, 'redirect_uri');
 
         if ($verifier === '') {
             // A missing verifier is refused outright. It is NOT read as "this
@@ -500,7 +502,7 @@ final class OAuthController
      */
     private function exchangeRefreshToken(Request $request, OAuthClient $client): Response
     {
-        $presented = self::str($request->body, 'refresh_token');
+        $presented = ControllerRequests::stringOrEmpty($request->body, 'refresh_token');
 
         $grant = $this->tokens->consumeRefresh($presented);
         if ($grant === null) {
@@ -533,7 +535,7 @@ final class OAuthController
         // silent narrowing — a client that thinks it holds a capability it does
         // not is worse off than one that got an error.
         $scopes  = $grant->scopes;
-        $wanted  = self::str($request->body, 'scope');
+        $wanted  = ControllerRequests::stringOrEmpty($request->body, 'scope');
         if ($wanted !== '') {
             $narrowed = OAuthScopes::parse($wanted);
             if ($narrowed === [] || !self::isSubset($narrowed, $grant->scopes)) {
@@ -577,8 +579,8 @@ final class OAuthController
     {
         $basic = self::basicCredentials($request);
 
-        $clientId = $basic['id'] ?? self::str($request->body, 'client_id');
-        $secret   = $basic['secret'] ?? self::str($request->body, 'client_secret');
+        $clientId = $basic['id'] ?? ControllerRequests::stringOrEmpty($request->body, 'client_id');
+        $secret   = $basic['secret'] ?? ControllerRequests::stringOrEmpty($request->body, 'client_secret');
 
         $client = $this->clients->find($clientId);
         if ($client === null) {
@@ -758,36 +760,5 @@ final class OAuthController
     {
         $this->log->warning($reason, $context);
         $this->audit->logFailedAuth($reason, $context);
-    }
-
-    /**
-     * Read a string parameter, treating absent and non-string as `''`.
-     *
-     * @param array<string, mixed> $source Query or body array.
-     * @param string               $key    Parameter name.
-     */
-    private static function str(array $source, string $key): string
-    {
-        /** @var mixed $value */
-        $value = $source[$key] ?? null;
-
-        return is_string($value) ? $value : '';
-    }
-
-    /**
-     * Read an optional string parameter, distinguishing absent from empty.
-     *
-     * `state` needs this: RFC 6749 says it is echoed back only if it was
-     * supplied, and an absent `state` must not become `state=`.
-     *
-     * @param array<string, mixed> $source Query or body array.
-     * @param string               $key    Parameter name.
-     */
-    private static function strOrNull(array $source, string $key): ?string
-    {
-        /** @var mixed $value */
-        $value = $source[$key] ?? null;
-
-        return is_string($value) && $value !== '' ? $value : null;
     }
 }

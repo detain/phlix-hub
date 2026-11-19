@@ -214,7 +214,7 @@ final class ServerClaimController
             ]);
         }
 
-        $claimCode = self::stringField($request, 'claim_code');
+        $claimCode = ControllerRequests::stringField($request, 'claim_code');
         if ($claimCode === '') {
             // Required part of the REQUEST missing → registry invalid_request.
             return (new Response())->error(400, 'invalid_request', 'Bad Request', [
@@ -360,15 +360,5 @@ final class ServerClaimController
                 ['message' => 'An unexpected error occurred.'],
             ),
         };
-    }
-
-    /**
-     * Read a string field from $request->body.
-     */
-    private static function stringField(Request $request, string $key): string
-    {
-        /** @var mixed $value */
-        $value = $request->body[$key] ?? null;
-        return is_string($value) ? $value : '';
     }
 }

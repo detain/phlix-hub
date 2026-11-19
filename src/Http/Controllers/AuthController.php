@@ -16,6 +16,7 @@ use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Auth\SignupsDisabledException;
 use Phlix\Hub\Hub\CookiePolicy;
+use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Middleware\CsrfOriginGuard;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
@@ -114,9 +115,9 @@ final class AuthController
      */
     public function signupJson(Request $request): Response
     {
-        $username = self::stringField($request, 'username');
-        $email = self::stringField($request, 'email');
-        $password = self::stringField($request, 'password');
+        $username = ControllerRequests::stringField($request, 'username');
+        $email = ControllerRequests::stringField($request, 'email');
+        $password = ControllerRequests::stringField($request, 'password');
         if ($username === '' || $email === '' || $password === '') {
             return self::errorFrame(400, 'auth.missing_credentials', 'username, email and password are required');
         }
@@ -164,11 +165,11 @@ final class AuthController
      */
     public function loginJson(Request $request): Response
     {
-        $identifier = self::stringField($request, 'username');
+        $identifier = ControllerRequests::stringField($request, 'username');
         if ($identifier === '') {
-            $identifier = self::stringField($request, 'email');
+            $identifier = ControllerRequests::stringField($request, 'email');
         }
-        $password = self::stringField($request, 'password');
+        $password = ControllerRequests::stringField($request, 'password');
         if ($identifier === '' || $password === '') {
             return self::errorFrame(400, 'auth.missing_credentials', 'username (or email) and password are required');
         }
@@ -411,7 +412,7 @@ final class AuthController
      */
     private static function resolveRefreshToken(Request $request): array
     {
-        $body = self::stringField($request, 'refresh_token');
+        $body = ControllerRequests::stringField($request, 'refresh_token');
         if ($body !== '') {
             return [$body, false];
         }
@@ -562,21 +563,6 @@ final class AuthController
     }
 
     /**
-     * Read a string field from `$request->body` (JSON) OR fall back to the
-     * raw POST body (Workerman form-encoded). Returns "" when missing or
-     * not-a-string.
-     */
-    private static function stringField(Request $request, string $key): string
-    {
-        /**
-         * @var mixed $value
-         * @psalm-suppress MixedAssignment
-         */
-        $value = $request->body[$key] ?? null;
-        return is_string($value) ? $value : '';
-    }
-
-    /**
      * Resolve the opaque device/session identifier for a login. Prefers an
      * explicit `device_id` body field; falls back to the client IP so the
      * audit log still carries a stable per-client marker when the client
@@ -585,7 +571,7 @@ final class AuthController
      */
     private static function deviceId(Request $request): string
     {
-        $deviceId = self::stringField($request, 'device_id');
+        $deviceId = ControllerRequests::stringField($request, 'device_id');
         if ($deviceId !== '') {
             return $deviceId;
         }

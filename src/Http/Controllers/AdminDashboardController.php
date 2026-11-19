@@ -13,6 +13,7 @@ namespace Phlix\Hub\Http\Controllers;
 
 use Phlix\Hub\Hub\AuditLogRepository;
 use Phlix\Hub\Hub\StatsRepository;
+use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 
@@ -118,25 +119,25 @@ final class AdminDashboardController
      */
     private static function toActivity(array $entry): array
     {
-        $action = self::stringOf($entry['action'] ?? null);
+        $action = ControllerRequests::stringOf($entry['action'] ?? null);
         if ($action === '') {
-            $action = self::stringOf($entry['event'] ?? null);
+            $action = ControllerRequests::stringOf($entry['event'] ?? null);
         }
 
-        $actor = self::stringOf($entry['actor'] ?? null);
+        $actor = ControllerRequests::stringOf($entry['actor'] ?? null);
         if ($actor === '') {
-            $actor = self::stringOf($entry['user_id'] ?? null);
+            $actor = ControllerRequests::stringOf($entry['user_id'] ?? null);
         }
         if ($actor === '') {
             $actor = 'system';
         }
 
         return [
-            'id' => self::stringOf($entry['id'] ?? null),
+            'id' => ControllerRequests::stringOf($entry['id'] ?? null),
             'action' => $action,
             'actor' => $actor,
-            'target' => self::stringOf($entry['resource'] ?? null),
-            'created_at' => self::stringOf($entry['created_at'] ?? null),
+            'target' => ControllerRequests::stringOf($entry['resource'] ?? null),
+            'created_at' => ControllerRequests::stringOf($entry['created_at'] ?? null),
         ];
     }
 
@@ -154,11 +155,5 @@ final class AdminDashboardController
             return self::DEFAULT_ACTIVITY_LIMIT;
         }
         return max(1, min(self::MAX_ACTIVITY_LIMIT, (int) $raw));
-    }
-
-    /** Coerce a `mixed` value to string (non-string → empty string). */
-    private static function stringOf(mixed $value): string
-    {
-        return is_string($value) ? $value : '';
     }
 }

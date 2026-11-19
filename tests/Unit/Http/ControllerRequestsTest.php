@@ -59,7 +59,7 @@ use const JSON_UNESCAPED_SLASHES;
 use const JSON_THROW_ON_ERROR;
 
 /**
- * Contract pins for {@see ControllerRequests} (refactor F-03).
+ * Contract pins for {@see ControllerRequests} (refactor F-03/F-04).
  *
  * The seam replaced 29 hand-rolled `$userId = $request->userId ?? '';
  * if ($userId === '')` preambles. Two laws are pinned here:
@@ -78,6 +78,14 @@ use const JSON_THROW_ON_ERROR;
  * Builder-call sites (`$this->unauthorized()`) share one method per file, so
  * one driven entry point per distinct frame covers every former site that
  * routes through it; the inline-literal copies are each driven once.
+ *
+ * The F-04 half of the file pins the extraction laws the per-controller
+ * copies enforced — one assertion set per distinct law, including the
+ * NEGATIVE space the scan's "collapse the near-twins" instinct would have
+ * broken: the trimming reader trims where the optional reader does not, the
+ * row reader coerces where the strict readers refuse, and the two key
+ * normalizers disagree on numeric keys in opposite directions. A future
+ * "harmless" collapse of any pair reddens these pins.
  *
  * @package Phlix\Hub\Tests\Unit\Http
  */
@@ -238,6 +246,143 @@ final class ControllerRequestsTest extends TestCase
             '"message":"Authentication is required to claim a server"}',
             $response->body,
         );
+    }
+
+    /**
+     * F-04 — the Request-body strict law: read only strings, everything else
+     * (absent, null, number, list) collapses to `''`. No coercion, and the
+     * fold truthfully deleted the old copy's claim of a raw-POST fallback:
+     * that fallback never existed in any of the three absorbed copies.
+     */
+    public function testStringFieldReadsOnlyStringsFromTheBody(): void
+    {
+        $request = new Request();
+        $request->body = [
+            'username' => 'ada',
+            'pin' => '123',
+            'count' => 7,
+            'nothing' => null,
+            'list' => [1, 2],
+        ];
+
+        self::assertSame('ada', ControllerRequests::stringField($request, 'username'));
+        self::assertSame('123', ControllerRequests::stringField($request, 'pin'));
+        self::assertSame('', ControllerRequests::stringField($request, 'count'));
+        self::assertSame('', ControllerRequests::stringField($request, 'nothing'));
+        self::assertSame('', ControllerRequests::stringField($request, 'list'));
+        self::assertSame('', ControllerRequests::stringField($request, 'absent'));
+    }
+
+    /** The array-source front door reads under the same law (OAuth::str fold). */
+    public function testStringOrEmptySharesTheStrictBodyLaw(): void
+    {
+        $source = ['a' => 'x', 'n' => 7, 'nul' => null, 'l' => [1]];
+
+        self::assertSame('x', ControllerRequests::stringOrEmpty($source, 'a'));
+        self::assertSame('', ControllerRequests::stringOrEmpty($source, 'n'));
+        self::assertSame('', ControllerRequests::stringOrEmpty($source, 'nul'));
+        self::assertSame('', ControllerRequests::stringOrEmpty($source, 'l'));
+        self::assertSame('', ControllerRequests::stringOrEmpty($source, 'absent'));
+
+        // Identity-of-law pin: the two front doors cannot drift apart.
+        $request = new Request();
+        $request->body = $source;
+        foreach (['a', 'n', 'nul', 'l', 'absent'] as $key) {
+            self::assertSame(
+                ControllerRequests::stringOrEmpty($source, $key),
+                ControllerRequests::stringField($request, $key),
+            );
+        }
+    }
+
+    /** The base law under both strict readers (AdminDashboard::stringOf fold). */
+    public function testStringOfIsTheStrictBaseLaw(): void
+    {
+        self::assertSame('x', ControllerRequests::stringOf('x'));
+        self::assertSame('123', ControllerRequests::stringOf('123'));
+        self::assertSame('', ControllerRequests::stringOf(7));
+        self::assertSame('', ControllerRequests::stringOf(null));
+        self::assertSame('', ControllerRequests::stringOf([1]));
+        self::assertSame('', ControllerRequests::stringOf(true));
+    }
+
+    /**
+     * `state` semantics (OAuth::strOrNull fold): absent, empty and non-string
+     * all mean "not supplied"; a supplied string survives VERBATIM — the
+     * opposite of the trimming law below, pinned to stop a collapse.
+     */
+    public function testOptionalStringDistinguishesAbsentFromEmpty(): void
+    {
+        $source = ['set' => 'v', 'empty' => '', 'num' => 5, 'spaced' => ' a '];
+
+        self::assertSame('v', ControllerRequests::optionalString($source, 'set'));
+        self::assertNull(ControllerRequests::optionalString($source, 'empty'));
+        self::assertNull(ControllerRequests::optionalString($source, 'num'));
+        self::assertNull(ControllerRequests::optionalString($source, 'absent'));
+        // No trim: the raw spelling is preserved.
+        self::assertSame(' a ', ControllerRequests::optionalString($source, 'spaced'));
+    }
+
+    /**
+     * The Alexa slot law: trim, then non-empty. Distinct from
+     * {@see optionalString()} on purpose — whitespace-only is noise there,
+     * here it must not surface as a blank slot value.
+     */
+    public function testTrimmedStringTrimsAndRejectsBlank(): void
+    {
+        $source = ['pad' => '  a  b ', 'blank' => " \t\n", 'empty' => '', 'num' => 5];
+
+        self::assertSame('a  b', ControllerRequests::trimmedString($source, 'pad'));
+        self::assertNull(ControllerRequests::trimmedString($source, 'blank'));
+        self::assertNull(ControllerRequests::trimmedString($source, 'empty'));
+        self::assertNull(ControllerRequests::trimmedString($source, 'num'));
+        self::assertNull(ControllerRequests::trimmedString($source, 'absent'));
+    }
+
+    /**
+     * The MySQL-row law (AdminUser::str fold): int/float COERCE to string so
+     * a driver-typed key reaches the wire as a string — must NEVER be
+     * collapsed with the strict readers, which refuse numbers.
+     */
+    public function testRowStringCoercesNumericColumnAmbiguity(): void
+    {
+        $row = ['id' => 42, 'score' => 1.5, 'name' => 'ada', 'flag' => true, 'nul' => null];
+
+        self::assertSame('42', ControllerRequests::rowString($row, 'id'));
+        self::assertSame('1.5', ControllerRequests::rowString($row, 'score'));
+        self::assertSame('ada', ControllerRequests::rowString($row, 'name'));
+        self::assertSame('', ControllerRequests::rowString($row, 'flag'));
+        self::assertSame('', ControllerRequests::rowString($row, 'nul'));
+        self::assertSame('', ControllerRequests::rowString($row, 'absent'));
+    }
+
+    /**
+     * Alexa's normalizer CASTS numeric keys (no payload field is lost);
+     * values are never touched. Contrast the drop law below.
+     */
+    public function testStringKeyedCastsNumericKeysAndKeepsValues(): void
+    {
+        $keyed = ControllerRequests::stringKeyed([0 => 'zero', 'a' => 7]);
+
+        self::assertSame(['0' => 'zero', 'a' => 7], $keyed);
+        self::assertSame([], ControllerRequests::stringKeyed([]));
+    }
+
+    /**
+     * Mcp's normalizer DROPS non-string keys — positional JSON-RPC params
+     * are unusable by name-addressed tool args — and non-arrays collapse to
+     * `[]`. The opposite law of {@see stringKeyed()} on purpose.
+     */
+    public function testStringKeyedParamsDropsNonStringKeys(): void
+    {
+        self::assertSame(
+            ['a' => 1, 'c' => 'd'],
+            ControllerRequests::stringKeyedParams(['a' => 1, 2 => 'b', 'c' => 'd']),
+        );
+        self::assertSame([], ControllerRequests::stringKeyedParams([]));
+        self::assertSame([], ControllerRequests::stringKeyedParams('positional'));
+        self::assertSame([], ControllerRequests::stringKeyedParams(null));
+        self::assertSame([], ControllerRequests::stringKeyedParams(7));
     }
 
     /**

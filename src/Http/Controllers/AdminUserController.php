@@ -13,6 +13,7 @@ namespace Phlix\Hub\Http\Controllers;
 
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 
@@ -210,7 +211,7 @@ final class AdminUserController
                 $fieldErrors['username'] = $usernameError;
             } else {
                 $clash = $this->users->findByUsername($username);
-                if ($clash !== null && $this->str($clash, 'id') !== $id) {
+                if ($clash !== null && ControllerRequests::rowString($clash, 'id') !== $id) {
                     $fieldErrors['username'] = 'This username is already taken';
                 } else {
                     $data['username'] = $username;
@@ -224,7 +225,7 @@ final class AdminUserController
                 $fieldErrors['email'] = 'Invalid email format';
             } else {
                 $clash = $this->users->findByEmail($email);
-                if ($clash !== null && $this->str($clash, 'id') !== $id) {
+                if ($clash !== null && ControllerRequests::rowString($clash, 'id') !== $id) {
                     $fieldErrors['email'] = 'This email is already registered';
                 } else {
                     $data['email'] = $email;
@@ -383,12 +384,12 @@ final class AdminUserController
     private function publicUser(array $row): array
     {
         return [
-            'id'         => $this->str($row, 'id'),
-            'username'   => $this->str($row, 'username'),
-            'email'      => $this->str($row, 'email'),
+            'id'         => ControllerRequests::rowString($row, 'id'),
+            'username'   => ControllerRequests::rowString($row, 'username'),
+            'email'      => ControllerRequests::rowString($row, 'email'),
             'is_admin'   => $this->intFlag($row, 'is_admin'),
-            'created_at' => $this->str($row, 'created_at'),
-            'updated_at' => $this->str($row, 'updated_at'),
+            'created_at' => ControllerRequests::rowString($row, 'created_at'),
+            'updated_at' => ControllerRequests::rowString($row, 'updated_at'),
         ];
     }
 
@@ -437,28 +438,6 @@ final class AdminUserController
          */
         $value = $body[$key] ?? null;
         return is_string($value) ? $value : '';
-    }
-
-    /**
-     * Coerce a row value to a string (handles the int/string ambiguity of
-     * the MySQL driver); anything else collapses to `''`.
-     *
-     * @param array<string, mixed> $row
-     */
-    private function str(array $row, string $key): string
-    {
-        /**
-         * @var mixed $value
-         * @psalm-suppress MixedAssignment
-         */
-        $value = $row[$key] ?? '';
-        if (is_string($value)) {
-            return $value;
-        }
-        if (is_int($value) || is_float($value)) {
-            return (string) $value;
-        }
-        return '';
     }
 
     /**

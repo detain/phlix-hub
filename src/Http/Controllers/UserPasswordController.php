@@ -70,8 +70,8 @@ final class UserPasswordController
             ]);
         }
 
-        $currentPassword = self::stringField($request, 'current_password');
-        $newPassword = self::stringField($request, 'new_password');
+        $currentPassword = ControllerRequests::stringField($request, 'current_password');
+        $newPassword = ControllerRequests::stringField($request, 'new_password');
         if ($currentPassword === '' || $newPassword === '') {
             return self::errorFrame(400, 'auth.missing_credentials', 'current_password and new_password are required');
         }
@@ -98,21 +98,6 @@ final class UserPasswordController
         return (new Response())->json([
             'message' => 'Password updated successfully',
         ]);
-    }
-
-    /**
-     * Read a string field from `$request->body` (JSON). Returns "" when
-     * missing or not-a-string — the AuthController::stringField :250-258
-     * idiom kept local, as its sibling controllers do.
-     */
-    private static function stringField(Request $request, string $key): string
-    {
-        /**
-         * @var mixed $value
-         * @psalm-suppress MixedAssignment
-         */
-        $value = $request->body[$key] ?? null;
-        return is_string($value) ? $value : '';
     }
 
     /**
