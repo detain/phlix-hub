@@ -39,6 +39,8 @@ use Phlix\Hub\Http\Request;
 use Phlix\Shared\Auth\JwtClaims;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
+use Workerman\MySQL\Connection;
 
 /**
  * @internal
@@ -663,6 +665,58 @@ final class TokenSessionFamilyTest extends TestCase
         $store->expects(self::never())->method('findGrant');
 
         $this->manager($store, $carrier)->logout(self::USER_ID, 'ip-slot', 'explicit', $token);
+    }
+
+    public function testMintSurvivesPruneOutageAndLogsItLoudly(): void
+    {
+        // HUB-5.2 (bug #8): the estate's janitor law — housekeeping may
+        // never become a login dependency. When the sweep inside
+        // recordGrant() raises, the mint must still write the grant row
+        // exactly as it would have, and the failure must surface on the
+        // error channel — never as an exception out of the credential write.
+        $grants = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            /**
+             * @param array<string, mixed>|null $params
+             */
+            static function (string $sql, ?array $params = null) use (&$grants): int {
+                if (str_starts_with(ltrim($sql), 'SELECT jti FROM auth_refresh_grants')) {
+                    throw new RuntimeException('simulated sweep outage: deadlock 1213');
+                }
+                if (str_starts_with(ltrim($sql), 'INSERT INTO auth_refresh_grants')) {
+                    /** @var array<string, mixed> $params */
+                    $grants[] = self::asGrantJti($params['jti'] ?? null);
+                    return 1;
+                }
+                throw new RuntimeException('unexpected SQL in fake: ' . $sql);
+            }
+        );
+        $store = new TokenSessionRepository($db);
+
+        $previousLog = ini_get('error_log');
+        $logFile = (string) tempnam(sys_get_temp_dir(), 'phlix-hub-52-');
+        ini_set('error_log', $logFile);
+        try {
+            $store->recordGrant('j-mint', 'fam-1', 1_800_000_000);
+            $written = (string) file_get_contents($logFile);
+        } finally {
+            ini_set('error_log', (string) $previousLog);
+            unlink($logFile);
+        }
+
+        self::assertSame(
+            ['j-mint'],
+            $grants,
+            'a failing sweep must not swallow the grant mint',
+        );
+        self::assertStringContainsString('prune failed during grant mint', $written);
+        self::assertStringContainsString('simulated sweep outage', $written);
+    }
+
+    private static function asGrantJti(mixed $value): string
+    {
+        return is_string($value) ? $value : '';
     }
 
     // ------------------------------------------------------------------

@@ -260,7 +260,23 @@ class TokenSessionRepository
      */
     public function recordGrant(string $jti, string $sessionId, ?int $expiresAt = null): void
     {
-        $this->pruneExpired();
+        // HUB-5.2 (bug #8): janitor posture at the mint. The estate law
+        // (server TokenSessionRepository::pruneExpired, the QuickConnect
+        // purge precedent) is that housekeeping must never become a login
+        // dependency: a sweep hiccup (deadlock victim, lock wait timeout,
+        // blips on the sweeps ledger) must cost at most one retained
+        // expired row, never a 500 on the user's credential write. The
+        // failure is LOUD on the error channel — it is swallowed here only
+        // in the sense that the mint proceeds. pruneExpired() itself keeps
+        // its honest `int` contract for direct callers (tests, operators).
+        try {
+            $this->pruneExpired();
+        } catch (\Throwable $pruneFailure) {
+            error_log(
+                '[phlix-hub][TokenSessionRepository] expiry prune failed during grant mint; '
+                . 'minting anyway: ' . $pruneFailure->getMessage()
+            );
+        }
 
         $this->db->query(
             'INSERT INTO auth_refresh_grants (jti, session_id, expires_at)'

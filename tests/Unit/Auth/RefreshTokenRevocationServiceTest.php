@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Auth;
 
 use Phlix\Hub\Auth\RefreshTokenRevocationService;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 use Workerman\MySQL\Connection;
 
 /**
@@ -150,6 +151,63 @@ final class RefreshTokenRevocationServiceTest extends TestCase
         self::assertArrayNotHasKey('ancient', $this->table);
         self::assertArrayHasKey('recent', $this->table, 'the 1-day grace must keep recently-expired rows');
         self::assertArrayHasKey('alive', $this->table);
+    }
+
+    public function testRevokeSurvivesPruneOutageAndLogsItLoudly(): void
+    {
+        // HUB-5.2 (bug #8): the registry INSERT is the security-bearing
+        // write of a logout; the sweep is housekeeping. A throwing sweep
+        // must therefore never preempt the jti row — otherwise a failed
+        // prune would "log the user out" while leaving the refresh token
+        // mintable. The failure belongs on the error channel, loudly.
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            /**
+             * @param array<string, mixed>|null $params
+             */
+            function (string $sql, ?array $params = null): int {
+                $params ??= [];
+                /** @var array<string, mixed> $params */
+                $this->log[] = ['sql' => $sql, 'params' => $params];
+
+                if (str_starts_with(ltrim($sql), 'SELECT jti FROM auth_revoked_refresh_tokens')) {
+                    throw new RuntimeException('simulated sweep outage: connection reset');
+                }
+                if (str_starts_with(ltrim($sql), 'INSERT')) {
+                    return $this->applyInsert($params);
+                }
+                $this->fail('unexpected SQL in fake: ' . $sql);
+            }
+        );
+        $service = new RefreshTokenRevocationService($db);
+
+        $previousLog = ini_get('error_log');
+        $logFile = (string) tempnam(sys_get_temp_dir(), 'phlix-hub-52-');
+        ini_set('error_log', $logFile);
+        try {
+            self::assertTrue(
+                $service->revoke('j-logout', 'u-1', $this->now + 3600),
+                'a failing sweep must not fail the revoke',
+            );
+            $written = (string) file_get_contents($logFile);
+        } finally {
+            ini_set('error_log', (string) $previousLog);
+            unlink($logFile);
+        }
+
+        // The sweep is still ATTEMPTED first (the ordering law of the
+        // happy-path suite holds); what changed is that its failure no
+        // longer aborts the write that follows.
+        self::assertCount(2, $this->log, 'failed sweep + surviving registry write');
+        self::assertStringStartsWith('SELECT', ltrim($this->log[0]['sql']));
+        $write = $this->log[1];
+        self::assertStringStartsWith('INSERT', ltrim($write['sql']));
+        self::assertSame(
+            ['jti' => 'j-logout', 'user_id' => 'u-1', 'expires_at' => $this->now + 3600],
+            $write['params'],
+        );
+        self::assertStringContainsString('prune failed during revoke', $written);
+        self::assertStringContainsString('simulated sweep outage', $written);
     }
 
     // ------------------------------------------------------------------

@@ -74,7 +74,17 @@ class RefreshTokenRevocationService
             return false;
         }
 
-        $this->pruneExpired();
+        // HUB-5.2 (bug #8): same janitor law as the mint path — a sweep
+        // failure must never turn a logout into a 500 (the revocation row
+        // below is the security-bearing write; the prune behind it is not).
+        try {
+            $this->pruneExpired();
+        } catch (\Throwable $pruneFailure) {
+            error_log(
+                '[phlix-hub][RefreshTokenRevocationService] expiry prune failed during revoke; '
+                . 'revoking anyway: ' . $pruneFailure->getMessage()
+            );
+        }
 
         /** @var mixed $result */
         $result = $this->db->query(
