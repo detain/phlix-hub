@@ -23,7 +23,7 @@ use ReflectionClass;
  *
  * `CsrfOriginGuard::STATE_CHANGING_METHODS` and the hub CookiePolicy header
  * docblock both CLAIM "the exact list the server's validateCsrfOrigin"
- * method limb accepts — phlix-server `src/Auth/RequestAuthenticator.php`
+ * method limb accepts — phlix-server `src/Server/Http/RequestAuthenticator.php`
  * gates `in_array($method, ['POST', 'PUT', 'DELETE', 'PATCH'], true)`. The
  * claim was true at CP-012 and nothing on either side pins it, so a verb
  * added to one host's list would silently split the deny vocabulary
