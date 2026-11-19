@@ -9,6 +9,7 @@ use Phlix\Hub\Requests\RequestManager;
 use Phlix\Hub\Requests\RequestTransitionResult;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Shared\Arr\ArrClientFactory;
+use Phlix\Shared\Database\WriteResult;
 use Workerman\MySQL\Connection;
 
 /**
@@ -516,5 +517,79 @@ final class RequestManagerTest extends TestCase
             'created_at' => '2024-01-01 00:00:00',
             'updated_at' => '2024-01-01 00:00:00',
         ], $overrides);
+    }
+
+    /**
+     * Adoption pin (v0.57 wave-A, M-28): this class's private
+     * `affectedRows()` twin was retired to the shared
+     * {@see WriteResult::affectedRows()} narrowing. A resurrected twin would
+     * silently re-open a second accept-set that can drift from the kernel it
+     * replaced, so the method is pinned absent.
+     */
+    public function testTheAffectedRowsTwinIsRetiredToTheSharedKernel(): void
+    {
+        self::assertFalse(
+            (new \ReflectionClass(RequestManager::class))->hasMethod('affectedRows'),
+            'The retired RequestManager affectedRows twin has re-materialised; shared WriteResult::affectedRows is the sole narrowing.',
+        );
+    }
+
+    /**
+     * Differential pin of the shared narrowing against the retired twin's
+     * FROZEN accept-set: every expected value below is what
+     * `is_numeric($result) ? (int) $result : 0` — the retired private's
+     * byte-identical body — answers for that input on PHP 8.3.
+     *
+     * The falsy-string arms ('0', '0.0', '-0') pin trap 2 (a successful
+     * insert returning the string '0' is NOT a zero-write failure), and the
+     * whitespace/scientific arms pin PHP 8's is_numeric accept-set on both
+     * ends of the numeric-string law. If the shared kernel ever narrows
+     * (is_int, for instance) these literals go red — deliberately.
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('affectedRowsAcceptSetProvider')]
+    public function testTheSharedNarrowKeepsTheRetiredTwinAcceptSet(mixed $input, int $expected): void
+    {
+        self::assertSame($expected, WriteResult::affectedRows($input));
+    }
+
+    /**
+     * @return array<string, array{0: mixed, 1: int}>
+     */
+    public static function affectedRowsAcceptSetProvider(): array
+    {
+        return [
+            'int one' => [1, 1],
+            'int zero' => [0, 0],
+            'int negative' => [-1, -1],
+            'false' => [false, 0],
+            'null' => [null, 0],
+            'true' => [true, 0],
+            'empty string' => ['', 0],
+            'falsy zero string' => ['0', 0],
+            'negative zero string' => ['-0', 0],
+            'numeric one string' => ['1', 1],
+            'dup-key code string' => ['1062', 1062],
+            'float-valued string' => ['1.0', 1],
+            'negative truncation string' => ['-1.9', -1],
+            'scientific string' => ['1e3', 1000],
+            'leading space' => [' 1', 1],
+            'leading newline' => ["\n1", 1],
+            'trailing space' => ['1 ', 1],
+            'trailing carriage return' => ["1\r", 1],
+            'float zero string' => ['0.0', 0],
+            'sub-one scientific string' => ['1.7e-3', 0],
+            'float 1.7' => [1.7, 1],
+            'negative float' => [-0.9, 0],
+            'hex string' => ['0x1A', 0],
+            'non-ascii digit string' => ['٣', 0],
+            'int-max string' => ['9223372036854775807', PHP_INT_MAX],
+            'overflow string saturates' => ['9223372036854775808', PHP_INT_MAX],
+            'empty array' => [[], 0],
+            'populated array' => [['x'], 0],
+            'object' => [new \stdClass(), 0],
+            'large scientific string' => ['12.5e2', 1250],
+            'space after sign' => ['- 1', 0],
+            'double sign' => ['--1', 0],
+        ];
     }
 }

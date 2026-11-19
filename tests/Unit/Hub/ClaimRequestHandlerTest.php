@@ -9,6 +9,7 @@ use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Hub\ClaimRequestHandler;
 use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Shared\Hub\ClaimRequest;
+use Phlix\Shared\Database\WriteResult;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -586,5 +587,29 @@ final class ClaimRequestHandlerTest extends TestCase
             'use' => 'sig',
             'alg' => 'EdDSA',
         ];
+    }
+
+    /**
+     * Adoption pin (v0.57 wave-A, M-28): the private `affectedRows()` twin
+     * this class carried was retired to the shared
+     * {@see WriteResult::affectedRows()} narrowing — the single-winner
+     * arbiter in `getClaimStatus` (the DELETE affected-rows law) now reads
+     * through the shared kernel, and the RequestManager twin it was
+     * byte-identical to is gone too, so no second copy can drift.
+     *
+     * `affectedRows('0') === 0` is the load-bearing single sample: the
+     * identity-testing arms of this narrowing are pinned exhaustively in
+     * RequestManagerTest's accept-set provider; here we pin only that this
+     * class no longer carries the twin and the shared kernel's falsy-string
+     * semantics (trap 2 — the string '0' is a SUCCESSFUL insert) hold at
+     * the narrowing this file's callers ride.
+     */
+    public function testTheAffectedRowsTwinIsRetiredToTheSharedKernel(): void
+    {
+        self::assertFalse(
+            (new \ReflectionClass(ClaimRequestHandler::class))->hasMethod('affectedRows'),
+            'The retired ClaimRequestHandler affectedRows twin has re-materialised; shared WriteResult::affectedRows is the sole narrowing.',
+        );
+        self::assertSame(0, WriteResult::affectedRows('0'));
     }
 }

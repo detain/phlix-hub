@@ -16,6 +16,7 @@ use Phlix\Hub\Common\Support\Ids;
 use InvalidArgumentException;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Shared\Database\WriteResult;
 use Phlix\Shared\Hub\ClaimRequest;
 use Phlix\Shared\Hub\ClaimResponse;
 use Workerman\MySQL\Connection;
@@ -560,7 +561,7 @@ class ClaimRequestHandler
             // material produced at all.
             /** @var mixed $consumed */
             $consumed = $this->db->query('DELETE FROM server_claims WHERE id = :id', ['id' => $claimId]);
-            if (self::affectedRows($consumed) !== 1) {
+            if (WriteResult::affectedRows($consumed) !== 1) {
                 return ['status' => 'expired'];
             }
 
@@ -623,17 +624,6 @@ class ClaimRequestHandler
     private static function claimCodeHash(string $normalizedCode): string
     {
         return hash('sha256', $normalizedCode);
-    }
-
-    /**
-     * Narrow Connection::query()'s DML result to an affected-rows count
-     * (same idiom as src/Requests/RequestManager.php): a non-numeric or
-     * absent answer reads as 0 — the conservative side of the single-winner
-     * law in getClaimStatus (0 rows = the row is gone = lost the race).
-     */
-    private static function affectedRows(mixed $result): int
-    {
-        return is_numeric($result) ? (int) $result : 0;
     }
 
     /**

@@ -18,6 +18,7 @@ use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Shared\Arr\ArrClientFactory;
 use Phlix\Shared\Arr\RadarrClient;
 use Phlix\Shared\Arr\SonarrClient;
+use Phlix\Shared\Database\WriteResult;
 use Workerman\MySQL\Connection;
 
 /**
@@ -380,7 +381,7 @@ class RequestManager
             ['reason' => $reason, 'id' => $requestId]
         );
 
-        if (self::affectedRows($result) === 1) {
+        if (WriteResult::affectedRows($result) === 1) {
             return RequestTransitionResult::Applied;
         }
 
@@ -409,17 +410,7 @@ class RequestManager
             ['to' => $to, 'id' => $requestId, 'from' => $from]
         );
 
-        return self::affectedRows($result) === 1;
-    }
-
-    /**
-     * Narrow a DML result from the connection to an affected-rows int.
-     *
-     * @param mixed $result Value returned by {@see Connection::query()} for an UPDATE/DELETE.
-     */
-    private static function affectedRows(mixed $result): int
-    {
-        return is_numeric($result) ? (int) $result : 0;
+        return WriteResult::affectedRows($result) === 1;
     }
 
     /**
@@ -571,7 +562,7 @@ class RequestManager
         /** @var mixed $result */
         $result = $this->db->query('DELETE FROM requests WHERE id = :id', ['id' => $requestId]);
 
-        return self::affectedRows($result) === 1;
+        return WriteResult::affectedRows($result) === 1;
     }
 
     /**
