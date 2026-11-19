@@ -416,6 +416,22 @@ final class PhlixMySQLConnection extends Connection
     }
 
     /**
+     * Lazily mint the single-token coroutine mutex and return it. One source
+     * for the mint shared by {@see acquireQueryLock()} and the checked
+     * transaction acquisition in {@see beginTrans()} (TXMUTEX-A A3) — the
+     * behavior is byte-identical to the two inline mints it replaces.
+     */
+    private function mutex(): \Swoole\Coroutine\Channel
+    {
+        if ($this->queryLock === null) {
+            $this->queryLock = new \Swoole\Coroutine\Channel(1);
+            $this->queryLock->push(true);
+        }
+
+        return $this->queryLock;
+    }
+
+    /**
      * Acquire the query mutex for the given coroutine. Returns true when this
      * call took the lock (caller must release), false when the coroutine
      * already held it (reentrant — caller must NOT release).
@@ -425,12 +441,10 @@ final class PhlixMySQLConnection extends Connection
         if ($this->queryLockHolder === $cid) {
             return false;
         }
-        if ($this->queryLock === null) {
-            $this->queryLock = new \Swoole\Coroutine\Channel(1);
-            $this->queryLock->push(true);
-        }
+
+        $mutex = $this->mutex();
         // Blocks (yields the coroutine) until the single token is available.
-        $this->queryLock->pop();
+        $mutex->pop();
         $this->queryLockHolder = $cid;
         return true;
     }
@@ -450,12 +464,15 @@ final class PhlixMySQLConnection extends Connection
      * query onto the shared socket mid-transaction. See class docblock (#5).
      *
      * The mutex is acquired BEFORE `parent::beginTrans()` so the lock spans
-     * the `START TRANSACTION` itself. If the parent throws (e.g. a connection
-     * error it cannot recover), the lock is released again so the connection
-     * is not wedged. On success {@see $inTransaction} is set, which makes the
-     * holder's subsequent {@see query()} calls reentrant (they do not
-     * re-acquire) and their per-query release a no-op — the lock survives
-     * until {@see commitTrans()}/{@see rollBackTrans()}.
+     * the `START TRANSACTION` itself. A cancelled wait and a falsy (non-
+     * throwing) parent answer both release the mutex instead of stranding it,
+     * and neither leaves {@see $inTransaction} claimed (TXMUTEX-A A3). If the
+     * parent throws (e.g. a connection error it cannot recover), the lock is
+     * released again so the connection is not wedged. On success
+     * {@see $inTransaction} is set, which makes the holder's subsequent
+     * {@see query()} calls reentrant (they do not re-acquire) and their
+     * per-query release a no-op — the lock survives until
+     * {@see commitTrans()}/{@see rollBackTrans()}.
      *
      * Outside a coroutine (cid `< 0`: CLI migrations, cron) there is no
      * concurrency and no Channel, so the parent runs directly.
@@ -480,7 +497,20 @@ final class PhlixMySQLConnection extends Connection
             return (bool) parent::beginTrans();
         }
 
-        $this->acquireQueryLock($cid);
+        // Take the transaction-scoped mutex with a CHECKED pop (server's
+        // beginTrans() shape; TXMUTEX-A A3, 2026-11-21). A cancelled
+        // Channel::pop() returns false — pre-cure the unchecked
+        // acquireQueryLock() read that as "acquired": the cancelled waiter
+        // declared itself the new holder, and its doomed parent call's
+        // error path then released a mutex it never legitimately owned
+        // (steal + release theatre over MAIN's live transaction).
+        if ($this->mutex()->pop() === false) {
+            throw new \PDOException(
+                'Could not acquire the transaction mutex: the coroutine was cancelled while waiting'
+            );
+        }
+
+        $this->queryLockHolder = $cid;
         try {
             $result = (bool) parent::beginTrans();
         } catch (\Throwable $e) {
@@ -490,9 +520,25 @@ final class PhlixMySQLConnection extends Connection
             $this->releaseQueryLock();
             throw $e;
         }
-        $this->inTransaction = true;
-        $this->txOpen = $result;
-        $this->txPoisoned = false;
+
+        if ($result) {
+            $this->inTransaction = true;
+            $this->txOpen = true;
+            $this->txPoisoned = false;
+        } else {
+            // The parent DECLINED without throwing (falsy result): there is no
+            // transaction, so this coroutine must not claim one — and the
+            // mutex goes straight back, never stranded (server's else-arm
+            // shape; TXMUTEX-A A3 Q-C fold). Pre-cure `inTransaction = true`
+            // was recorded regardless: every later lock decision acted on a
+            // transaction that never existed, and the token stayed consumed
+            // until the connection was re-made.
+            $this->inTransaction = false;
+            $this->txOpen = false;
+            $this->txPoisoned = false;
+            $this->releaseQueryLock();
+        }
+
         return $result;
     }
 

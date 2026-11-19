@@ -516,4 +516,61 @@ final class PhlixMySQLConnectionTest extends TestCase
             'A:holder:free',
         ], $events, "child output (stranger inert, holder intact) was:\n" . $result['stdout']);
     }
+
+    /**
+     * TXMUTEX-A A3: the transaction-mutex acquisition in beginTrans() must
+     * DISTINGUISH a cancelled wait from a successful take. Pre-cure the
+     * unchecked acquireQueryLock() read a cancelled pop (which returns false)
+     * as "acquired": the cancelled waiter declared itself the new holder and
+     * its doomed parent call then freed a mutex it never legitimately owned.
+     * Child-process smoke: B parks in beginTrans() behind the holder A, gets
+     * cancelled, must throw the server's exact cancellation wording with the
+     * holder untouched, and A must commit cleanly afterwards.
+     */
+    public function testACancelledWaiterCannotStealTheTransactionMutex(): void
+    {
+        if (!extension_loaded('swoole')) {
+            self::markTestSkipped('ext-swoole required for the cancelled-waiter smoke.');
+        }
+
+        $result = SwooleFixtureProcess::run(__DIR__ . '/Fixtures/transaction_cancel_smoke.php');
+        $events = array_values(array_filter(explode("\n", trim($result['stdout']))));
+
+        self::assertSame([
+            'A:begin',
+            'B:threw:cancel',
+            'holder:stays-A',
+            'A:commit:true',
+            'holderAfter:free',
+            'A:inTx:0',
+        ], $events, "child output (cancelled pop must throw, holder stay A) was:\n" . $result['stdout']);
+    }
+
+    /**
+     * TXMUTEX-A A3 (Q-C fold): when the parent beginTrans() ANSWERS FALSE
+     * without throwing, the hub must not claim a transaction it never
+     * started, and it must hand the mutex token back instead of stranding it.
+     * Pre-cure the record-anything shape set inTransaction=true regardless of
+     * the result (every later lock decision then acted on a phantom
+     * transaction) and never pushed the token back. Child-process smoke over
+     * a declining PDO handle — markers on success: begin:false, inTx:0,
+     * txOpen:0, holder:free, token:back.
+     */
+    public function testAFailedBeginTransNeverClaimsTheTransactionLock(): void
+    {
+        if (!extension_loaded('swoole')) {
+            self::markTestSkipped('ext-swoole required for the falsy-begin smoke.');
+        }
+
+        $result = SwooleFixtureProcess::run(__DIR__ . '/Fixtures/transaction_wedge_smoke.php');
+        $events = array_values(array_filter(explode("\n", trim($result['stdout']))));
+
+        self::assertSame([
+            'begin:false',
+            'inTx:0',
+            'txOpen:0',
+            'holder:free',
+            'token:back',
+        ], $events, "child output (falsy begin must not claim the lock) was:\n" . $result['stdout']);
+    }
 }
