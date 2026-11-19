@@ -2,6 +2,14 @@
 
 declare(strict_types=1);
 
+use Phlix\Hub\Common\Env\EnvConfig;
+
+// Config files load EnvConfig by path, not through the composer autoloader:
+// estate doctrine keeps a config file loadable without class autoload
+// (tests/Unit/Config/DatabaseConfigTest proves it with `env -i` children).
+// require_once dedupes against the PSR-4 loader on the long-running path.
+require_once __DIR__ . '/../src/Common/Env/EnvConfig.php';
+
 /**
  * Hub auth configuration. Override via env vars in production.
  *
@@ -38,18 +46,29 @@ declare(strict_types=1);
  * {@see \Phlix\Hub\Hub\HubSettingsRepository::ALLOWED_KEYS}. If a settings key
  * ever looks "orphaned", fix the ALLOW-LIST, never this file.
  */
+// HUB-2.1 (bug #5, fail-open): this read was `getenv(...) ?: 'true'` — and
+// `?:` treats the STRING "0" as falsy, so an explicit HUB_SIGNUPS_ENABLED=0
+// evaluated to 'true' and left self-service registration OPEN, exactly the
+// opposite of the documented deny-list in the header above. EnvConfig::text
+// lets "0" survive to the deny-list; trim/lower-case semantics are unchanged.
 $signupsEnabled = !in_array(
-    strtolower(trim((string) (getenv('HUB_SIGNUPS_ENABLED') ?: 'true'))),
+    strtolower(trim(EnvConfig::text('HUB_SIGNUPS_ENABLED', 'true'))),
     ['0', 'false', 'no', 'off'],
     true,
 );
 
 return [
-    'secret'      => getenv('HUB_JWT_SECRET') ?: null,
+    // nullableText: unset/empty → null (the provider's dev-fallback gate
+    // reads the absence); an explicit HUB_JWT_SECRET=0 now arrives verbatim
+    // and is refused by resolveSecret()'s ≥32-byte gate — the same refusal
+    // path null takes, but the config no longer pretends it is unset.
+    'secret'      => EnvConfig::nullableText('HUB_JWT_SECRET'),
     'issuer'      => 'phlix-hub',
     'audience'    => 'hub',
-    'access_ttl'  => (int) (getenv('HUB_JWT_ACCESS_TTL') ?: 3600),
-    'refresh_ttl' => (int) (getenv('HUB_JWT_REFRESH_TTL') ?: 604800),
+    // integer(): the `?:` arms here swallowed explicit 0 TTLs into the
+    // defaults (HUB-2.1); 0 now forwards — a dial the operator set.
+    'access_ttl'  => EnvConfig::integer('HUB_JWT_ACCESS_TTL', 3600),
+    'refresh_ttl' => EnvConfig::integer('HUB_JWT_REFRESH_TTL', 604800),
     // Load-bearing for the same reason as the TTL keys above:
     // AuthServicesProvider reads this key verbatim and defaults to TRUE when
     // absent — a rename here silently disables HUB_SIGNUPS_ENABLED.

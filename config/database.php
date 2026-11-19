@@ -2,6 +2,13 @@
 
 declare(strict_types=1);
 
+use Phlix\Hub\Common\Env\EnvConfig;
+
+// Config files load EnvConfig by path, not through the composer autoloader:
+// the env -i child legs of tests/Unit/Config/DatabaseConfigTest are exactly
+// the venue this doctrine protects. require_once dedupes vs the PSR-4 loader.
+require_once __DIR__ . '/../src/Common/Env/EnvConfig.php';
+
 // DB credential admission policy (review hub Major 37).
 //
 // The old shape was `getenv(...) ?: 'phlix_hub'` for user AND password — a
@@ -51,11 +58,18 @@ if ($dbPasswordEnv === false && !$devFallbackAllowed()) {
 }
 
 $mysql = [
-    'host'     => getenv('HUB_DB_HOST') ?: '127.0.0.1',
-    'port'     => (int) (getenv('HUB_DB_PORT') ?: 3306),
+    // HUB-2.1: these arms used `getenv(...) ?: <default>`, which swallows
+    // the STRING "0" into the default — HUB_DB_HOST=0 silently meant
+    // 127.0.0.1. EnvConfig reads now honor an explicit zero. The user and
+    // password lines below keep their `!== false` explicit-check shape on
+    // purpose: they are presence tests, and routing HUB_DB_PASSWORD through
+    // text() would turn an explicit empty password into the published
+    // 'phlix_hub' literal — strictly worse than today.
+    'host'     => EnvConfig::text('HUB_DB_HOST', '127.0.0.1'),
+    'port'     => EnvConfig::integer('HUB_DB_PORT', 3306),
     'user'     => $dbUserEnv !== false ? $dbUserEnv : 'phlix_hub',
     'password' => $dbPasswordEnv !== false ? $dbPasswordEnv : 'phlix_hub',
-    'database' => getenv('HUB_DB_NAME') ?: 'phlix_hub',
+    'database' => EnvConfig::text('HUB_DB_NAME', 'phlix_hub'),
 
     // Coroutine connection POOL (default ON). Each coroutine leases its own
     // connection, so no two coroutines ever multiplex queries onto ONE mysqli (workerman/mysql)
@@ -68,11 +82,20 @@ $mysql = [
     // `pool_size` is per-connection-name PER WORKER — keep
     // (worker count × distinct connection names × pool_size) under MySQL
     // `max_connections`. Tune via DB_POOL_SIZE.
+    // HUB-2.1 posture notes: DB_POOL_ENABLED set-but-EMPTY now means "not
+    // configured" (honors the ON default) instead of feeding '' into
+    // filter_var (which read as DISABLE); DB_POOL_SIZE=0 now FORWARDS the
+    // explicit 0 instead of the `?:` era's silent 8 — and the floor that
+    // makes an explicit 0 safe is the pool's OWN ceiling clamp:
+    // PooledMySQLConnection::__construct takes max(1, $maxSize) ("Pool
+    // ceiling (clamped to ≥ 1)"), so 0 arms a one-connection pool, never a
+    // zero-worker one. Same behavior as the server's pool block, the
+    // estate's canonical home of this law.
     'pool_enabled' => filter_var(
-        getenv('DB_POOL_ENABLED') === false ? '1' : getenv('DB_POOL_ENABLED'),
+        EnvConfig::text('DB_POOL_ENABLED', '1'),
         FILTER_VALIDATE_BOOLEAN,
     ),
-    'pool_size' => (int) (getenv('DB_POOL_SIZE') ?: 8),
+    'pool_size' => EnvConfig::integer('DB_POOL_SIZE', 8),
 ];
 
 return [
