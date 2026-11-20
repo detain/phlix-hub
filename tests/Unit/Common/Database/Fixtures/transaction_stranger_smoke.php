@@ -49,7 +49,7 @@ $markers = [];
 
 $ref = new ReflectionClass(PhlixMySQLConnection::class);
 
-/** @param 'txOpen'|'txPoisoned'|'queryLockHolder'|'inTransaction'|'pdo' $prop */
+/** @param 'txOpen'|'txState'|'queryLockHolder'|'pdo' $prop */
 $read = static function (PhlixMySQLConnection $conn, string $prop) use ($ref) {
     $property = $ref->getProperty($prop);
     $property->setAccessible(true);

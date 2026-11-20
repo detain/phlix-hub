@@ -1,5 +1,5 @@
 {
-    "generatedFrom": "faabd065 + SRV-METRICS-A13 two new Unit files serial junit (clean-checkout bless), pcov",
+    "generatedFrom": "faabd065 + SRV-METRICS-A13 two new Unit files serial junit (clean-checkout bless), pcov + TXMUTEX-B retrofit single-row insert (measured from serial Unit junit; full-cache bless reverted to keep the CI-pcov rows byte-stable)",
     "unit": {
         "tests/Common/Database/MigrationRunnerTest.php": 0.023,
         "tests/Health/HealthControllerTest.php": 0.007,
@@ -360,6 +360,7 @@
         "tests/Unit/SyncPlay/SyncPlayRelayWirePolicyTest.php": 0.051,
         "tests/Unit/SyncPlay/SyncPlayRelayWorkerTest.php": 0.041,
         "tests/Unit/SyncPlay/SyncPlayRelayWorkerTlsPostureTest.php": 0.006,
-        "tests/VersionTest.php": 0.001
+        "tests/VersionTest.php": 0.001,
+        "tests/Unit/Common/Database/TxMutexExtinctionSoleImplTest.php": 0.016
     }
 }

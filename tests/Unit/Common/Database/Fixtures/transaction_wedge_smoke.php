@@ -71,7 +71,13 @@ $read = static function (PhlixMySQLConnection $conn, string $prop) use ($ref) {
 
     $began = $conn->beginTrans();
     $markers[] = 'begin:' . var_export($began, true);
-    $markers[] = 'inTx:' . ($read($conn, 'inTransaction') ? '1' : '0');
+    // TXMUTEX-B retrofit: the transaction claim is the shared machine's
+    // nesting flag now (retired $inTransaction bool); the marker is unchanged.
+    $machine = $read($conn, 'txState');
+    // The $read helper returns mixed; the instanceof narrows it for both
+    // static analysers (phpstan-tests runs over Fixtures/ too).
+    $inTx = $machine instanceof \Phlix\Shared\Database\MysqlTxLockState && $machine->nestingLevel() > 0;
+    $markers[] = 'inTx:' . ($inTx ? '1' : '0');
     $markers[] = 'txOpen:' . ($read($conn, 'txOpen') ? '1' : '0');
     $markers[] = 'holder:' . ($read($conn, 'queryLockHolder') === -1 ? 'free' : 'self');
 

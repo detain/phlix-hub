@@ -177,8 +177,18 @@ final class PhlixMySQLConnectionTest extends TestCase
     private function enterCoroutineTransaction(PhlixMySQLConnection $conn, int $cid): void
     {
         $this->writeProp($conn, 'queryLock', null);
+        // TXMUTEX-B retrofit: the transaction claim lives in the shared
+        // machine now; install its holder+nesting exactly where beginTrans()
+        // leaves it for coroutine `$cid` (holder acquired, lease opened).
+        $this->machineState($conn);
+        $stProp = (new \ReflectionClass(\Phlix\Shared\Database\MysqlTxLockState::class))->getProperty('holder');
+        $stProp->setAccessible(true);
+        $stProp->setValue($this->machineState($conn), $cid);
+        $nProp = (new \ReflectionClass(\Phlix\Shared\Database\MysqlTxLockState::class))->getProperty('nesting');
+        $nProp->setAccessible(true);
+        $nProp->setValue($this->machineState($conn), 1);
+        // The local shadow the consumer maintains alongside the machine.
         $this->writeProp($conn, 'queryLockHolder', $cid);
-        $this->writeProp($conn, 'inTransaction', true);
     }
 
     /**
@@ -197,7 +207,7 @@ final class PhlixMySQLConnectionTest extends TestCase
         $this->assertFalse($this->invokePrivate($conn, 'acquireQueryLock', 42));
         // Still held by the same coroutine, transaction still open.
         $this->assertSame(42, $this->readProp($conn, 'queryLockHolder'));
-        $this->assertTrue($this->readProp($conn, 'inTransaction'));
+        $this->assertTrue($this->machineTxFlag($conn));
     }
 
     /**
@@ -214,13 +224,13 @@ final class PhlixMySQLConnectionTest extends TestCase
 
         $this->assertNotSame(99, $this->readProp($conn, 'queryLockHolder'));
         $this->assertTrue(
-            $this->readProp($conn, 'inTransaction'),
+            $this->machineTxFlag($conn),
             'transaction stays open so a foreign acquire must wait, not pass through',
         );
     }
 
     /**
-     * endTransaction() releases the mutex for the holder: the holder is cleared
+     * releaseTransactionIfHeld() releases the mutex for the holder: the holder is cleared
      * and the in-transaction flag is lowered (the Channel push is exercised by
      * the smoke test; here `queryLock` is null so the guarded push no-ops).
      */
@@ -229,14 +239,14 @@ final class PhlixMySQLConnectionTest extends TestCase
         $conn = (new ReflectionClass(PhlixMySQLConnection::class))->newInstanceWithoutConstructor();
         $this->enterCoroutineTransaction($conn, 42);
 
-        $this->invokePrivate($conn, 'endTransaction', 42);
+        $this->invokePrivate($conn, 'releaseTransactionIfHeld', 42);
 
         $this->assertSame(-1, $this->readProp($conn, 'queryLockHolder'));
-        $this->assertFalse($this->readProp($conn, 'inTransaction'));
+        $this->assertFalse($this->machineTxFlag($conn));
     }
 
     /**
-     * endTransaction() for a coroutine that is NOT the holder is a no-op: it
+     * releaseTransactionIfHeld() for a coroutine that is NOT the holder is a no-op: it
      * must never release a lock held by another coroutine's transaction.
      */
     public function testEndTransactionIsNoOpForNonHolder(): void
@@ -244,15 +254,15 @@ final class PhlixMySQLConnectionTest extends TestCase
         $conn = (new ReflectionClass(PhlixMySQLConnection::class))->newInstanceWithoutConstructor();
         $this->enterCoroutineTransaction($conn, 42);
 
-        $this->invokePrivate($conn, 'endTransaction', 99);
+        $this->invokePrivate($conn, 'releaseTransactionIfHeld', 99);
 
         // Untouched: still held by cid 42.
         $this->assertSame(42, $this->readProp($conn, 'queryLockHolder'));
-        $this->assertTrue($this->readProp($conn, 'inTransaction'));
+        $this->assertTrue($this->machineTxFlag($conn));
     }
 
     /**
-     * endTransaction() is idempotent: a second call (e.g. the caller's own
+     * releaseTransactionIfHeld() is idempotent: a second call (e.g. the caller's own
      * catch-block rollback after our execute() override already rolled back
      * from inside a failing reentrant query) must NOT release again — the flag
      * is already lowered and the holder already cleared.
@@ -262,14 +272,14 @@ final class PhlixMySQLConnectionTest extends TestCase
         $conn = (new ReflectionClass(PhlixMySQLConnection::class))->newInstanceWithoutConstructor();
         $this->enterCoroutineTransaction($conn, 42);
 
-        $this->invokePrivate($conn, 'endTransaction', 42); // first release
+        $this->invokePrivate($conn, 'releaseTransactionIfHeld', 42); // first release
         // After release, inTransaction is false → the guard short-circuits, so
         // a duplicate call cannot touch the lock again.
-        $this->assertFalse($this->readProp($conn, 'inTransaction'));
-        $this->invokePrivate($conn, 'endTransaction', 42); // duplicate, no-op
+        $this->assertFalse($this->machineTxFlag($conn));
+        $this->invokePrivate($conn, 'releaseTransactionIfHeld', 42); // duplicate, no-op
 
         $this->assertSame(-1, $this->readProp($conn, 'queryLockHolder'));
-        $this->assertFalse($this->readProp($conn, 'inTransaction'));
+        $this->assertFalse($this->machineTxFlag($conn));
     }
 
     /**
@@ -290,7 +300,7 @@ final class PhlixMySQLConnectionTest extends TestCase
         // No Channel was ever created on the CLI path.
         $this->assertNull($this->readProp($conn, 'queryLock'));
         $this->assertSame(-1, $this->readProp($conn, 'queryLockHolder'));
-        $this->assertFalse($this->readProp($conn, 'inTransaction'));
+        $this->assertFalse($this->machineTxFlag($conn));
     }
 
     /**
@@ -321,11 +331,11 @@ final class PhlixMySQLConnectionTest extends TestCase
         try {
             throw new \RuntimeException('query inside transaction failed');
         } catch (\RuntimeException) {
-            $this->invokePrivate($conn, 'endTransaction', 7);
+            $this->invokePrivate($conn, 'releaseTransactionIfHeld', 7);
         }
 
         $this->assertSame(-1, $this->readProp($conn, 'queryLockHolder'));
-        $this->assertFalse($this->readProp($conn, 'inTransaction'));
+        $this->assertFalse($this->machineTxFlag($conn));
     }
 
     /**
@@ -428,7 +438,7 @@ final class PhlixMySQLConnectionTest extends TestCase
 
         $this->assertSame(1, $pdo->prepares, 'no auto-retry inside a transaction');
         $this->assertFalse($this->readProp($conn, 'txOpen'));
-        $this->assertTrue($this->readProp($conn, 'txPoisoned'));
+        $this->assertTrue($this->machinePoisoned($conn));
 
         try {
             $conn->commitTrans();
@@ -436,7 +446,7 @@ final class PhlixMySQLConnectionTest extends TestCase
         } catch (\PDOException $e) {
             $this->assertStringContainsString('refusing to commit', $e->getMessage());
         }
-        $this->assertFalse($this->readProp($conn, 'txPoisoned'));
+        $this->assertFalse($this->machinePoisoned($conn));
     }
     /**
      * HUB-S12: the poison branch of execute() must also release the
@@ -489,7 +499,7 @@ final class PhlixMySQLConnectionTest extends TestCase
      * Pre-guard, its commitTrans()/rollBackTrans() reached the shared PDO
      * handle (committing or erasing the holder's transaction — §1.2's
      * destructive half) and its finally-block cleared the holder's
-     * txOpen/txPoisoned markers while the holder-guarded endTransaction()
+     * txOpen/txPoisoned markers while the holder-guarded releaseTransactionIfHeld()
      * silently no-op'd. Child-process smoke (S179): the holder's transaction
      * must survive BOTH stranger attempts untouched, and the holder must
      * still be able to end it through the API.
@@ -632,5 +642,34 @@ final class PhlixMySQLConnectionTest extends TestCase
             self::assertSame(23000, (int) $caught->getCode(), 'the SQLSTATE-as-int code must be preserved');
             self::assertStringStartsWith('SQL:', $caught->getMessage(), 'the SQL: rendering must be preserved');
         }
+    }
+    // -----------------------------------------------------------------
+    // TXMUTEX-B retrofit accessors: the transaction claim and the poison
+    // mark moved from the retired $inTransaction/$txPoisoned bools into the
+    // shared machine's ledger (MysqlTxLockState). These read — and lazily
+    // mint through — the same accessor the production class uses, so the
+    // state asserted here is exactly the state the code consults.
+    // -----------------------------------------------------------------
+
+    private function machineState(PhlixMySQLConnection $conn): \Phlix\Shared\Database\MysqlTxLockState
+    {
+        $m = (new ReflectionClass(PhlixMySQLConnection::class))->getMethod('txState');
+        $m->setAccessible(true);
+        $state = $m->invoke($conn);
+        // invoke() is mixed-typed; the accessor's contract (and this test's
+        // reason for existence) is that it yields the machine ledger.
+        $this->assertInstanceOf(\Phlix\Shared\Database\MysqlTxLockState::class, $state);
+
+        return $state;
+    }
+
+    private function machineTxFlag(PhlixMySQLConnection $conn): bool
+    {
+        return $this->machineState($conn)->nestingLevel() > 0;
+    }
+
+    private function machinePoisoned(PhlixMySQLConnection $conn): bool
+    {
+        return $this->machineState($conn)->isPoisoned();
     }
 }
