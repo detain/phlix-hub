@@ -12,6 +12,12 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Refactor [TXMUTEX-B-RETROFIT] — the hub transaction ledger retires onto the shared machine — 2026-11-20
+
+- The `inTransaction`/`txPoisoned` flags retire onto `Phlix\Shared\Database\MysqlTxLockState` (`acquire`/`markOpen`/`claimCommit`/`claimRollback`/`abandonIfHeld`), and `endTransaction()` becomes `releaseTransactionIfHeld()` — an abandonIfHeld wrapper; the refusal one-shot budget now lives in the machine. Zero-behavior law honored: a 21-scenario both-direction differential (7 host CLI + 14 under the swoole venue) measured zero deltas against the pre-retirement tree, and `TxMutexExtinctionSoleImplTest` carries the HM1–HM5 mutation-proven extinction/twin tripwires. The blanket `execute()` else-arm deliberately does NOT consult `rollsBackWholeTransaction()` — Q-A stays owner-pending, unapplied (same law as the server twin commit). (2a432945) [tx-mutex retrofit]
+- The hub's real per-repo divergences are KEPT, not harmonized, and differentially pinned in both trees: a poison-commit refusal still releases the transaction through the `finally` (F-1 — the hub releases on refusal where the server refuses and stands), the `beginTrans` threw-arm releases the lease WITHOUT spending the one-shot refusal budget (`abandonIfHeld` `clearPoison:false`, landed F-3 shape), and the falsy-parent Q-C fold clears the poison with the release. (2a432945) [tx-mutex F-1/F-3]
+- A-LAW: the hub's single mutex channel serves BOTH the per-query and the transaction claim, so the local `queryLockHolder` latch guards stay for the per-query half (the machine models only the transaction half; the F1 unchecked-pop law stays untouched), each guard form pinned by its own >=2 per-form floor. The durations cache carries one hand-inserted measured row — the full-cache bless was refused to keep the CI-pcov blessed lines byte-stable. (2a432945) [tx-mutex A-LAW]
+
 ### Fix [HUB-PARITY] — review-era parity batch: HSTS, migration exit-code law, logger guards, cache-directive seed parity — 2026-11-19
 
 - HSTS ships on hub responses behind the https first hop. (6798fb2b) [HUB-4.1]
