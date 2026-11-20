@@ -714,6 +714,34 @@ final class TokenSessionFamilyTest extends TestCase
         self::assertStringContainsString('simulated sweep outage', $written);
     }
 
+    /**
+     * The consume arbiter now rides the shared GrantConsume vocabulary (v0.59
+     * bank row 5). Every answer-shape the driver — or a swapped one — can
+     * hand back is pinned: int 1 WINS, int 0 LOSES, the unvouchable shapes
+     * (null/false/array) fail closed, and a numeric string reads as the row
+     * count it claims — the exact convergence with the server twin's
+     * arbiter the seam docblock records.
+     */
+    public function testMarkGrantConsumedDecidesThroughTheSharedVerdictVocabulary(): void
+    {
+        $shapes = [
+            'int 1 (this call flipped the row)' => [1, true],
+            'int 0 (grant already spent or gone)' => [0, false],
+            'null (unvouchable — fail closed)' => [null, false],
+            'false (defensive driver shape)' => [false, false],
+            'array (not an answer to an UPDATE)' => [[], false],
+            'numeric string (server-twin convergence)' => ['1', true],
+        ];
+
+        foreach ($shapes as $label => [$answer, $expected]) {
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn($answer);
+            $store = new TokenSessionRepository($db);
+
+            self::assertSame($expected, $store->markGrantConsumed('jti-shaped'), $label);
+        }
+    }
+
     public function testTheStoreShipsNoPublicPrimitiveWithoutAnSrcCaller(): void
     {
         // HUB-5.4 (bug #14): an account-wide primitive with no production

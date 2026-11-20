@@ -13,6 +13,7 @@ namespace Phlix\Hub\Auth;
 
 use Phlix\Hub\Common\Database\KeySweeper;
 use Phlix\Hub\Common\Support\Ids;
+use Phlix\Shared\Auth\GrantConsume;
 use Workerman\MySQL\Connection;
 
 /**
@@ -339,8 +340,10 @@ class TokenSessionRepository
      * closes: while the answer was `void`, the hub could not observe
      * lose-the-race and two same-grant refreshes BOTH minted), the row is
      * gone, or the vendor answered something this statement cannot vouch
-     * for. Every unwrappable answer reads as LOST so callers fail toward
-     * re-adjudication, never toward minting. The second call no longer
+     * for. Unvouchable answers (null/false — nothing measurable) read as
+     * LOST so callers fail toward re-adjudication, never toward minting;
+     * numeric answers read as the affected-rows count they claim (shared
+     * GrantConsume law, matching the server twin's arbiter). The second call no longer
      * moving the stamp — the idempotence the grace window is measured from
      * — is unchanged law, now paired with the verdict.
      *
@@ -361,9 +364,18 @@ class TokenSessionRepository
             ['jti' => $jti],
         );
 
-        // Measured vendor contract (workerman/mysql query()): an UPDATE
-        // answers int rowCount; any other shape is not an answer to PIN.
-        return is_int($result) && $result >= 1;
+        // v0.59 bank row 5 (S2-ADOPT 2.4): the local int>=1 math retires onto
+        // the shared verdict vocabulary. For every shape the measured driver
+        // contract can produce for an UPDATE (int rowCount; null only via an
+        // unwrapped edge; false never) the answer is identical to the retired
+        // line; for numeric answers the UPDATE contract never produces, the
+        // enum's numeric reading now agrees with the server twin's arbiter
+        // (wroteNothing-guard then `!== 0`) instead of the hub's older
+        // int-only strictness — unreachable-value convergence, no live delta.
+        // The bool seam itself stays by charter: callers owe a two-state
+        // decision; the third (Indeterminate) state exists for seams that
+        // later want to name it.
+        return GrantConsume::fromWriteVerdict($result)->won();
     }
 
     /**
