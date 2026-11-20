@@ -32,7 +32,6 @@ use function explode;
 use function hash_equals;
 use function http_build_query;
 use function in_array;
-use function is_string;
 use function str_contains;
 use function str_starts_with;
 use function substr;

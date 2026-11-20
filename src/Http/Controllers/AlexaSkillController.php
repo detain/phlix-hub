@@ -22,9 +22,7 @@ use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\SyncPlay\PendingCommandPusherInterface;
 
-use function array_combine;
 use function array_keys;
-use function array_map;
 use function http_build_query;
 use function implode;
 use function in_array;
