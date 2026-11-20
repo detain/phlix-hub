@@ -11,16 +11,6 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Common\Env;
 
-// v0.59 bank row 3: this class is the hub-side FACADE onto the shared
-// support kernel. Config files still load it with a plain require_once
-// without the composer autoloader (the `env -i` child doctrine of
-// tests/Unit/Config/DatabaseConfigTest), so the kernel comes in by path
-// when the autoloader has not provided it — require_once dedupes against
-// the PSR-4 loader exactly like the facade's own doctrine.
-if (!class_exists(\Phlix\Shared\Support\EnvConfig::class, false)) {
-    require_once __DIR__ . '/../../../vendor/detain/phlix-shared/src/Support/EnvConfig.php';
-}
-
 /**
  * The env-read idiom for config defaults, in one place.
  *
@@ -78,6 +68,23 @@ if (!class_exists(\Phlix\Shared\Support\EnvConfig::class, false)) {
 final class EnvConfig
 {
     /**
+     * Pulls the shared kernel in by PATH when the composer autoloader has
+     * not provided it — v0.59 bank row 3 facade duty. Config files still
+     * load this class with a plain `require_once` (no autoload; the
+     * `env -i` child doctrine of tests/Unit/Config/DatabaseConfigTest), so
+     * the kernel arrives the same way, deduped by require_once against the
+     * PSR-4 loader on the long-running paths. Kept INSIDE the class (not
+     * file top level) so this file declares symbols and carries its
+     * side-effect only on demand, per PSR-1.
+     */
+    private static function ensureKernel(): void
+    {
+        if (!class_exists(\Phlix\Shared\Support\EnvConfig::class, false)) {
+            require_once __DIR__ . '/../../../vendor/detain/phlix-shared/src/Support/EnvConfig.php';
+        }
+    }
+
+    /**
      * Read an integer knob: unset/empty → $default, otherwise the value
      * cast the way `(int) getenv(...)` casts it (`"12x"` → 12 — the old
      * `(int) (getenv(...) ?: default)` sites' behavior, preserved).
@@ -90,6 +97,8 @@ final class EnvConfig
      */
     public static function integer(string $name, int $default): int
     {
+        self::ensureKernel();
+
         return \Phlix\Shared\Support\EnvConfig::integer($name, $default);
     }
 
@@ -99,6 +108,8 @@ final class EnvConfig
      */
     public static function text(string $name, string $default): string
     {
+        self::ensureKernel();
+
         return \Phlix\Shared\Support\EnvConfig::text($name, $default);
     }
 
@@ -109,6 +120,8 @@ final class EnvConfig
      */
     public static function nullableText(string $name): ?string
     {
+        self::ensureKernel();
+
         return \Phlix\Shared\Support\EnvConfig::nullableText($name);
     }
 

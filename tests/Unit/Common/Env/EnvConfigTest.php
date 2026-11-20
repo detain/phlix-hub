@@ -355,7 +355,11 @@ final class EnvConfigTest extends TestCase
                     "text('$raw' vs default '$default')"
                 );
             }
-            self::assertSame($kernel::nullableText(self::KNOB), EnvConfig::nullableText(self::KNOB), "nullableText('$raw')");
+            self::assertSame(
+                $kernel::nullableText(self::KNOB),
+                EnvConfig::nullableText(self::KNOB),
+                "nullableText('$raw')",
+            );
         }
 
         putenv(self::KNOB);
