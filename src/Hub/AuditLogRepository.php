@@ -13,6 +13,7 @@ namespace Phlix\Hub\Hub;
 
 use Phlix\Hub\Common\Support\Ids;
 use Workerman\MySQL\Connection;
+use Phlix\Shared\Database\RowMap;
 
 /**
  * Repository for persisting and querying audit log entries (Step H.5b).
@@ -243,8 +244,8 @@ class AuditLogRepository
         }
 
         return [
-            'id' => is_string($row['id'] ?? null) ? $row['id'] : '',
-            'event' => is_string($row['event'] ?? null) ? $row['event'] : '',
+            'id' => RowMap::str($row, 'id', ''),
+            'event' => RowMap::str($row, 'event', ''),
             'user_id' => $row['user_id'] ?? null,
             'actor' => $actor,
             'session_id' => $row['session_id'] ?? null,
@@ -256,7 +257,7 @@ class AuditLogRepository
             'ip_address' => $row['ip_address'] ?? null,
             'user_agent' => $row['user_agent'] ?? null,
             'context' => $context,
-            'created_at' => is_string($row['created_at'] ?? null) ? $row['created_at'] : null,
+            'created_at' => RowMap::nullableStr($row, 'created_at'),
         ];
     }
 }

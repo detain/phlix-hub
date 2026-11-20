@@ -15,6 +15,7 @@ use Phlix\Shared\Database\UpsertSyntax;
 use Phlix\Hub\Common\Support\Ids;
 use Phlix\Shared\Settings\SettingsCodec;
 use Workerman\MySQL\Connection;
+use Phlix\Shared\Database\RowMap;
 
 /**
  * Hub-wide settings store (Step H.5a).
@@ -271,8 +272,9 @@ class HubSettingsRepository
             return null;
         }
 
-        $type = is_string($row['value_type'] ?? null) ? (string) $row['value_type'] : 'string';
-        $raw  = is_string($row['setting_value'] ?? null) ? (string) $row['setting_value'] : '';
+        /** @var array<string, mixed> $row */
+        $type = RowMap::str($row, 'value_type', 'string');
+        $raw  = RowMap::str($row, 'setting_value', '');
 
         return [
             'value'      => SettingsCodec::decode($raw, $type),
@@ -300,13 +302,18 @@ class HubSettingsRepository
         }
 
         foreach ($rows as $row) {
-            if (!is_array($row) || !is_string($row['setting_key'] ?? null)) {
+            if (!is_array($row)) {
                 continue;
             }
-            $type = is_string($row['value_type'] ?? null) ? (string) $row['value_type'] : 'string';
-            $raw  = is_string($row['setting_value'] ?? null) ? (string) $row['setting_value'] : '';
+            /** @var array<string, mixed> $row */
+            $settingKey = RowMap::nullableStr($row, 'setting_key');
+            if ($settingKey === null) {
+                continue;
+            }
+            $type = RowMap::str($row, 'value_type', 'string');
+            $raw  = RowMap::str($row, 'setting_value', '');
             /** @psalm-suppress MixedAssignment */
-            $out[(string) $row['setting_key']] = SettingsCodec::decode($raw, $type);
+            $out[$settingKey] = SettingsCodec::decode($raw, $type);
         }
 
         return $out;

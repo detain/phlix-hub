@@ -16,6 +16,7 @@ use InvalidArgumentException;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\Support\Ids;
 use Workerman\MySQL\Connection;
+use Phlix\Shared\Database\RowMap;
 
 use function explode;
 use function hash;
@@ -127,10 +128,8 @@ final class OAuthClientRegistry
             return null;
         }
 
-        $secretHash = is_string($row['client_secret_hash'] ?? null) ? (string) $row['client_secret_hash'] : null;
-        if ($secretHash === '') {
-            $secretHash = null;
-        }
+        /** @var array<string, mixed> $row */
+        $secretHash = RowMap::nullableNonEmptyStr($row, 'client_secret_hash');
 
         $confidential = self::truthy($row['is_confidential'] ?? null);
 
@@ -303,8 +302,9 @@ final class OAuthClientRegistry
 
             /** @var mixed $name */
             $name   = $row['name'] ?? null;
-            $uris   = is_string($row['redirect_uris'] ?? null) ? (string) $row['redirect_uris'] : '';
-            $scopes = is_string($row['allowed_scopes'] ?? null) ? (string) $row['allowed_scopes'] : '';
+            /** @var array<string, mixed> $row */
+            $uris   = RowMap::str($row, 'redirect_uris', '');
+            $scopes = RowMap::str($row, 'allowed_scopes', '');
 
             $uriList = [];
             foreach (explode(self::URI_DELIMITER, $uris) as $candidate) {

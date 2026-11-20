@@ -13,6 +13,7 @@ namespace Phlix\Hub\Hub;
 
 use Phlix\Shared\Hub\ServerInfoDto;
 use Workerman\MySQL\Connection;
+use Phlix\Shared\Database\RowMap;
 
 /**
  * Returns server info for hub dashboard and API consumers.
@@ -109,8 +110,7 @@ class ServerInfoHandler
         $row = $rows[0];
         /** @var string */
         $userId = $row['user_id'];
-        /** @var string */
-        $status = is_string($row['status'] ?? null) ? $row['status'] : 'offline';
+        $status = RowMap::str($row, 'status', 'offline');
         /** @var mixed $relayActiveRaw */
         $relayActiveRaw = $row['relay_active'] ?? false;
         $relayActive = is_numeric($relayActiveRaw) ? (int) $relayActiveRaw === 1 : (bool) $relayActiveRaw;
@@ -175,8 +175,7 @@ class ServerInfoHandler
      */
     private function rowToDto(array $row): ServerInfoDto
     {
-        /** @var string */
-        $hostnameJson = is_string($row['hostname_candidates_json'] ?? null) ? $row['hostname_candidates_json'] : '[]';
+        $hostnameJson = RowMap::str($row, 'hostname_candidates_json', '[]');
         /** @var list<string> */
         $hostnames = json_decode($hostnameJson, true) ?? [];
 
@@ -199,18 +198,15 @@ class ServerInfoHandler
         /** @var string */
         $userId = $row['user_id'];
 
-        /** @var string */
-        $serverName = is_string($row['server_name'] ?? null) ? $row['server_name'] : '';
-        /** @var string */
-        $version = is_string($row['version'] ?? null) ? $row['version'] : '';
-        /** @var string */
-        $status = is_string($row['status'] ?? null) ? $row['status'] : 'offline';
+        $serverName = RowMap::str($row, 'server_name', '');
+        $version = RowMap::str($row, 'version', '');
+        $status = RowMap::str($row, 'status', 'offline');
 
         /** @var mixed */
         $relayActiveRaw = $row['relay_active'] ?? false;
         $relayActive = is_numeric($relayActiveRaw) ? (int) $relayActiveRaw === 1 : (bool) $relayActiveRaw;
 
-        $libraryCount = is_numeric($row['library_count'] ?? null) ? (int) $row['library_count'] : null;
+        $libraryCount = RowMap::nullableIntFromNumeric($row, 'library_count');
 
         /** @var mixed $subdomainRaw */
         $subdomainRaw = $row['subdomain'] ?? null;

@@ -16,6 +16,7 @@ use Phlix\Hub\Http\ControllerErrorFrames;
 use Phlix\Hub\Http\ControllerRequests;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
+use Phlix\Shared\Database\RowMap;
 
 /**
  * API controller for library endpoints.
@@ -62,10 +63,8 @@ final class LibraryController
 
         $libraries = [];
         foreach ($rows as $row) {
-            /** @var string $libId */
-            $libId = is_string($row['library_id'] ?? null) ? $row['library_id'] : '';
-            /** @var string $libName */
-            $libName = is_string($row['library_name'] ?? null) ? $row['library_name'] : '';
+            $libId = RowMap::str($row, 'library_id', '');
+            $libName = RowMap::str($row, 'library_name', '');
             if ($libId !== '') {
                 $libraries[] = [
                     'id' => $libId,

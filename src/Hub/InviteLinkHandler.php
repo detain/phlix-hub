@@ -16,6 +16,7 @@ use InvalidArgumentException;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Throwable;
 use Workerman\MySQL\Connection;
+use Phlix\Shared\Database\RowMap;
 
 /**
  * Handles invite link business logic.
@@ -175,13 +176,11 @@ class InviteLinkHandler
         // The invite_links row is the authoritative record for ownership, target
         // and permission — read them from the row so the conditional UPDATE below
         // and the resulting share both agree with the persisted invite.
-        $ownerId = is_string($row['owner_user_id'] ?? null) ? (string) $row['owner_user_id'] : '';
-        $serverId = is_string($row['server_id'] ?? null) ? (string) $row['server_id'] : '';
-        $libraryId = is_string($row['library_id'] ?? null) ? (string) $row['library_id'] : null;
-        $permission = is_string($row['permission'] ?? null) ? (string) $row['permission'] : 'read';
-        $rowExpiresAt = isset($row['expires_at']) && is_numeric($row['expires_at'])
-            ? (int) $row['expires_at']
-            : null;
+        $ownerId = RowMap::str($row, 'owner_user_id', '');
+        $serverId = RowMap::str($row, 'server_id', '');
+        $libraryId = RowMap::nullableStr($row, 'library_id');
+        $permission = RowMap::str($row, 'permission', 'read');
+        $rowExpiresAt = RowMap::nullableIntFromNumeric($row, 'expires_at');
 
         if ($rowExpiresAt !== null && time() > $rowExpiresAt) {
             throw new InvalidArgumentException('Invite link has expired', 410);

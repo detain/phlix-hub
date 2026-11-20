@@ -20,6 +20,7 @@ use Phlix\Shared\Database\WriteResult;
 use Phlix\Shared\Hub\ClaimRequest;
 use Phlix\Shared\Hub\ClaimResponse;
 use Workerman\MySQL\Connection;
+use Phlix\Shared\Database\RowMap;
 
 /**
  * On `handleClaimCode`:
@@ -206,10 +207,8 @@ class ClaimRequestHandler
         if ($existingRow !== null) {
             /** @var array<string, mixed> $row */
             $row = $existingRow;
-            /** @var int */
-            $expiresAt = is_int($row['expires_at'] ?? null) ? $row['expires_at'] : 0;
-            /** @var string */
-            $claimId = is_string($row['id'] ?? null) ? $row['id'] : '';
+            $expiresAt = RowMap::int($row, 'expires_at', 0);
+            $claimId = RowMap::str($row, 'id', '');
             // SH-049 (review hub__secaudit #1): re-DELIVERY of a stored code is
             // structurally gone — the row holds only its one-way hash, which is
             // exactly the point. The honest shape is ROTATION: a FRESH code
@@ -381,8 +380,7 @@ class ClaimRequestHandler
             }
             /** @var array<string, mixed> $row */
             $row = $rows[0];
-            /** @var int */
-            $expiresAt = is_int($row['expires_at'] ?? null) ? $row['expires_at'] : 0;
+            $expiresAt = RowMap::int($row, 'expires_at', 0);
             $claimedBy = $row['claimed_by'] ?? null;
 
             if ($expiresAt < $now) {
@@ -420,18 +418,11 @@ class ClaimRequestHandler
             $serverId = Ids::uuidV4();
             $nowUnix = time();
 
-            /** @var string */
-            $publicKeyJwk = is_string($row['public_key_jwk'] ?? null) ? $row['public_key_jwk'] : '';
-            /** @var string */
-            $hostnameCandidates = is_string($row['hostname_candidates_json'] ?? null)
-                ? $row['hostname_candidates_json']
-                : '[]';
-            /** @var string */
-            $serverName = is_string($row['server_name'] ?? null) ? $row['server_name'] : '';
-            /** @var string */
-            $version = is_string($row['version'] ?? null) ? $row['version'] : '';
-            /** @var string */
-            $claimRowId = is_string($row['id'] ?? null) ? $row['id'] : '';
+            $publicKeyJwk = RowMap::str($row, 'public_key_jwk', '');
+            $hostnameCandidates = RowMap::str($row, 'hostname_candidates_json', '[]');
+            $serverName = RowMap::str($row, 'server_name', '');
+            $version = RowMap::str($row, 'version', '');
+            $claimRowId = RowMap::str($row, 'id', '');
 
             $this->db->query(
                 'INSERT INTO servers
@@ -544,12 +535,9 @@ class ClaimRequestHandler
 
         /** @var string|null $claimedBy */
         $claimedBy = $row['claimed_by'] ?? null;
-        /** @var string $serverId */
-        $serverId = is_string($row['paired_server_id'] ?? null) ? $row['paired_server_id'] : '';
-        /** @var string $status */
-        $status = is_string($row['status'] ?? null) ? $row['status'] : 'pending';
-        /** @var int $expiresAt */
-        $expiresAt = is_int($row['expires_at'] ?? null) ? $row['expires_at'] : 0;
+        $serverId = RowMap::str($row, 'paired_server_id', '');
+        $status = RowMap::str($row, 'status', 'pending');
+        $expiresAt = RowMap::int($row, 'expires_at', 0);
 
         if ($status === 'paired' && is_string($claimedBy) && $claimedBy !== '' && $serverId !== '') {
             // SH-049 #3 (review hub__secaudit): consume BEFORE minting. The

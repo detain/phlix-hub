@@ -19,6 +19,7 @@ use Phlix\Hub\Common\Logger\StructuredLogger;
 use PDOException;
 use Throwable;
 use Workerman\MySQL\Connection;
+use Phlix\Shared\Database\RowMap;
 
 /**
  * Handles library sharing business logic.
@@ -495,15 +496,11 @@ class LibrarySharingHandler
             /** @var mixed $rawPermission */
             $rawPermission = $row['permission_level'] ?? null;
             $permissionLevel = is_string($rawPermission) ? $rawPermission : 'read';
-            $expiresAt = isset($row['expires_at']) && is_numeric($row['expires_at'])
-                ? (int) $row['expires_at']
-                : null;
+            $expiresAt = RowMap::nullableIntFromNumeric($row, 'expires_at');
             // `ls.created_at` is selected above and stored as UNIX seconds, same as
             // `expires_at`; null when the column is absent/non-numeric so the UI
             // renders a placeholder rather than a 1970 date.
-            $createdAt = isset($row['created_at']) && is_numeric($row['created_at'])
-                ? (int) $row['created_at']
-                : null;
+            $createdAt = RowMap::nullableIntFromNumeric($row, 'created_at');
 
             /** @var mixed $rawOwnerName */
             $rawOwnerName = $row['owner_name'] ?? null;
@@ -592,10 +589,8 @@ class LibrarySharingHandler
 
             $result = [];
             foreach ($rows as $row) {
-                /** @var string $libId */
-                $libId = is_string($row['library_id'] ?? null) ? $row['library_id'] : '';
-                /** @var string $libName */
-                $libName = is_string($row['library_name'] ?? null) ? $row['library_name'] : '';
+                $libId = RowMap::str($row, 'library_id', '');
+                $libName = RowMap::str($row, 'library_name', '');
                 if ($libId !== '') {
                     $result[] = [
                         'library_id' => $libId,
@@ -618,10 +613,8 @@ class LibrarySharingHandler
 
         $result = [];
         foreach ($rows as $row) {
-            /** @var string $libId */
-            $libId = is_string($row['library_id'] ?? null) ? $row['library_id'] : '';
-            /** @var string $libName */
-            $libName = is_string($row['library_name'] ?? null) ? $row['library_name'] : '';
+            $libId = RowMap::str($row, 'library_id', '');
+            $libName = RowMap::str($row, 'library_name', '');
             if ($libId !== '') {
                 $result[] = [
                     'library_id' => $libId,
