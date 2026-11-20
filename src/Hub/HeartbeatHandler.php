@@ -347,14 +347,22 @@ class HeartbeatHandler
         );
 
         // Persist the new hash so the next heartbeat can skip upserts when unchanged.
+        // FX-HUB (2026-11-20): the old `hash = :hash_update` double-bind shape was
+        // the one raw-ODKU survivor that the shared kernel can rewrite; converted
+        // behind adapt() after a real-MySQL zero-drift differential (final state
+        // and raw affectedRows compared by value across bound/alias/VALUES arms —
+        // gates/FXHUB-diff-mysql.log). The alias arm is also warning-clean, unlike
+        // the VALUES() rendering which carries engine-advertised 1287 debt.
         $this->db->query(
-            'INSERT INTO server_library_hashes (server_id, hash, updated_at)
-             VALUES (:server_id, :hash, NOW())
-             ON DUPLICATE KEY UPDATE hash = :hash_update, updated_at = NOW()',
+            UpsertSyntax::adapt(
+                'INSERT INTO server_library_hashes (server_id, hash, updated_at)
+                 VALUES (:server_id, :hash, NOW())
+                  AS new_row
+                 ON DUPLICATE KEY UPDATE hash = new_row.hash, updated_at = NOW()'
+            ),
             [
                 'server_id' => $serverId,
                 'hash' => $hash,
-                'hash_update' => $hash,
             ],
         );
     }

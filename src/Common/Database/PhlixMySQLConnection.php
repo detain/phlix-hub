@@ -536,8 +536,10 @@ final class PhlixMySQLConnection extends Connection
             $reopened = (bool) parent::beginTrans();
             if ($reopened) {
                 // Vendor-conformant drivers cannot take this branch (a second
-                // BEGIN throws); if a future parent grows nesting, record it
-                // on the ledger rather than losing it (server shape, A-1).
+                // BEGIN throws). markOpen() records the FIRST open only and
+                // throws LogicException on any repeat — this arm is therefore
+                // first-open-only bookkeeping behind a fail-loud, not a
+                // nesting counter (the machine has no nesting-increment).
                 $this->txState()->markOpen();
             }
 
