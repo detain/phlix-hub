@@ -19,7 +19,6 @@
         "workerman/workerman": "~5.1"
     },
     "require-dev": {
-        "detain/phlix-testkit": "dev-master@dev",
         "mockery/mockery": "^1.6",
         "phpstan/phpstan": "^2.0",
         "phpunit/phpunit": "^12.5",
@@ -50,16 +49,7 @@
     },
     "extra": {
         "phlix": {
-            "testkitPinNote": "detain/phlix-testkit sits in require-dev as a path repo (dev-master@dev, symlink:false) mirroring the local kit tree; the lock entry dist.reference records the kit sha at install. Honest form today: the kit is unpublished (no tag exists, origin carries only a stale pre-split scaffold, anonymous archive URLs 404). Release pinning rides a future tag - at cut-over this entry migrates to the estate zipball-sha form used by detain/phlix-shared, and the repositories path entry drops (precedent: server 3260bf75 path-era -> 9fe18fa9 drop-dev-path)."
+            "testkitPinNote": "detain/phlix-testkit enablement (c9dc2ca7: require-dev path repo, dev-master@dev, symlink:false, mirroring the local kit tree) was UNPINNED 2026-11-20: a /home/sites path repository is unresolvable on hosted runners — composer install died at the testkit node (PathDownloader exit 1, every CI job) once the retrofit-era master cluster went public. Zero src/tests/scripts references existed at removal, so the pin was pure groundwork. Honest form today: the kit is unpublished (no tag exists, origin carries only a stale pre-split scaffold, anonymous archive URLs 404). Release pinning rides a future tag - at cut-over the dependency returns in the estate zipball-sha form used by detain/phlix-shared and NO repositories path entry is added (precedent: server 3260bf75 path-era -> 9fe18fa9 drop-dev-path)."
         }
-    },
-    "repositories": [
-        {
-            "type": "path",
-            "url": "/home/sites/phlix/phlix-testkit",
-            "options": {
-                "symlink": false
-            }
-        }
-    ]
+    }
 }
