@@ -513,6 +513,29 @@ final class PhlixMySQLConnection extends Connection
      * Outside a coroutine (cid `< 0`: CLI migrations, cron) there is no
      * concurrency and no Channel, so the parent runs directly.
      *
+     * v0.59 item-4 adjudication (KEEP, not consumed): the shared
+     * {@see \Phlix\Shared\Database\TxLease::begin()} unifies the
+     * acquire/start/fold sequence, but this ceremony carries hub-local
+     * ordering the cid-bound lease cannot express, and the mission allows
+     * adoption only behind a zero-behavior differential:
+     *  1. the `$this->queryLockHolder = $cid` shadow install sits BETWEEN
+     *     acquire and start — begin() has no hook there, and smuggling the
+     *     install into the start callable reorders it against a vendor
+     *     START that may await under swoole hooks (unzeroable on host);
+     *  2. the falsy arm must clear the local `txOpen` flag BEFORE the
+     *     token leaves (§1.5 push-last), while begin() fires the
+     *     construction-time push INSIDE `abandon()`; re-pointing the push
+     *     closure to write `txOpen` would leak transaction-flag semantics
+     *     into the per-query release seam shared with the pop-drain paths;
+     *  3. the reentrant arm gates on the local shadow read (register
+     *     A-LAW, extinction-pinned) and forwards to the parent's own
+     *     already-in-transaction throw identity, where begin() presumes an
+     *     `isHolder()` (machine-holder) gate and throws machine wording.
+     * The Q-A KEEP precedent (the else-arm never consults
+     * MysqlRetryPolicy::rollsBackWholeTransaction) already ratified the
+     * same shape: the machine owns the ledger, this method owns the hub
+     * shadow and flag around it.
+     *
      * @return bool The parent's PDO::beginTransaction() result.
      */
     public function beginTrans()
