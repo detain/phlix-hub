@@ -21,6 +21,7 @@ use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Hub\Relay\InvalidFrameTypeException;
 use Phlix\Shared\Relay\RelayFrameType;
+use Phlix\Shared\Support\Backoff;
 use Phlix\Shared\Support\Json;
 use RuntimeException;
 use Throwable;
@@ -2805,7 +2806,7 @@ class FederationPeerManager
                 static function () use ($self, $delay): void {
                     $self->reconnectTimerId = null;
                     $self->reconnectScheduled = false;
-                    $self->reconnectDelaySeconds = min($delay * 2, self::RECONNECT_DELAY_CAP_SECONDS);
+                    $self->reconnectDelaySeconds = Backoff::nextStepped($delay, 2, self::RECONNECT_DELAY_CAP_SECONDS);
 
                     if ($self->intentionalDisconnect) {
                         return; // Operator dropped the link while we were waiting.
