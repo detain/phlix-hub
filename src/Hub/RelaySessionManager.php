@@ -17,6 +17,7 @@ use InvalidArgumentException;
 use RuntimeException;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
+use Phlix\Shared\Database\RowMap;
 
 /**
  * Manages relay sessions between the hub and enrolled servers.
@@ -531,10 +532,10 @@ class RelaySessionManager
         $row = $rows[0];
 
         return [
-            'bytes_in' => is_numeric($row['bytes_in'] ?? null) ? (int) $row['bytes_in'] : 0,
-            'bytes_out' => is_numeric($row['bytes_out'] ?? null) ? (int) $row['bytes_out'] : 0,
-            'quota_bytes_in' => is_numeric($row['quota_bytes_in'] ?? null) ? (int) $row['quota_bytes_in'] : 0,
-            'quota_bytes_out' => is_numeric($row['quota_bytes_out'] ?? null) ? (int) $row['quota_bytes_out'] : 0,
+            'bytes_in' => RowMap::intFromNumeric($row, 'bytes_in', 0),
+            'bytes_out' => RowMap::intFromNumeric($row, 'bytes_out', 0),
+            'quota_bytes_in' => RowMap::intFromNumeric($row, 'quota_bytes_in', 0),
+            'quota_bytes_out' => RowMap::intFromNumeric($row, 'quota_bytes_out', 0),
         ];
     }
 
@@ -665,13 +666,11 @@ class RelaySessionManager
         /** @var array<string, mixed> $row */
         $row = $rows[0];
 
-        $bytesIn = is_numeric($row['bytes_in'] ?? null) ? (int) $row['bytes_in'] : 0;
-        $bytesOut = is_numeric($row['bytes_out'] ?? null) ? (int) $row['bytes_out'] : 0;
-        $quotaBytesIn = is_numeric($row['quota_bytes_in'] ?? null) ? (int) $row['quota_bytes_in'] : 0;
-        $quotaBytesOut = is_numeric($row['quota_bytes_out'] ?? null) ? (int) $row['quota_bytes_out'] : 0;
-        $maxConcurrentStreams = is_numeric($row['max_concurrent_streams'] ?? null)
-            ? (int) $row['max_concurrent_streams']
-            : 0;
+        $bytesIn = RowMap::intFromNumeric($row, 'bytes_in', 0);
+        $bytesOut = RowMap::intFromNumeric($row, 'bytes_out', 0);
+        $quotaBytesIn = RowMap::intFromNumeric($row, 'quota_bytes_in', 0);
+        $quotaBytesOut = RowMap::intFromNumeric($row, 'quota_bytes_out', 0);
+        $maxConcurrentStreams = RowMap::intFromNumeric($row, 'max_concurrent_streams', 0);
 
         // DOWNLOAD cap: bytes_in is what the user has downloaded from the server;
         // this is the dimension a media stream grows, so it is the cap that
@@ -744,9 +743,7 @@ class RelaySessionManager
         /** @var array<string, mixed> $row */
         $row = $rows[0];
 
-        return is_numeric($row['max_concurrent_streams'] ?? null)
-            ? (int) $row['max_concurrent_streams']
-            : 0;
+        return RowMap::intFromNumeric($row, 'max_concurrent_streams', 0);
     }
 
     /**
@@ -818,9 +815,7 @@ class RelaySessionManager
         /** @var array<string, mixed> $row */
         $row = $rows[0];
 
-        return is_numeric($row['throttle_bps'] ?? null)
-            ? (int) $row['throttle_bps']
-            : self::DEFAULT_THROTTLE_BPS;
+        return RowMap::intFromNumeric($row, 'throttle_bps', self::DEFAULT_THROTTLE_BPS);
     }
 
     /**

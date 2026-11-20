@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Hub;
 
+use Phlix\Shared\Database\RowMap;
+
 /**
  * DTO representing a library share record.
  *
@@ -113,15 +115,9 @@ final class LibraryShare
      */
     public static function fromRow(array $row): self
     {
-        $expiresAt = null;
-        if (isset($row['expires_at']) && is_numeric($row['expires_at'])) {
-            $expiresAt = (int) $row['expires_at'];
-        }
+        $expiresAt = RowMap::nullableIntFromNumeric($row, 'expires_at');
 
-        $revokedAt = null;
-        if (isset($row['revoked_at']) && is_numeric($row['revoked_at'])) {
-            $revokedAt = (int) $row['revoked_at'];
-        }
+        $revokedAt = RowMap::nullableIntFromNumeric($row, 'revoked_at');
 
         /** @var mixed $rawId */
         $rawId = $row['id'] ?? null;
@@ -159,7 +155,7 @@ final class LibraryShare
             libraryId: is_string($rawLibrary) ? $rawLibrary : '',
             libraryName: is_string($rawLibraryName) ? $rawLibraryName : '',
             permissionLevel: is_string($rawPermission) ? $rawPermission : 'read',
-            createdAt: is_numeric($row['created_at'] ?? null) ? (int) $row['created_at'] : 0,
+            createdAt: RowMap::intFromNumeric($row, 'created_at', 0),
             expiresAt: $expiresAt,
             revokedAt: $revokedAt,
             collaboratorName: $collaboratorName,

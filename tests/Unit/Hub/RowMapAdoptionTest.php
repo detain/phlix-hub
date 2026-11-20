@@ -97,6 +97,22 @@ final class RowMapAdoptionTest extends TestCase
                 })($r),
                 static fn (array $r): mixed => RowMap::nullableNonEmptyStr($r, 'c'),
             ],
+            'intFromNumeric (default 0)' => [
+                static fn (array $r): mixed => (static function (array $row): mixed {
+                    $value = is_numeric($row['c'] ?? null) ? (int) $row['c'] : 0;
+
+                    return $value;
+                })($r),
+                static fn (array $r): mixed => RowMap::intFromNumeric($r, 'c', 0),
+            ],
+            'intFromNumeric (default 1 - maxUses)' => [
+                static fn (array $r): mixed => (static function (array $row): mixed {
+                    $value = is_numeric($row['c'] ?? null) ? (int) $row['c'] : 1;
+
+                    return $value;
+                })($r),
+                static fn (array $r): mixed => RowMap::intFromNumeric($r, 'c', 1),
+            ],
         ];
     }
 
@@ -151,10 +167,10 @@ final class RowMapAdoptionTest extends TestCase
             }
         }
 
-        // 7 families x 15 matrix values x (value-case + missing-key-case) —
+        // 9 families x 15 matrix values x (value-case + missing-key-case) —
         // the floor catches a silently-shrunken matrix, mirroring the
         // corpus-floor discipline.
-        self::assertSame(210, $cases, 'the differential matrix must run in full');
+        self::assertSame(270, $cases, 'the differential matrix must run in full');
     }
 
     /**
@@ -170,6 +186,9 @@ final class RowMapAdoptionTest extends TestCase
             'src/Hub/HubSettingsRepository.php',
             'src/Hub/LibrarySharingHandler.php',
             'src/Hub/InviteLinkHandler.php',
+            'src/Hub/InviteLink.php',
+            'src/Hub/LibraryShare.php',
+            'src/Hub/RelaySessionManager.php',
             'src/Hub/ClaimRequestHandler.php',
             'src/Hub/AuditLogRepository.php',
             'src/OAuth/OAuthClientRegistry.php',

@@ -431,7 +431,7 @@ class InviteLinkHandler
         }
 
         /** @var string $email */
-        $email = is_string($rows[0]['email'] ?? null) ? $rows[0]['email'] : null;
+        $email = RowMap::nullableStr($rows[0], 'email');
         return $email;
     }
 }

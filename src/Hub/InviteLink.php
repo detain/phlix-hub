@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Hub;
 
+use Phlix\Shared\Database\RowMap;
+
 /**
  * DTO representing an invite link for library sharing.
  *
@@ -125,10 +127,7 @@ final class InviteLink
      */
     public static function fromRow(array $row, ?string $url): self
     {
-        $expiresAt = null;
-        if (isset($row['expires_at']) && is_numeric($row['expires_at'])) {
-            $expiresAt = (int) $row['expires_at'];
-        }
+        $expiresAt = RowMap::nullableIntFromNumeric($row, 'expires_at');
 
         /** @var mixed $rawId */
         $rawId = $row['id'] ?? null;
@@ -147,10 +146,10 @@ final class InviteLink
             serverId: is_string($rawServer) ? $rawServer : '',
             libraryId: is_string($rawLibrary) && $rawLibrary !== '' ? $rawLibrary : null,
             permission: is_string($rawPermission) ? $rawPermission : 'read',
-            maxUses: is_numeric($row['max_uses'] ?? null) ? (int) $row['max_uses'] : 1,
-            useCount: is_numeric($row['use_count'] ?? null) ? (int) $row['use_count'] : 0,
+            maxUses: RowMap::intFromNumeric($row, 'max_uses', 1),
+            useCount: RowMap::intFromNumeric($row, 'use_count', 0),
             expiresAt: $expiresAt,
-            createdAt: is_numeric($row['created_at'] ?? null) ? (int) $row['created_at'] : 0,
+            createdAt: RowMap::intFromNumeric($row, 'created_at', 0),
             url: $url,
         );
     }
