@@ -1,5 +1,5 @@
 {
-    "generatedFrom": "faabd065 + SRV-METRICS-A13 two new Unit files serial junit (clean-checkout bless), pcov + TXMUTEX-B retrofit single-row insert (measured from serial Unit junit; full-cache bless reverted to keep the CI-pcov rows byte-stable) + FX-HUB law test single-row insert (clean-checkout serial junit bless 0.727s warm)",
+    "generatedFrom": "faabd065 + SRV-METRICS-A13 two new Unit files serial junit (clean-checkout bless), pcov + TXMUTEX-B retrofit single-row insert (measured from serial Unit junit; full-cache bless reverted to keep the CI-pcov rows byte-stable) + FX-HUB law test single-row insert (clean-checkout serial junit bless 0.727s warm) + V059-HUB RowMapAdoptionTest single-row insert (serial junit 0.005s, swoole-loaded recipe)",
     "unit": {
         "tests/Common/Database/MigrationRunnerTest.php": 0.023,
         "tests/Health/HealthControllerTest.php": 0.007,
@@ -212,6 +212,7 @@
         "tests/Unit/Hub/Dns/StaticZoneManagerTest.php": 0.056,
         "tests/Unit/Hub/DnsAliasManagerTest.php": 0.007,
         "tests/Unit/Hub/Ed25519KeyManagerTest.php": 0.011,
+        "tests/Unit/Hub/RowMapAdoptionTest.php": 0.005,
         "tests/Unit/Hub/EnrollmentJwtServiceTest.php": 0.01,
         "tests/Unit/Hub/Federation/FederationHubConfigTest.php": 0.001,
         "tests/Unit/Hub/Federation/FederationHubRepositoryTest.php": 0.001,
