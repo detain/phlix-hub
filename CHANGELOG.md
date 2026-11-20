@@ -12,6 +12,46 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Fix [HUB-PARITY] — review-era parity batch: HSTS, migration exit-code law, logger guards, cache-directive seed parity — 2026-11-19
+
+- HSTS ships on hub responses behind the https first hop. (6798fb2b) [HUB-4.1]
+- The production insecure-cookie warning is ported from the server and names the winning env marker, so operators can see which knob took effect; the CSRF origin-law parity pin rode in with it. (a148a795, 5202fe7f) [HUB-4.2]
+- A half-migrated hub database can no longer exit green: the S159 migration exit-code law is ported hub-side. (77e105b7) [HUB-5.1 / bug #12]
+- Prune-janitor failures at the mint/logout call sites no longer sink logins into 500s — the sweep failure is logged, the session proceeds. (053853de) [HUB-5.2 / bug #8]
+- `LoggerFactory` grows the server's `loadConfig()` guard and `reset()` path-clearing: an invalid logger config refuses boot instead of half-loading, and a reset clears stale path entries. (2b0b216c; psalm tails e835da2e, 6c3b84f6) [A-17]
+- A lowercase `cache-control` seed no longer produces a duplicate contradictory pair on hub responses — the Cache-Control guard is case-insensitive, matching the server. (0dcab898) [A-03]
+
+### Changed [HUB-ENVBOOL] — hub env booleans adopt the estate bool grammar — 2026-11-19
+
+- All hub env-boolean seats adopt the shared `EnvConfig` bool grammar (spellings speak one language; junk announces itself). The ratified-strict keep-local rows are preserved; a silently-dropped spelling row was restored by the r1 review. (be436eea, f06f2a03; restored-row test c96f3876) [HUB-ENVBOOL / E-04 port]
+
+### Fix [S2-KEYFILE] — correction to the S2 delegation disclosure: Ed25519 key-file parity — 2026-11-19
+
+- Follow-up to the S2 section below: the delegation was not byte-identical for every key-file shape. Oversized standard-base64 bodies (the shared kernel read the first 64 bytes and moved on) now fail loud with the byte-exact pre-delegation exception, marker-less legacy files load again, and the loader grammar-routes so hybrid corruptions fail loud as legacy did. The S2 section stays as written — this entry is the correction record. (ce493818, fc462cd8) [S2 sign-cure / S2-KEYFILE-r1]
+
+### Fix [TXMUTEX-B] — transaction-mutex holder arms land hub-side — 2026-11-19
+
+- A stranger coroutine can no longer commit or roll back another coroutine's transaction: `commitTrans`/`rollBackTrans` grew the server-shape holder guard, closing the destructive half of the hub-side race. (464f5d43) [tx-mutex A2]
+- `beginTrans` takes the transaction mutex with a checked pop — a cancelled wait throws with bookkeeping untouched, and a falsy parent answer releases the mutex instead of leaking it. (6e8f6fb6) [tx-mutex A3]
+- The `execute()` non-gone wrapper carries the original `errorInfo` plus `previous`, twin-identical to the server — driver-code classification stays authoritative and the rendered message is unchanged. (2e77dab0) [tx-mutex A7]
+
+### Refactor [HUB-SHARED-057] — the v0.57 kernel retires the hub's database and settings twins — 2026-11-19
+
+- `detain/phlix-shared` pinned `^0.56.0` → `^0.57.0` (packagist-live cut, surgical lock). (b44d1e19)
+- The hub-local `MysqlError` twin is lift-retired onto the shared kernel: a 96-case differential corpus measured zero deltas, consumers repointed, extinction tripwires pin the twin's absence. (e3340c3d) [HUB-M30]
+- The private `affectedRows` twins in `RequestManager`/`ClaimRequestHandler` repoint to shared `WriteResult::affectedRows` — accept-set unchanged at every call site. (6d60cb66) [HUB-M28]
+- `Ids` mints delegate to the shared `Uuid` kernel (`v4()`/`randomHex()`, facade preserved); the permissive shape-sites stay permissive by owner ruling, and the regex arm's load-bearing status is pinned by counterexample. (bfa1272b; r1 tail a61aed30) [HUB-M9]
+- The settings seam adopts shared `SettingsCodec`: the differential measured zero deltas, the legacy arms stay byte-identical in the hub-strict lineage, the server-silent variant is pinned out by name, and `getEffective` stays hub-local (row-exists vs value-null semantics diverge). (a2fc8744) [HUB-M32]
+- The hub-local `UpsertSyntax` is retired onto the shared kernel: exhaustive both-dialect corpus (3,763 cases, 15 fired rewrites, zero deltas) plus the flavor state-machine. (62efb787) [HUB-M29]
+
+### Chore [HUB-TESTKIT] — phlix-testkit enabled as require-dev path repo — 2026-11-19
+
+- `detain/phlix-testkit` is enabled as a require-dev path repo; shared scratch-DB and guard harness seats resolve through it (dev-tooling posture; the server side carries the twin commit). (c9dc2ca7)
+
+### Test [HUB-TRIPWIRE] — README migration-count claim becomes executable — 2026-11-19
+
+- The README's tables-the-migrations-create claim is now an executable tripwire: a four-arm count-up test fails the suite when the migration count drifts from the README's table. (a4f95c8f)
+
 ### Refactor [S2] — `phlix-shared` v0.56.0 adoption: the security kernels become delegates — 2026-11-19
 
 - `detain/phlix-shared` pinned `^0.55.1` → `^0.56.0` (composer lock resolves the
