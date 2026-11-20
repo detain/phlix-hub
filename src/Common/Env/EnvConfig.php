@@ -11,12 +11,23 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Common\Env;
 
+// v0.59 bank row 3: this class is the hub-side FACADE onto the shared
+// support kernel. Config files still load it with a plain require_once
+// without the composer autoloader (the `env -i` child doctrine of
+// tests/Unit/Config/DatabaseConfigTest), so the kernel comes in by path
+// when the autoloader has not provided it — require_once dedupes against
+// the PSR-4 loader exactly like the facade's own doctrine.
+if (!class_exists(\Phlix\Shared\Support\EnvConfig::class, false)) {
+    require_once __DIR__ . '/../../../vendor/detain/phlix-shared/src/Support/EnvConfig.php';
+}
+
 /**
  * The env-read idiom for config defaults, in one place.
  *
- * Hub port of the server's canonical class (`phlix-server`
- * src/Common/Env/EnvConfig.php) — the estate reads env knobs through THIS
- * shape so a reader behaves identically on both hosts.
+ * Facade over the single estate kernel (`Phlix\Shared\Support\EnvConfig`,
+ * phlix-shared src/Support/): the pure readers delegate verbatim, so a hub
+ * knob and a server knob cannot drift apart by construction — the historic
+ * "port of the server's canonical class" duplication ends here.
  *
  * `getenv('X') ?: $default` is the estate's oldest config bug: PHP's `?:`
  * treats the STRING `"0"` as falsy, so an operator who explicitly sets
@@ -45,12 +56,21 @@ namespace Phlix\Hub\Common\Env;
  * composer autoloader): the estate doctrine is that a config file must
  * stay loadable without class autoload — tests/Unit/Config/DatabaseConfigTest
  * asserts it with `env -i` child processes. require_once dedupes against
- * the PSR-4 loader in the long-running paths.
+ * the PSR-4 loader in the long-running paths. The kernel is pulled in by
+ * the same guarded path-load above, so the doctrine survives delegation.
  *
- * The server original also carries a memoized CPU-count probe
- * (`availableCpuCount()`) and the opt-out verb (`boolOptOut()`); the hub
- * has no consumer for either, so they are deliberately NOT ported — port
- * them verbatim from the server original if a consumer ever appears.
+ * The kernel also carries a memoized CPU-count probe and the opt-out verb
+ * (`boolOptOut()`); the hub has no consumer, so the facade deliberately
+ * does NOT re-expose them — a future hub caller goes to the kernel
+ * directly. Re-rolling an opt-out grammar here is the drift this
+ * convergence exists to prevent (S2-ADOPT row 2.2).
+ *
+ * The bool family keeps its verdict arms IN THIS FILE, on purpose: the
+ * hub's E-04 law pairs the shared grammar with a one-line `error_log`
+ * warning on junk values, and the kernel's zero-I/O charter cannot carry
+ * the warning. Dropping the warning would weaken a hub-legit arm, which
+ * the convergence law forbids; verdict equality with the kernel is
+ * differential-pinned by tests/Unit/Common/Env/EnvConfigTest instead.
  *
  * @package Phlix\Hub\Common\Env
  * @since HUB-2.1
@@ -70,9 +90,7 @@ final class EnvConfig
      */
     public static function integer(string $name, int $default): int
     {
-        $raw = getenv($name);
-
-        return $raw === false || $raw === '' ? $default : (int) $raw;
+        return \Phlix\Shared\Support\EnvConfig::integer($name, $default);
     }
 
     /**
@@ -81,9 +99,7 @@ final class EnvConfig
      */
     public static function text(string $name, string $default): string
     {
-        $raw = getenv($name);
-
-        return $raw === false || $raw === '' ? $default : $raw;
+        return \Phlix\Shared\Support\EnvConfig::text($name, $default);
     }
 
     /**
@@ -93,9 +109,7 @@ final class EnvConfig
      */
     public static function nullableText(string $name): ?string
     {
-        $raw = getenv($name);
-
-        return $raw === false || $raw === '' ? null : $raw;
+        return \Phlix\Shared\Support\EnvConfig::nullableText($name);
     }
 
     /**

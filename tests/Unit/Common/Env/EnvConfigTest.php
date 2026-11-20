@@ -324,4 +324,118 @@ final class EnvConfigTest extends TestCase
             unlink($file);
         }
     }
+
+    /**
+     * v0.59 bank row 3 differential: the facade's PURE readers are now
+     * literal delegations to the shared kernel (identity, pinned below);
+     * the BOOL family keeps its hub-side warning arm (the kernel's zero-I/O
+     * charter cannot carry it), so what must be proven here is VERDICT
+     * equality — every raw shape must answer identically through the hub
+     * reader and through the kernel reader, for both defaults. The warning
+     * is additive I/O around the same verdict.
+     */
+    public function testFacadeAndKernelAnswerIdenticallyOnEveryReaderArm(): void
+    {
+        $kernel = \Phlix\Shared\Support\EnvConfig::class;
+
+        // Pure readers: the delegation must be transparent for knob values.
+        foreach (['', '0', '1', '12x', '-5', ' 7 ', 'text', '999999999999'] as $raw) {
+            putenv(self::KNOB . '=' . $raw);
+            foreach ([0, 5, -3] as $default) {
+                self::assertSame(
+                    $kernel::integer(self::KNOB, $default),
+                    EnvConfig::integer(self::KNOB, $default),
+                    "integer('$raw', $default)"
+                );
+            }
+            foreach (['d', '', '0'] as $default) {
+                self::assertSame(
+                    $kernel::text(self::KNOB, $default),
+                    EnvConfig::text(self::KNOB, $default),
+                    "text('$raw' vs default '$default')"
+                );
+            }
+            self::assertSame($kernel::nullableText(self::KNOB), EnvConfig::nullableText(self::KNOB), "nullableText('$raw')");
+        }
+
+        putenv(self::KNOB);
+        self::assertSame($kernel::nullableText(self::KNOB), EnvConfig::nullableText(self::KNOB), 'nullableText(unset)');
+
+        // Bool grammar: verdict equality over every word, case, whitespace,
+        // junk, and non-string raw shape, both defaults, via knob and pure
+        // seam. Hub reads run while error_log is diverted so the kept
+        // warning arm cannot pollute test output; the DIVERTED LOG is the
+        // warning arm's own evidence, asserted at the end.
+        $ask = static function (callable $read): array {
+            $file = tempnam(sys_get_temp_dir(), 'phlix-envlog-');
+            self::assertIsString($file);
+
+            $previous = (string) ini_get('error_log');
+            ini_set('error_log', $file);
+
+            try {
+                return [$read(), (string) file_get_contents($file)];
+            } finally {
+                ini_set('error_log', $previous);
+                unlink($file);
+            }
+        };
+
+        $boolRaws = ['true', 'TRUE', ' true ', 'yes', 'Yes', 'on', 'ON', '1',
+                     'false', 'FALSE', ' off', 'no', 'No', 'OFF', '0',
+                     'maybe', '2', '-1', 'true1', 'null', 'NULL'];
+
+        foreach ($boolRaws as $raw) {
+            putenv(self::KNOB . '=' . $raw);
+            foreach ([true, false] as $default) {
+                [$hubVerdict, $log] = $ask(
+                    static fn (): bool => EnvConfig::bool(self::KNOB, $default)
+                );
+                self::assertSame(
+                    $kernel::bool(self::KNOB, $default),
+                    $hubVerdict,
+                    "bool('$raw', " . var_export($default, true) . ')'
+                );
+
+                [$pureHub, $pureLog] = $ask(
+                    static fn (): bool => EnvConfig::boolValue($raw, $default, self::KNOB)
+                );
+                self::assertSame(
+                    $kernel::boolValue($raw, $default, self::KNOB),
+                    $pureHub,
+                    "boolValue('$raw', " . var_export($default, true) . ')'
+                );
+
+                // The warning arm is EXACTLY the junk set: anything neither
+                // a true word nor a false word (and not empty/unset).
+                $isJunk = !in_array(
+                    strtolower(trim($raw)),
+                    ['1', 'true', 'yes', 'on', '0', 'false', 'no', 'off'],
+                    true
+                ) && trim($raw) !== '';
+                self::assertSame(
+                    $isJunk,
+                    $log !== '' || $pureLog !== '',
+                    "junk-warning arm for '$raw'"
+                );
+            }
+        }
+
+        putenv(self::KNOB);
+        foreach ([true, false] as $default) {
+            self::assertSame($kernel::bool(self::KNOB, $default), EnvConfig::bool(self::KNOB, $default), 'bool(unset)');
+        }
+        putenv(self::KNOB . '=');
+        foreach ([true, false] as $default) {
+            self::assertSame($kernel::bool(self::KNOB, $default), EnvConfig::bool(self::KNOB, $default), 'bool(empty)');
+        }
+
+        // The kept hub arm, restated as a fact of this differential: junk
+        // through the hub reader warns; through the kernel it stays silent.
+        putenv(self::KNOB . '=maybe');
+        [, $hubJunkLog] = $ask(static fn (): bool => EnvConfig::bool(self::KNOB, true));
+        self::assertStringContainsString('neither a true word', $hubJunkLog);
+        [, $kernelJunkLog] = $ask(static fn (): bool => $kernel::bool(self::KNOB, true));
+        self::assertSame('', $kernelJunkLog, 'the zero-I/O kernel charter must hold on the shared side too');
+    }
 }
