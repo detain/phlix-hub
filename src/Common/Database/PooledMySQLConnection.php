@@ -71,6 +71,9 @@ final class PooledMySQLConnection extends Connection
     /** @var int How many raw connections have been opened (≤ maxSize). */
     private int $created = 0;
 
+    /** @var float Seconds to wait for a connection before throwing "pool exhausted" (clamped to ≥ 0; 0 = fail immediately). */
+    private float $acquireTimeout;
+
     /** @var array<int, Connection> Active leases: coroutine id → its connection. */
     private array $leases = [];
 
@@ -96,6 +99,9 @@ final class PooledMySQLConnection extends Connection
      * @param string                              $charset
      * @param (callable():Connection)|null $rawFactory Override for tests; defaults
      *        to opening a real {@see PhlixMySQLConnection}.
+     * @param float                               $acquireTimeout Seconds to wait for a
+     *        connection before throwing "pool exhausted" (clamped to ≥ 0; 0 = fail
+     *        immediately). Default 10.0 preserves the historic behaviour.
      *
      * @psalm-suppress MissingParentConstructorCall Intentional: the front must
      *        not open a socket of its own; every query is delegated to a lease.
@@ -108,10 +114,12 @@ final class PooledMySQLConnection extends Connection
         string $database,
         int $maxSize = 8,
         string $charset = 'utf8mb4',
-        ?callable $rawFactory = null
+        ?callable $rawFactory = null,
+        float $acquireTimeout = 10.0
     ) {
         // Deliberately NOT calling parent::__construct() — see class docblock.
         $this->maxSize = max(1, $maxSize);
+        $this->acquireTimeout = max(0.0, $acquireTimeout);
         $this->rawFactory = \Closure::fromCallable($rawFactory ?? static function () use (
             $host,
             $port,
@@ -334,7 +342,7 @@ final class PooledMySQLConnection extends Connection
         if ($this->currentCoroutineId() < 0) {
             // Non-coroutine path: bounded poll loop (no recursion, no stack growth).
             // CLI/cron never has true parallelism, so polling is acceptable.
-            $deadline = hrtime(true) + 10_000_000_000; // 10 s ns
+            $deadline = hrtime(true) + (int) ($this->acquireTimeout * 1_000_000_000);
             while (hrtime(true) < $deadline) {
                 if ($this->created < $this->maxSize) {
                     $this->created++;
@@ -347,7 +355,10 @@ final class PooledMySQLConnection extends Connection
                 }
                 usleep(100_000); // 100 ms between polls
             }
-            throw new \RuntimeException('pool exhausted: could not acquire a connection within 10 s');
+            throw new \RuntimeException(sprintf(
+                'pool exhausted: could not acquire a connection within %g s',
+                $this->acquireTimeout
+            ));
         }
 
         if (!$this->idle->isEmpty()) {
@@ -381,9 +392,12 @@ final class PooledMySQLConnection extends Connection
         // scheduler while waiting, so other coroutines remain runnable.
         // pop() returns false on timeout (Swoole 4.x) or throws (Swoole 5+).
         /** @var Connection|false $conn */
-        $conn = $this->idle->pop(10.0);
+        $conn = $this->idle->pop($this->acquireTimeout);
         if ($conn === false) {
-            throw new \RuntimeException('pool exhausted: no idle connection available after 10 s');
+            throw new \RuntimeException(sprintf(
+                'pool exhausted: no idle connection available after %g s',
+                $this->acquireTimeout
+            ));
         }
         // Liveness parity with the non-blocking arm above: the connection that
         // is handed over here sat idle while its holder finished, and the DB
@@ -398,6 +412,34 @@ final class PooledMySQLConnection extends Connection
             return $this->acquire();
         }
         return $conn;
+    }
+
+    /**
+     * Snapshot of the pool's own counters, for observability and the
+     * exhaustion reproduction. Best-effort: the coroutine scheduler can
+     * interleave between the individual reads, so treat the values as a
+     * point-in-time sample, not a lock.
+     *
+     * `idle` is derived as `created − leased` rather than read from the Swoole
+     * Channel, because every created connection is either leased, sitting in
+     * the idle channel, or transiently being liveness-probed by acquire() —
+     * so the arithmetic (clamped at 0) is the channel contents plus the probe,
+     * and it is readable outside a coroutine too (Channel methods are not).
+     * The lazily-made CLI connection of {@see lease()} never enters `created`
+     * on either host, so it is deliberately invisible here as well — the
+     * ledger mirrors the server shape exactly (v0.59 T6 pool-drift cells).
+     *
+     * @return array{maxSize: int, created: int, leased: int, idle: int}
+     */
+    public function poolStats(): array
+    {
+        $leased = count($this->leases);
+        return [
+            'maxSize' => $this->maxSize,
+            'created' => $this->created,
+            'leased' => $leased,
+            'idle' => max(0, $this->created - $leased),
+        ];
     }
 
     /**

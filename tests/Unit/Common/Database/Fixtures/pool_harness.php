@@ -55,14 +55,14 @@ $scenario = $argv[1] ?? '';
  *
  * @param list<RecordingConnection> $conns
  */
-$makePool = static function (int $maxSize, array &$conns): PooledMySQLConnection {
+$makePool = static function (int $maxSize, array &$conns, ?float $acquireTimeout = null): PooledMySQLConnection {
     $next = 0;
     $factory = static function () use (&$conns, &$next): Connection {
         $conn = new RecordingConnection(++$next);
         $conns[] = $conn;
         return $conn;
     };
-    return new PooledMySQLConnection('h', 3306, 'u', 'p', 'db', $maxSize, 'utf8mb4', $factory);
+    return new PooledMySQLConnection('h', 3306, 'u', 'p', 'db', $maxSize, 'utf8mb4', $factory, $acquireTimeout ?? 10.0);
 };
 
 /** @param list<RecordingConnection> $conns */
@@ -240,7 +240,8 @@ switch ($scenario) {
 
     // maxSize=1: A never releases, so B's acquire() blocks then THROWS a bounded
     // "pool exhausted" RuntimeException rather than hanging forever. (~10 s: the
-    // hardcoded idle->pop(10.0) timeout — proves the anti-deadlock guard fires.)
+    // DEFAULT acquireTimeout knob feeding idle->pop — proves the anti-deadlock
+    // guard fires.)
     case 'exhaust_throw':
         run(static function () use ($makePool): void {
             $conns = [];
@@ -390,6 +391,92 @@ switch ($scenario) {
             // Pinned against the scheduler's own answer, so the assertion cannot
             // be satisfied by any hardcoded constant.
             echo 'inside_matches_scheduler=' . ($inside === $actualCid ? 'yes' : 'no') . "\n";
+        });
+        break;
+
+    // v0.59 T6 pool-drift cell pins for the stats mirror: a point-in-time
+    // poolStats() sample taken WHILE two coroutines hold leases must read
+    // leased=2/created=2/idle=0, and after both coroutines end (their defer
+    // releases park both connections) it must read leased=0/created=2/idle=2 —
+    // the derived-idle law (created − leased) observable through real
+    // lease/release traffic, exactly the server's shape.
+    case 'stats':
+        /** @var list<RecordingConnection> $conns */
+        $conns = [];
+        run(static function () use ($makePool, &$conns): void {
+            $pool = $makePool(2, $conns);
+            $bMay = new Channel(1);
+            $bLeased = new Channel(1);
+            $done = new Channel(2);
+            /** @var array{maxSize: int, created: int, leased: int, idle: int}|null $mid */
+            $mid = null;
+            Coroutine::create(static function () use ($pool, $bMay, $bLeased, $done, &$mid): void {
+                $pool->query('SELECT A'); // lease 1 (conn0)
+                $bMay->push(true);        // B may lease while A holds
+                $bLeased->pop();          // both leases now live
+                $mid = $pool->poolStats();
+                $done->push(true);        // A ends here → defer releases conn0
+            });
+            Coroutine::create(static function () use ($pool, $bMay, $bLeased, $done): void {
+                $bMay->pop();
+                $pool->query('SELECT B'); // lease 2 (conn1)
+                $bLeased->push(true);
+                $done->push(true);        // B ends here → defer releases conn1
+            });
+            $done->pop();
+            $done->pop();
+            Coroutine::sleep(0.05); // let both defer releases park into idle
+            $after = $pool->poolStats();
+            if ($mid === null) {
+                fwrite(STDERR, "harness: mid sample never taken\n");
+                exit(1);
+            }
+            printf(
+                "mid_leased=%d mid_created=%d mid_idle=%d\nafter_leased=%d after_created=%d after_idle=%d\n",
+                $mid['leased'],
+                $mid['created'],
+                $mid['idle'],
+                $after['leased'],
+                $after['created'],
+                $after['idle']
+            );
+        });
+        break;
+
+    // v0.59 T6 pool-drift cell pins for the acquireTimeout knob: a pool built
+    // with 0.4 s must fail the parked waiter with the CONFIGURED value named
+    // in the message and a wait actually bounded by it — proving the historic
+    // hardcoded 10 s is now a constructor law on both hosts.
+    case 'timeout_config':
+        run(static function () use ($makePool): void {
+            $conns = [];
+            $pool = $makePool(1, $conns, 0.4);
+            $leased = new Channel(1);
+            $hold = new Channel(1);
+            $bDone = new Channel(1);
+            Coroutine::create(static function () use ($pool, $leased, $hold): void {
+                $pool->query('SELECT A');
+                $leased->push(true);
+                $hold->pop(); // hold the only connection for the whole test
+            });
+            $leased->pop();
+            Coroutine::create(static function () use ($pool, $bDone): void {
+                $t0 = hrtime(true);
+                try {
+                    $pool->query('SELECT B');
+                    $bDone->push('B:no-throw');
+                } catch (\Throwable $e) {
+                    $ms = (int) round((hrtime(true) - $t0) / 1_000_000);
+                    $bDone->push('B:threw:' . $e->getMessage() . '|elapsed_ms=' . $ms);
+                }
+            });
+            $result = $bDone->pop();
+            if (!is_string($result)) {
+                fwrite(STDERR, "harness: B arm returned a non-string marker\n");
+                exit(1);
+            }
+            echo $result . "\n";
+            $hold->push(true); // let A finish so run() can exit
         });
         break;
 

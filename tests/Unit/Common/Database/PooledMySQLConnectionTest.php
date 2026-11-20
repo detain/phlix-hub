@@ -267,9 +267,10 @@ final class PooledMySQLConnectionTest extends TestCase
     /**
      * Pool-exhaustion (anti-hang guard): when the only connection is never
      * released, acquire() blocks then THROWS a bounded "pool exhausted"
-     * RuntimeException instead of deadlocking. ~10 s (the hardcoded
-     * idle->pop(10.0) timeout) — grouped 'slow' so it can be excluded.
-     *
+     * RuntimeException instead of deadlocking. ~10 s (the DEFAULT acquireTimeout
+     * knob feeding idle->pop) — grouped 'slow' so it can be excluded. The knob
+     * itself is pinned at ~0.4 s by
+     * {@see testAcquireTimeoutKnobBoundsTheWaitAndNamesTheConfiguredValue}.
      */
     #[Group('slow')]
     public function testExhaustedPoolThrowsBoundedInsteadOfHanging(): void
@@ -374,6 +375,87 @@ final class PooledMySQLConnectionTest extends TestCase
             0,
             (int) ($inside[1] ?? 0),
             "the in-coroutine id must be a positive cid, not the -1 sentinel\n{$out}",
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // v0.59 T6 pool-drift cells (DECISIONS bank): the hub's two remaining
+    // pool-side divergences from the server are folded — acquireTimeout is a
+    // constructor knob on both hosts, and poolStats() mirrors the server's
+    // ledger shape. These are the bank-mandated behavior pins.
+    // -----------------------------------------------------------------
+
+    /**
+     * In-process shape pin: exactly the server's four ledger keys, the
+     * maxSize clamp stays visible, and the lazily-made CLI connection is
+     * outside the ledger on BOTH hosts — a docblock-disclosed parity, so the
+     * mirror must not "improve" it here.
+     */
+    public function testPoolStatsMirrorsTheServerLedgerShapeInProcess(): void
+    {
+        $raw = $this->createMock(Connection::class);
+        $raw->method('query')->willReturn([]);
+        $pool = $this->pool(static fn (): Connection => $raw, 4);
+
+        $this->assertSame(
+            ['maxSize' => 4, 'created' => 0, 'leased' => 0, 'idle' => 0],
+            $pool->poolStats(),
+            'fresh pool: the server key set and zeros'
+        );
+
+        $pool->query('SELECT 1'); // arms the CLI connection
+
+        $this->assertSame(
+            ['maxSize' => 4, 'created' => 0, 'leased' => 0, 'idle' => 0],
+            $pool->poolStats(),
+            'the CLI lease path is outside the ledger exactly like the server'
+        );
+
+        $clamped = $this->pool(static fn (): Connection => $raw, -5);
+        $this->assertSame(1, $clamped->poolStats()['maxSize'], 'the ≥1 clamp surfaces in the stats');
+    }
+
+    /**
+     * Live-ledger mirror: with two concurrent leases the sample reads
+     * leased=2/created=2/idle=0; after both coroutines end and the defer
+     * releases park both connections, the derived-idle law reads
+     * leased=0/created=2/idle=2.
+     */
+    public function testPoolStatsLedgerTracksRealLeaseAndReleaseTraffic(): void
+    {
+        $out = $this->runHarness('stats');
+
+        self::assertStringContainsString('mid_leased=2 mid_created=2 mid_idle=0', $out, $out);
+        self::assertStringContainsString('after_leased=0 after_created=2 after_idle=2', $out, $out);
+    }
+
+    /**
+     * The knob bound: a 0.4 s pool must name 0.4 s in its refusal and wait
+     * about that long, not the historic hardcoded 10 s. Reverting the
+     * constructor arm to a literal reddens BOTH the message and the bound.
+     */
+    public function testAcquireTimeoutKnobBoundsTheWaitAndNamesTheConfiguredValue(): void
+    {
+        $out = $this->runHarness('timeout_config');
+
+        self::assertStringContainsString(
+            'B:threw:pool exhausted: no idle connection available after 0.4 s',
+            $out,
+            "the refusal must carry the configured timeout\n{$out}"
+        );
+        if (preg_match('/elapsed_ms=(\d+)/', $out, $m) !== 1) {
+            self::fail("elapsed_ms marker missing from harness output\n{$out}");
+        }
+        $elapsedMs = (int) $m[1];
+        $this->assertLessThan(
+            5_000,
+            $elapsedMs,
+            "a 0.4 s timeout must not wait the historic 10 s (measured {$elapsedMs} ms)\n{$out}"
+        );
+        $this->assertGreaterThanOrEqual(
+            200,
+            $elapsedMs,
+            "the wait must actually be bounded BY the knob, not skipped (measured {$elapsedMs} ms)\n{$out}"
         );
     }
 }
