@@ -1,5 +1,5 @@
 {
-    "generatedFrom": "faabd065 + SRV-METRICS-A13 two new Unit files serial junit (clean-checkout bless), pcov + TXMUTEX-B retrofit single-row insert (measured from serial Unit junit; full-cache bless reverted to keep the CI-pcov rows byte-stable)",
+    "generatedFrom": "faabd065 + SRV-METRICS-A13 two new Unit files serial junit (clean-checkout bless), pcov + TXMUTEX-B retrofit single-row insert (measured from serial Unit junit; full-cache bless reverted to keep the CI-pcov rows byte-stable) + FX-HUB law test single-row insert (clean-checkout serial junit bless 0.727s warm)",
     "unit": {
         "tests/Common/Database/MigrationRunnerTest.php": 0.023,
         "tests/Health/HealthControllerTest.php": 0.007,
@@ -53,6 +53,7 @@
         "tests/Unit/Common/Database/MysqlErrorTest.php": 0.006,
         "tests/Unit/Common/Database/PhlixMySQLConnectionTest.php": 0.007,
         "tests/Unit/Common/Database/PooledMySQLConnectionTest.php": 0.004,
+        "tests/Unit/Common/Database/UpsertSyntaxStatementLawTest.php": 0.727,
         "tests/Unit/Common/Database/UpsertSyntaxTest.php": 0.003,
         "tests/Unit/Common/Env/EnvConfigTest.php": 0.004,
         "tests/Unit/Common/Http/TrustedProxyResolverTest.php": 0.005,
