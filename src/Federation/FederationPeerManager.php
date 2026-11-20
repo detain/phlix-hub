@@ -2496,7 +2496,9 @@ class FederationPeerManager
      * revisit — deliberately choosing local resolution per the owner ruling
      * that minted this lane (2026-10-15).
      *
-     * @param array<string, mixed> $data Payload with user_id, peer_id, action.
+     * @param array<array-key, mixed> $data Payload with user_id, peer_id, action
+     *                                      (JSON-decoded, so keys are array-key
+     *                                      until each field is narrowed per-guard).
      *
      * @return void
      */

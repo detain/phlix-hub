@@ -32,7 +32,7 @@ use ReflectionClass;
 final class MysqlErrorTest extends TestCase
 {
     /**
-     * @return array<array{array<array-key,mixed>|int|null}> [errorInfo, expected]
+     * @return array<string, array{array<array-key,mixed>, int|null}> [errorInfo, expected]
      */
     public static function errorInfoShapes(): array
     {

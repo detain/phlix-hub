@@ -200,27 +200,43 @@ final class HookEnforcementGuardTest extends TestCase
     }
 
     /**
-     * The probe's error-formatting arm must carry the server's hardened casts on
-     * the by-reference failure outputs of `stream_socket_server()`.
+     * The probe's error-formatting arm must hand the by-reference failure
+     * outputs of `stream_socket_server()` to `sprintf()` as the bare
+     * `$errno`/`$errstr` variables, with the `(errno %d: %s)` shape intact.
      *
-     * HUB-3.2 (A-11 partial, runtime-deprecation family): `$errno`/`$errstr` are
-     * populated by reference and their type on every failure path is not
-     * compiler-guaranteed, so handing them to `sprintf()` un-cast is the same
-     * implicit-conversion class the server killed with explicit
-     * `(int) $errno, (string) $errstr` arguments. The hub kept the message but
-     * lost the casts to drift; this pins them back (tokens, not prose).
+     * Supersedes the HUB-3.2 (A-11 partial) hardened-casts pin: the hub's
+     * psalm L1 CI step ("Run Psalm (src + scripts at L1)") convicts
+     * `(int) $errno`/`(string) $errstr` as RedundantCast — the internal
+     * function's typed by-ref parameters (`?int &$error_code`,
+     * `?string &$error_message`) guarantee int/string on every failure
+     * path, so the casts were implicit-conversion theatre. Removal is
+     * byte-identical at runtime; the server twin keeps its casts untouched
+     * (server psalm runs at L5 and never flags them). Two-sided pin:
+     * tokens, not prose — presence of the bare pair, absence of casts.
      */
-    public function testTheDeliveryProbeFormatsItsErrnoWithHardenedCasts(): void
+    public function testTheDeliveryProbeFormatsItsErrnoUnderThePsalmL1Law(): void
     {
         $probe = self::code(self::HOOK_DELIVERY);
 
+        self::assertStringContainsString(
+            '$errno, $errstr',
+            $probe,
+            'HookDelivery must pass the probe outputs to sprintf() bare — '
+            . 'the psalm L1 RedundantCast law forbids re-hardening them with casts.'
+        );
+        self::assertStringContainsString(
+            '(errno %d: %s)',
+            $probe,
+            'the refusal message keeps its typed converters — the probe failure '
+            . 'arm must still render errno and errstr.'
+        );
         foreach (
             [
-                '(int) $errno' => 'the errno argument must be cast, not implicitly converted',
-                '(string) $errstr' => 'the errstr argument must be cast, not implicitly converted',
+                '(int) $errno' => 'RedundantCast at psalm L1 (CI oracle) — casts must not drift back',
+                '(string) $errstr' => 'RedundantCast at psalm L1 (CI oracle) — casts must not drift back',
             ] as $needle => $why
         ) {
-            self::assertStringContainsString($needle, $probe, "HookDelivery must contain {$needle} — {$why}.");
+            self::assertStringNotContainsString($needle, $probe, "HookDelivery must not contain {$needle} — {$why}.");
         }
     }
 

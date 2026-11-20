@@ -208,8 +208,10 @@ final class FederationFrameHandler
      * connect-audit are deferred to {@see handleHelloAuth()} — the channel
      * is transport-only until the leaf proves possession of its key.
      *
-     * @param string               $leafHubId Peer hub UUID (from route).
-     * @param array<string, mixed> $decoded   Decoded JSON payload.
+     * @param string                  $leafHubId Peer hub UUID (from route).
+     * @param array<array-key, mixed> $decoded   Decoded JSON payload (JSON-decoded,
+     *                                           so keys are array-key until each
+     *                                           field is narrowed per-guard).
      *
      * @return string|null Error message to reject, or null to accept.
      */
@@ -344,9 +346,11 @@ final class FederationFrameHandler
      * connection to VERIFIED, pushes pending shares, and audits the connect;
      * any failure closes the link with an audited refusal.
      *
-     * @param string               $hubId      Peer hub UUID (from route).
-     * @param array<string, mixed> $decoded    Decoded JSON payload.
-     * @param ConnectionInterface  $connection The socket the AUTH bytes arrived on.
+     * @param string                  $hubId      Peer hub UUID (from route).
+     * @param array<array-key, mixed> $decoded    Decoded JSON payload (JSON-decoded,
+     *                                            so keys are array-key until each
+     *                                            field is narrowed per-guard).
+     * @param ConnectionInterface     $connection The socket the AUTH bytes arrived on.
      *
      * @return string|null Error message to reject, or null to accept.
      */

@@ -151,7 +151,9 @@ class EnrollmentJwtService
      * @param string $token        The JWT to validate.
      * @param string $expectedKid  Expected key ID (from the token header matched against known keys).
      *
-     * @return array<string, mixed>|null Decoded payload when valid; null when invalid/expired.
+     * @return array<array-key, mixed>|null Decoded payload when valid; null when invalid/expired.
+     *                                      (JSON-decoded, so keys are array-key;
+     *                                      every consumer narrows per-field.)
      */
     public function validateEnrollmentJwt(string $token, string $expectedKid): ?array
     {
@@ -177,7 +179,7 @@ class EnrollmentJwtService
      * Verify + decode an enrollment JWT, reporting both the payload (only on
      * success) and a machine-readable failure reason.
      *
-     * @return array{payload: array<string, mixed>|null, reason: string}
+     * @return array{payload: array<array-key, mixed>|null, reason: string}
      */
     private function inspectEnrollmentJwt(string $token, string $expectedKid): array
     {
