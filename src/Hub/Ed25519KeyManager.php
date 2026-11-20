@@ -634,19 +634,19 @@ final class Ed25519KeyManager
             return ['private' => $parsed['secret'], 'public' => $parsed['public']];
         }
 
-        // Legacy body below: byte-identical to the pre-delegation parser (wave
-        // S2 sign-seam differential; srv ee9f1c4c WebAuthn-parity precedent) —
-        // exact-64 standard-base64 rule kept loud, marker-less files kept
-        // loadable. Do not "tidy" this into the kernel call.
-        $key = trim($pem);
-        $key = (string) preg_replace('#-----(BEGIN|END) ED25519 PRIVATE KEY-----#', '', $key);
-        $key = str_replace(["\r", "\n", ' '], '', $key);
-        $decoded = $this->base64Decode($key);
-        if (strlen($decoded) !== 64) {
+        // Legacy dialect: the byte-exact parser body now lives in the shared
+        // kernel (v0.59 bank row 8) as parsePemByteExact — a verbatim port of
+        // this arm's wave-S2 posture (exact-64 STRICT standard-base64 rule,
+        // marker-less files stay loadable, strict-decode false reads as '').
+        // The kernel reports the verdict as null; the message and the
+        // routing decision stay HERE, at the custody seam (the grammar
+        // predicate above is hub-local by design — S2-KEYFILE-r1 law).
+        $parsed = Ed25519Pem::parsePemByteExact($pem);
+        if ($parsed === null) {
             throw new RuntimeException('Ed25519 private key must be exactly 64 bytes.');
         }
 
-        return ['private' => $decoded, 'public' => substr($decoded, 32)];
+        return ['private' => $parsed['secret'], 'public' => $parsed['public']];
     }
 
     /**
