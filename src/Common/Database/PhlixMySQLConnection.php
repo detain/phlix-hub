@@ -266,8 +266,9 @@ final class PhlixMySQLConnection extends Connection
             // names 2006/2013 and splits them by transaction-liveness). The
             // blanket else-arm deliberately does NOT consult
             // rollsBackWholeTransaction(): the landed shape rolls back every
-            // non-gone failure (1205/1213 included), and the surgical Q-A
-            // change is an owner-pending decision, not a retrofit smuggle.
+            // non-gone failure (1205/1213 included); the surgical Q-A change
+            // was ratified 2026-11-21 (DECISIONS.md entry 11) — the else-arm
+            // stays non-consulting, not a retrofit smuggle.
             $verdict = MysqlRetryPolicy::classify(MysqlError::driverCode($e->errorInfo) ?? 0, $this->txOpen);
             if ($verdict->marksPoisoned()) {
                 // Gone away INSIDE a transaction: the server already rolled it
