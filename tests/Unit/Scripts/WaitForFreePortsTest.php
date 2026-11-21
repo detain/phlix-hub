@@ -38,6 +38,13 @@ final class WaitForFreePortsTest extends TestCase
         fclose($srv);
         self::assertSame(0, $rc);
         self::assertStringContainsString('still in use', implode("\n", $o));
-        self::assertGreaterThanOrEqual(1.5, microtime(true) - $t);
+        // Granularity law: the script's deadline is second-granular (date +%s)
+        // and the busy loop polls once per second, so with -t 2 the exit fires
+        // at the first tick whose floor reaches D0+2 — elapsed lands in
+        // [~1.0, ~2.0] depending on where the bash launch sits inside the
+        // wall-clock second (observed 1.014s when it starts just before a
+        // boundary). The old 1.5 floor sat INSIDE that legitimate band and
+        // flaked; any floor here must sit below t-1, hence 0.9.
+        self::assertGreaterThanOrEqual(0.9, microtime(true) - $t);
     }
 }

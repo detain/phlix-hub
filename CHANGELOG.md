@@ -12,6 +12,10 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Fix [HUB-WAITPORTS] — the busy-wait test floor honors the port gate's second-granularity law — 2026-11-21
+
+- CI flake cured (bucket #1 of the S458 parallel runner): `WaitForFreePortsTest::testIpv6ListenerIsDetectedAsBusy` asserted a 1.5 s floor while `scripts/wait-for-free-ports.sh` computes its deadline second-granular (`deadline=$(( $(date +%s) + timeout ))`, re-checked via `date +%s` around a `sleep 1` poll). A `-t 2` busy wait therefore lands anywhere in [~1.0, ~2.0] s depending on where the bash launch sits inside the wall-clock second; the recorded failure (1.014 s) was a legitimate early-band exit, not a regression. The floor was inside the behavior it guarded. Test-only fix: floor moved to 0.9 (strictly below t−1, the law documented in-place); rc=0 and the `still in use` output assertions are kept — together they prove deterministically that the timeout/busy path was taken. Production script semantics untouched (systemd ExecStartPre gate; ~1 s of deadline rounding is irrelevant there). Boundary-targeted probes (launch aligned ≤50 ms before a second boundary, listener on `[::1]`) reproduced 1.0139 s and 1.0217 s exits — the old 1.5 floor convicted both, the new 0.9 floor held across all band samples; 30/30 filtered phpunit runs green. (`tests/Unit/Scripts/WaitForFreePortsTest.php`) [HUB-WAITPORTS]
+
 ### Fix [FX-HUB] — hub upsert corpus gains the statement-count law; hash-persist site converts to the kernel — 2026-11-20
 
 - The hub carried two raw `ON DUPLICATE KEY UPDATE` statements outside the shared `UpsertSyntax` kernel with no KEEP table and no census law (FR-SSOT.md Major). New `UpsertSyntaxStatementLawTest` ports the server's discipline: token-level ODKU census pinned at 18 string-token statements, `UpsertSyntax::adapt` callsites token-counted at 17 (comment mentions cannot inflate either walk), and the arithmetic law adapt + KEEP == total reddens any future smuggled raw upsert — mutation-proven by a planted raw site, a flipped KEEP byte, and a thinned KEEP table (each convicted, named). (6c960c12) [FX-HUB law]
