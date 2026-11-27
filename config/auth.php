@@ -82,4 +82,21 @@ return [
     // here, so `signups_disabled` is always exactly `!signups_enabled` at
     // config level — the DB override row is the only thing that can diverge.
     'signups_disabled' => !$signupsEnabled,
+    // The auth.cookie.* twins admitted to
+    // {@see \Phlix\Hub\Hub\HubSettingsRepository::ALLOWED_KEYS} (rule 4:
+    // getDefault() must resolve both to non-null booleans). These are the
+    // shipped fallbacks the settings rows override; every live read goes
+    // through CookiePolicy's resolvers.
+    'cookie' => [
+        // Fail-OPEN master switch: CookiePolicy::cookieModeEnabled() treats
+        // anything other than an explicit false as enabled, so the shipped
+        // default is true — mirroring the resolver's boot default literal.
+        'enabled' => true,
+        // Fail-CLOSED insecure opt-in. The HUB_COOKIE_INSECURE env limb is
+        // deliberately NOT mirrored here: CookiePolicy::insecureOverride()
+        // keeps its strict exact-'1'/'true' accept-set (ratified-security,
+        // HUB-ENVBOOL census row) — deriving this from the env via
+        // EnvConfig would widen a security knob's grammar.
+        'insecure' => false,
+    ],
 ];

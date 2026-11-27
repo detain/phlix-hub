@@ -67,7 +67,9 @@ final class AdminSettingsRoutesTest extends TestCase
         );
         file_put_contents(
             $dir . '/auth.php',
-            "<?php\n\nreturn ['access_ttl' => 900, 'refresh_ttl' => 1209600, 'signups_disabled' => false];\n",
+            "<?php\n\nreturn ['access_ttl' => 900, 'refresh_ttl' => 1209600,"
+            . " 'signups_disabled' => false,"
+            . " 'cookie' => ['enabled' => true, 'insecure' => false]];\n",
         );
         // W5 Phase-6 keys: one fixture file per dotted-key file segment.
         file_put_contents($dir . '/hub.php', "<?php\n\nreturn ['maintenance_mode' => false];\n");
@@ -188,7 +190,8 @@ final class AdminSettingsRoutesTest extends TestCase
         $db = $this->createMock(Connection::class);
         // getSettings -> getEffectiveMany -> getAllOverrides: one no-param
         // SELECT. No overrides -> every allow-listed key resolves to fixture
-        // defaults (W5 grew the allow-list from four keys to eighteen).
+        // defaults (W5 grew the allow-list from four keys to eighteen;
+        // S-shared-08 admitted the auth.cookie.* pair, twenty today).
         $db->method('query')->willReturnCallback(function (string $sql): array {
             self::assertStringContainsString('SELECT setting_key', $sql);
             return [];

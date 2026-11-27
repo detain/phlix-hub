@@ -117,6 +117,21 @@ class HubSettingsRepository
         // HUB_SIGNUPS_ENABLED flag when no row / no pool / settings read
         // fails.
         'auth.signups_disabled' => 'bool',
+        // config/auth.php ('cookie' section twins).
+        // LIVE: CookiePolicy::cookieModeEnabled() (src/Hub/CookiePolicy.php)
+        // reads the effective master switch per cookie decision through the
+        // HubSettingsResolvers::bool() default resolver — fail-OPEN (an
+        // absent row or store outage reads ENABLED, the AuthController
+        // issuance gates never strand a working browser login).
+        'auth.cookie.enabled' => 'bool',
+        // LIVE: CookiePolicy::insecureOverride() (src/Hub/CookiePolicy.php)
+        // consults the strict HUB_COOKIE_INSECURE env limb first, then this
+        // stored twin fail-CLOSED; the pair drives the Secure attribute and
+        // the scheme-gate bypass (and the production-misconfig warning).
+        // Admitted in lockstep with the shared schema pair (S-shared-08);
+        // the env limb deliberately stays inside CookiePolicy — its strict
+        // exact-'1'/'true' accept-set is ratified-security (HUB-ENVBOOL).
+        'auth.cookie.insecure' => 'bool',
 
         // ---- Phase-6 settings program (W5, 2026-10-03) -------------------
         // Consumer citations below name the file that reads the EFFECTIVE
